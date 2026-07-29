@@ -1,0 +1,217 @@
+:root {
+  --bg: #f5f6f8;
+  --card: #ffffff;
+  --border: #e2e5ea;
+  --text: #1f2430;
+  --muted: #6b7280;
+  --primary: #2f6fed;
+  --primary-dark: #1f4fc7;
+  --danger: #e5484d;
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+    "Noto Sans KR", sans-serif;
+}
+
+a {
+  color: inherit;
+}
+
+.page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 24px;
+}
+
+.topbar nav {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.topbar a.navlink {
+  padding: 6px 10px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.topbar a.navlink.active {
+  background: #eaf0ff;
+  color: var(--primary-dark);
+  font-weight: 600;
+}
+
+h1 {
+  font-size: 22px;
+  margin: 0 0 4px;
+}
+
+h2 {
+  font-size: 17px;
+  margin: 0 0 12px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.login-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+
+.login-box {
+  width: 100%;
+  max-width: 360px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px;
+}
+
+label {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin: 14px 0 6px;
+}
+
+select,
+input[type="text"],
+input[type="password"],
+input[type="date"],
+textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  background: #fff;
+  color: var(--text);
+}
+
+textarea {
+  min-height: 80px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--primary);
+  color: #fff;
+}
+
+button:hover {
+  background: var(--primary-dark);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.error-text {
+  color: var(--danger);
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.success-box {
+  background: #eafaf0;
+  border: 1px solid #b7ebc8;
+  color: #1a7f3c;
+  padding: 14px 16px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th, td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.student-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.student-row:hover {
+  background: #fafbfc;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #eef1f6;
+  color: var(--muted);
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 720px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
