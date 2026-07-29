@@ -313,16 +313,15 @@ function firstRelationName(page: Page, prop: string, names: Map<string, string>)
   return names.get(ids[0]) ?? "-";
 }
 
-export async function getRecentAdminInbox(limit = 100) {
-  const [res, names] = await Promise.all([
-    notion.dataSources.query({
+export async function getRecentAdminInbox() {
+  const [results, names] = await Promise.all([
+    queryAllPages({
       data_source_id: DB.ADMIN_INBOX,
       sorts: [{ property: "날짜", direction: "descending" }],
-      page_size: limit,
     }),
     studentNameMap(),
   ]);
-  return res.results.map((p: any) => ({
+  return results.map((p: any) => ({
     id: p.id,
     date: getDate(p, "날짜"),
     type: getSelect(p, "입력유형"),
@@ -332,16 +331,15 @@ export async function getRecentAdminInbox(limit = 100) {
   }));
 }
 
-export async function getRecentBriefings(limit = 100) {
-  const [res, names] = await Promise.all([
-    notion.dataSources.query({
+export async function getRecentBriefings() {
+  const [results, names] = await Promise.all([
+    queryAllPages({
       data_source_id: DB.BRIEFING,
       sorts: [{ property: "날짜", direction: "descending" }],
-      page_size: limit,
     }),
     studentNameMap(),
   ]);
-  return res.results.map((p: any) => ({
+  return results.map((p: any) => ({
     id: p.id,
     date: getDate(p, "날짜"),
     type: getSelect(p, "브리핑유형"),
@@ -350,16 +348,15 @@ export async function getRecentBriefings(limit = 100) {
   }));
 }
 
-export async function getRecentCounseling(limit = 100) {
-  const [res, names] = await Promise.all([
-    notion.dataSources.query({
+export async function getRecentCounseling() {
+  const [results, names] = await Promise.all([
+    queryAllPages({
       data_source_id: DB.COUNSELING,
       sorts: [{ property: "날짜", direction: "descending" }],
-      page_size: limit,
     }),
     studentNameMap(),
   ]);
-  return res.results.map((p: any) => ({
+  return results.map((p: any) => ({
     id: p.id,
     date: getDate(p, "날짜"),
     studentName: firstRelationName(p, "학생", names),

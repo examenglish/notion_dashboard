@@ -208,8 +208,14 @@ th, td {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 420px;
-  overflow-y: auto;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .recent-list-row {
