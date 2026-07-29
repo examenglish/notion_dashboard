@@ -85,6 +85,28 @@ export function getCreatedBy(page: Page, prop: string): string | null {
 
 // ---- Domain helpers ----
 
+// Notion caps page_size at 100 per request. This loops through start_cursor
+// until has_more is false, so callers always see the full result set
+// (important once a database grows past 100 rows, e.g. 150+ students).
+async function queryAllPages(params: {
+  data_source_id: string;
+  filter?: any;
+  sorts?: any;
+}) {
+  const results: any[] = [];
+  let cursor: string | undefined;
+  do {
+    const res: any = await notion.dataSources.query({
+      ...params,
+      page_size: 100,
+      start_cursor: cursor,
+    });
+    results.push(...res.results);
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+  return results;
+}
+
 export async function listStaff() {
   const res = await notion.dataSources.query({
     data_source_id: DB.STAFF,
@@ -118,11 +140,8 @@ export async function findStaffByNameAndPin(name: string, pin: string) {
 }
 
 export async function listClasses() {
-  const res = await notion.dataSources.query({
-    data_source_id: DB.CLASS,
-    page_size: 100,
-  });
-  return res.results.map((p: any) => ({
+  const results = await queryAllPages({ data_source_id: DB.CLASS });
+  return results.map((p: any) => ({
     id: p.id,
     name: getTitle(p, "반이름"),
     teacher: getRichText(p, "담당교사"),
@@ -134,14 +153,11 @@ export async function listClasses() {
 }
 
 export async function searchStudents(query: string) {
-  const res = await notion.dataSources.query({
+  const results = await queryAllPages({
     data_source_id: DB.STUDENT,
-    filter: query
-      ? { property: "이름", title: { contains: query } }
-      : undefined,
-    page_size: 50,
+    filter: query ? { property: "이름", title: { contains: query } } : undefined,
   });
-  return res.results.map((p: any) => ({
+  return results.map((p: any) => ({
     id: p.id,
     name: getTitle(p, "이름"),
     school: getRichText(p, "학교"),
@@ -282,6 +298,75 @@ export async function createClassProgress(input: {
   });
 
   return { progressPageId: progressPage.id, studentCount: dailyRecordIds.length };
+}
+
+// ---- Recent-activity feeds (dashboard "최근 10개 + 전체보기" widgets) ----
+
+async function studentNameMap(): Promise<Map<string, string>> {
+  const students = await searchStudents("");
+  return new Map(students.map((s) => [s.id, s.name]));
+}
+
+function firstRelationName(page: Page, prop: string, names: Map<string, string>): string {
+  const ids = getRelationIds(page, prop);
+  if (ids.length === 0) return "-";
+  return names.get(ids[0]) ?? "-";
+}
+
+export async function getRecentAdminInbox(limit = 100) {
+  const [res, names] = await Promise.all([
+    notion.dataSources.query({
+      data_source_id: DB.ADMIN_INBOX,
+      sorts: [{ property: "날짜", direction: "descending" }],
+      page_size: limit,
+    }),
+    studentNameMap(),
+  ]);
+  return res.results.map((p: any) => ({
+    id: p.id,
+    date: getDate(p, "날짜"),
+    type: getSelect(p, "입력유형"),
+    studentName: firstRelationName(p, "대상학생", names),
+    content: getRichText(p, "내용"),
+    done: getCheckbox(p, "처리완료"),
+  }));
+}
+
+export async function getRecentBriefings(limit = 100) {
+  const [res, names] = await Promise.all([
+    notion.dataSources.query({
+      data_source_id: DB.BRIEFING,
+      sorts: [{ property: "날짜", direction: "descending" }],
+      page_size: limit,
+    }),
+    studentNameMap(),
+  ]);
+  return res.results.map((p: any) => ({
+    id: p.id,
+    date: getDate(p, "날짜"),
+    type: getSelect(p, "브리핑유형"),
+    studentName: firstRelationName(p, "학생", names),
+    content: getRichText(p, "브리핑내용"),
+  }));
+}
+
+export async function getRecentCounseling(limit = 100) {
+  const [res, names] = await Promise.all([
+    notion.dataSources.query({
+      data_source_id: DB.COUNSELING,
+      sorts: [{ property: "날짜", direction: "descending" }],
+      page_size: limit,
+    }),
+    studentNameMap(),
+  ]);
+  return res.results.map((p: any) => ({
+    id: p.id,
+    date: getDate(p, "날짜"),
+    studentName: firstRelationName(p, "학생", names),
+    counselor: getRichText(p, "상담자"),
+    content: getRichText(p, "상담내용"),
+    followUp: getRichText(p, "후속조치"),
+  }));
 }
 
 export async function createAdminInboxEntry(input: {

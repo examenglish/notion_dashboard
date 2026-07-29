@@ -13,6 +13,33 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import RecentListCard from "./RecentListCard";
+
+type AdminInboxItem = {
+  id: string;
+  date: string | null;
+  type: string | null;
+  studentName: string;
+  content: string;
+  done: boolean;
+};
+
+type BriefingItem = {
+  id: string;
+  date: string | null;
+  type: string | null;
+  studentName: string;
+  content: string;
+};
+
+type CounselingItem = {
+  id: string;
+  date: string | null;
+  studentName: string;
+  counselor: string;
+  content: string;
+  followUp: string;
+};
 
 type ClassSummary = {
   classId: string;
@@ -53,11 +80,23 @@ export default function DashboardClient() {
   const [students, setStudents] = useState<StudentListItem[]>([]);
   const [selected, setSelected] = useState<StudentDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [adminInbox, setAdminInbox] = useState<AdminInboxItem[]>([]);
+  const [briefings, setBriefings] = useState<BriefingItem[]>([]);
+  const [counseling, setCounseling] = useState<CounselingItem[]>([]);
 
   useEffect(() => {
     fetch("/api/classes/summary")
       .then((r) => r.json())
       .then(setSummary);
+    fetch("/api/admin-inbox")
+      .then((r) => r.json())
+      .then(setAdminInbox);
+    fetch("/api/briefings")
+      .then((r) => r.json())
+      .then(setBriefings);
+    fetch("/api/counseling")
+      .then((r) => r.json())
+      .then(setCounseling);
   }, []);
 
   useEffect(() => {
@@ -138,7 +177,8 @@ export default function DashboardClient() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <div style={{ marginTop: 12 }}>
+          {!query && <p className="muted" style={{ marginTop: 8 }}>학생 {students.length}명 전체 표시 중 — 이름으로 좁혀보세요.</p>}
+          <div style={{ marginTop: 12, maxHeight: 420, overflowY: "auto" }}>
             {students.map((s) => (
               <div key={s.id} className="student-row" onClick={() => selectStudent(s.id)}>
                 <div>
@@ -198,6 +238,58 @@ export default function DashboardClient() {
             </div>
           )}
         </div>
+      </div>
+
+      <div className="grid-3">
+        <RecentListCard
+          title="행정입력함"
+          items={adminInbox}
+          keyOf={(i) => i.id}
+          renderItem={(i) => (
+            <>
+              <div className="recent-list-top">
+                <strong>{i.studentName}</strong>
+                <span className="badge">{i.type ?? "-"}</span>
+              </div>
+              <div>{i.content}</div>
+              <div className="recent-list-meta">
+                {i.date ?? "-"} · {i.done ? "처리완료" : "미처리"}
+              </div>
+            </>
+          )}
+        />
+
+        <RecentListCard
+          title="데일리브리핑"
+          items={briefings}
+          keyOf={(i) => i.id}
+          renderItem={(i) => (
+            <>
+              <div className="recent-list-top">
+                <strong>{i.studentName}</strong>
+                <span className="badge">{i.type ?? "-"}</span>
+              </div>
+              <div>{i.content}</div>
+              <div className="recent-list-meta">{i.date ?? "-"}</div>
+            </>
+          )}
+        />
+
+        <RecentListCard
+          title="상담일지"
+          items={counseling}
+          keyOf={(i) => i.id}
+          renderItem={(i) => (
+            <>
+              <div className="recent-list-top">
+                <strong>{i.studentName}</strong>
+                <span className="badge">{i.counselor}</span>
+              </div>
+              <div>{i.content}</div>
+              <div className="recent-list-meta">{i.date ?? "-"}</div>
+            </>
+          )}
+        />
       </div>
     </div>
   );
