@@ -2,8 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
   Legend,
   Line,
@@ -14,6 +12,9 @@ import {
   YAxis,
 } from "recharts";
 import RecentListCard from "./RecentListCard";
+import ClassDateChart from "./ClassDateChart";
+import TodayScheduleCard from "./TodayScheduleCard";
+import StudentTable, { StudentRow } from "./StudentTable";
 
 type AdminInboxItem = {
   id: string;
@@ -41,25 +42,7 @@ type CounselingItem = {
   followUp: string;
 };
 
-type ClassSummary = {
-  classId: string;
-  className: string;
-  studentCount: number;
-  attendanceRate: number | null;
-  homeworkRate: number | null;
-  vocabPassRate: number | null;
-};
-
-type StudentListItem = {
-  id: string;
-  name: string;
-  school: string;
-  grade: string | null;
-  status: string | null;
-  attendanceRate: number | null;
-  homeworkRate: number | null;
-  vocabPassRate: number | null;
-};
+type StudentListItem = StudentRow;
 
 type StudentDetail = {
   student: StudentListItem;
@@ -75,7 +58,6 @@ type StudentDetail = {
 const pct = (v: number | null) => (v === null ? "-" : `${Math.round(v * 100)}%`);
 
 export default function DashboardClient() {
-  const [summary, setSummary] = useState<ClassSummary[]>([]);
   const [query, setQuery] = useState("");
   const [students, setStudents] = useState<StudentListItem[]>([]);
   const [selected, setSelected] = useState<StudentDetail | null>(null);
@@ -85,9 +67,6 @@ export default function DashboardClient() {
   const [counseling, setCounseling] = useState<CounselingItem[]>([]);
 
   useEffect(() => {
-    fetch("/api/classes/summary")
-      .then((r) => r.json())
-      .then(setSummary);
     fetch("/api/admin-inbox")
       .then((r) => r.json())
       .then(setAdminInbox);
@@ -107,16 +86,6 @@ export default function DashboardClient() {
     }, 250);
     return () => clearTimeout(handle);
   }, [query]);
-
-  const chartData = useMemo(
-    () =>
-      summary.map((c) => ({
-        name: c.className,
-        출석률: c.attendanceRate === null ? 0 : Math.round(c.attendanceRate * 100),
-        숙제제출률: c.homeworkRate === null ? 0 : Math.round(c.homeworkRate * 100),
-      })),
-    [summary]
-  );
 
   async function selectStudent(id: string) {
     setLoadingDetail(true);
@@ -149,48 +118,12 @@ export default function DashboardClient() {
 
   return (
     <div className="page">
-      <div className="card">
-        <h2>반별 출석률 / 숙제제출률</h2>
-        {chartData.length === 0 ? (
-          <p className="muted">데이터를 불러오는 중입니다...</p>
-        ) : (
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" />
-              <YAxis unit="%" domain={[0, 100]} />
-              <Tooltip />
-              <Legend />
-              <Bar dataKey="출석률" fill="#2f6fed" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="숙제제출률" fill="#22c55e" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        )}
-      </div>
+      <TodayScheduleCard />
+
+      <ClassDateChart />
 
       <div className="grid-2">
-        <div className="card">
-          <h2>학생 검색</h2>
-          <input
-            type="text"
-            placeholder="학생 이름으로 검색"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          {!query && <p className="muted" style={{ marginTop: 8 }}>학생 {students.length}명 전체 표시 중 — 이름으로 좁혀보세요.</p>}
-          <div style={{ marginTop: 12, maxHeight: 420, overflowY: "auto" }}>
-            {students.map((s) => (
-              <div key={s.id} className="student-row" onClick={() => selectStudent(s.id)}>
-                <div>
-                  <strong>{s.name}</strong>{" "}
-                  <span className="muted">{s.school} {s.grade}</span>
-                </div>
-                <span className="badge">{s.status ?? "-"}</span>
-              </div>
-            ))}
-            {students.length === 0 && <p className="muted">검색 결과가 없습니다.</p>}
-          </div>
-        </div>
+        <StudentTable students={students} query={query} onQueryChange={setQuery} onSelect={selectStudent} />
 
         <div className="card">
           <h2>학생 상세</h2>
