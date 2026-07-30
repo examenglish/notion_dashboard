@@ -123,6 +123,44 @@ textarea {
   color: var(--text);
 }
 
+input[type="date"] {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+  font-weight: 500;
+  color: var(--text);
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+input[type="date"]::-webkit-datetime-edit {
+  padding: 0 2px;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.6;
+  border-radius: 4px;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+  background: #eef1f6;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.field-row > div {
+  min-width: 0;
+}
+
+.field-row label {
+  margin-top: 0;
+}
+
 textarea {
   min-height: 80px;
   resize: vertical;

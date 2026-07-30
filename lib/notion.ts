@@ -405,7 +405,7 @@ export async function createClassProgress(input: {
       수업과목: { multi_select: input.subjects.map((name) => ({ name })) },
       진도내용: { rich_text: [{ text: { content: input.progress } }] },
       과제내용: { rich_text: [{ text: { content: input.homework } }] },
-      다음시간과제: { rich_text: [{ text: { content: input.nextAssignment } }] },
+      다음시간테스트: { rich_text: [{ text: { content: input.nextAssignment } }] },
       전달사항: { rich_text: [{ text: { content: input.notice } }] },
     } as any,
   });
@@ -493,6 +493,7 @@ export async function getRecentAdminInbox() {
   return results.map((p: any) => ({
     id: p.id,
     date: getDate(p, "날짜"),
+    endDate: getDate(p, "종료일"),
     type: getSelect(p, "입력유형"),
     studentName: firstRelationName(p, "대상학생", names),
     content: getRichText(p, "내용"),
@@ -540,11 +541,13 @@ export async function createAdminInboxEntry(input: {
   type: string;
   studentId: string | null;
   content: string;
+  startDate?: string;
+  endDate?: string;
 }) {
   const studentName = input.studentId
     ? getTitle(await notion.pages.retrieve({ page_id: input.studentId }) as any, "이름")
     : "전체";
-  const today = todayKST();
+  const startDate = input.startDate || todayKST();
   await notion.pages.create({
     parent: { data_source_id: DB.ADMIN_INBOX } as any,
     properties: {
@@ -553,7 +556,8 @@ export async function createAdminInboxEntry(input: {
       ...(input.studentId
         ? { 대상학생: { relation: [{ id: input.studentId }] } }
         : {}),
-      날짜: { date: { start: today } },
+      날짜: { date: { start: startDate } },
+      ...(input.endDate ? { 종료일: { date: { start: input.endDate } } } : {}),
       내용: { rich_text: [{ text: { content: input.content } }] },
       처리완료: { checkbox: false },
     } as any,

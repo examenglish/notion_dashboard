@@ -119,12 +119,20 @@ function ClassRecordForm() {
       <form className="card" onSubmit={(e) => e.preventDefault()}>
         <h2>오늘 수업 기록</h2>
 
-        <label htmlFor="class">반</label>
-        <select id="class" value={classId} onChange={(e) => setClassId(e.target.value)} required>
-          {classes.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
+        <div className="field-row">
+          <div>
+            <label htmlFor="date">날짜</label>
+            <input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+          </div>
+          <div>
+            <label htmlFor="class">반</label>
+            <select id="class" value={classId} onChange={(e) => setClassId(e.target.value)} required>
+              {classes.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
 
         <label>수업과목</label>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 4 }}>
@@ -136,16 +144,13 @@ function ClassRecordForm() {
           ))}
         </div>
 
-        <label htmlFor="date">날짜</label>
-        <input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
-
         <label htmlFor="progress">진도</label>
         <textarea id="progress" value={progress} onChange={(e) => setProgress(e.target.value)} required />
 
         <label htmlFor="homework">과제</label>
         <textarea id="homework" value={homework} onChange={(e) => setHomework(e.target.value)} />
 
-        <label htmlFor="nextAssignment">다음시간 과제</label>
+        <label htmlFor="nextAssignment">다음시간 테스트</label>
         <input id="nextAssignment" type="text" value={nextAssignment} onChange={(e) => setNextAssignment(e.target.value)} />
 
         <label htmlFor="notice">전달사항</label>
@@ -224,12 +229,16 @@ function ClassRecordForm() {
 }
 
 function AdminInputForm() {
-  const [type, setType] = useState("전달사항");
+  const [type, setType] = useState("결석신고");
   const [studentId, setStudentId] = useState("");
+  const [startDate, setStartDate] = useState(todayStr());
+  const [endDate, setEndDate] = useState("");
   const [content, setContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const isAbsence = type === "결석신고";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -241,7 +250,13 @@ function AdminInputForm() {
       const res = await fetch("/api/admin-input", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, studentId, content }),
+        body: JSON.stringify({
+          type,
+          studentId,
+          content,
+          startDate,
+          endDate: isAbsence ? endDate : undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -250,6 +265,7 @@ function AdminInputForm() {
       }
       setDone(true);
       setContent("");
+      setEndDate("");
     } catch {
       setError("네트워크 오류가 발생했습니다.");
     } finally {
@@ -259,15 +275,33 @@ function AdminInputForm() {
 
   return (
     <form className="card" onSubmit={handleSubmit}>
-      <h2>결석 / 전달사항</h2>
+      <h2>결석 / 긴급상담요청</h2>
 
       <label htmlFor="type">유형</label>
       <select id="type" value={type} onChange={(e) => setType(e.target.value)}>
         <option value="결석신고">결석신고</option>
-        <option value="전달사항">전달사항</option>
+        <option value="긴급상담요청">긴급상담요청</option>
       </select>
 
       <StudentPicker studentId={studentId} onChange={setStudentId} label="대상학생" />
+
+      {isAbsence ? (
+        <div className="field-row">
+          <div>
+            <label htmlFor="startDate">시작일</label>
+            <input id="startDate" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
+          </div>
+          <div>
+            <label htmlFor="endDate">종료일</label>
+            <input id="endDate" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} min={startDate} />
+          </div>
+        </div>
+      ) : (
+        <>
+          <label htmlFor="startDate2">날짜</label>
+          <input id="startDate2" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
+        </>
+      )}
 
       <label htmlFor="content">내용</label>
       <textarea id="content" value={content} onChange={(e) => setContent(e.target.value)} required />
@@ -359,6 +393,7 @@ function ScheduleEntryForm() {
 
 function CounselingForm() {
   const [studentId, setStudentId] = useState("");
+  const [staff, setStaff] = useState<{ id: string; name: string }[]>([]);
   const [counselor, setCounselor] = useState("");
   const [date, setDate] = useState(todayStr());
   const [transcript, setTranscript] = useState("");
@@ -367,6 +402,15 @@ function CounselingForm() {
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/staff")
+      .then((r) => r.json())
+      .then((list: { id: string; name: string }[]) => {
+        setStaff(list);
+        if (list.length > 0) setCounselor((cur) => cur || list[0].name);
+      });
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -403,11 +447,20 @@ function CounselingForm() {
 
       <StudentPicker studentId={studentId} onChange={setStudentId} />
 
-      <label htmlFor="counselor">상담자</label>
-      <input id="counselor" type="text" value={counselor} onChange={(e) => setCounselor(e.target.value)} />
-
-      <label htmlFor="counselingDate">날짜</label>
-      <input id="counselingDate" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+      <div className="field-row">
+        <div>
+          <label htmlFor="counselor">상담자</label>
+          <select id="counselor" value={counselor} onChange={(e) => setCounselor(e.target.value)}>
+            {staff.map((s) => (
+              <option key={s.id} value={s.name}>{s.name}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="counselingDate">날짜</label>
+          <input id="counselingDate" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+        </div>
+      </div>
 
       <label htmlFor="transcript">전사내용 (원본, 길게 작성 가능)</label>
       <textarea id="transcript" value={transcript} onChange={(e) => setTranscript(e.target.value)} style={{ minHeight: 140 }} />

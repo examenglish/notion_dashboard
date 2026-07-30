@@ -20,7 +20,7 @@ export function formatBriefingText(input: {
     "",
     `- 진도: ${input.progress || "-"}`,
     `- 과제: ${input.homework || "-"}`,
-    `- 다음시간 과제: ${input.nextAssignment || "-"}`,
+    `- 다음시간 테스트: ${input.nextAssignment || "-"}`,
     `- 단어테스트: ${input.vocabFail ? "미통과 (재시험 필요)" : "통과"}`,
     `- 과제 수행: ${input.homeworkIncomplete ? "미완료" : "완료"}`,
   ];
