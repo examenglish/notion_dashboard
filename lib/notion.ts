@@ -208,6 +208,7 @@ function mapStudentPage(p: any, examMap: Map<string, any>) {
     tuitionDay: getNumber(p, "회비일"),
     learningLevel: getRichText(p, "학습레벨"),
     action: getRichText(p, "조치"),
+    actionOwner: getRichText(p, "조치담당자"),
     actionAlarmDate: getDate(p, "조치알람일"),
     latestExam: examMap.get(p.id) ?? null,
   };
@@ -330,9 +331,64 @@ export async function getClassSummaryByDate(date: string) {
   });
 }
 
+// Students with the worst attendance rate so far this (KST) calendar month —
+// drives the dashboard's default "학생검색" view before anything is typed.
+export async function getMonthlyAttendanceBottom(limit: number) {
+  const [y, m] = todayKST().split("-").map(Number);
+  const monthStart = `${y}-${String(m).padStart(2, "0")}-01`;
+
+  const [records, classes, names] = await Promise.all([
+    queryAllPages({
+      data_source_id: DB.DAILY_RECORD,
+      filter: { property: "날짜", date: { on_or_after: monthStart } },
+    }),
+    listClasses(),
+    studentNameMap(),
+  ]);
+  const classNameById = new Map(classes.map((c) => [c.id, c.name]));
+
+  const byStudent = new Map<string, { present: number; total: number; classId: string | null }>();
+  for (const r of records) {
+    const studentId = getRelationIds(r, "학생")[0];
+    if (!studentId) continue;
+    const cur = byStudent.get(studentId) ?? { present: 0, total: 0, classId: getRelationIds(r, "반")[0] ?? null };
+    cur.total += 1;
+    if (getSelect(r, "출결") !== "결석") cur.present += 1;
+    byStudent.set(studentId, cur);
+  }
+
+  return Array.from(byStudent.entries())
+    .map(([studentId, v]) => ({
+      studentId,
+      studentName: names.get(studentId) ?? "-",
+      className: v.classId ? classNameById.get(v.classId) ?? "-" : "-",
+      attendanceRate: v.total > 0 ? v.present / v.total : null,
+      recordCount: v.total,
+    }))
+    .filter((r) => r.attendanceRate !== null)
+    .sort((a, b) => (a.attendanceRate as number) - (b.attendanceRate as number))
+    .slice(0, limit);
+}
+
 // "오늘의 일정": alarms + new-student events + makeup/retest sessions due today.
+// Grade strings look like "중2"/"고1" — several 오늘의 일정 sections only
+// want the trailing digit ("2"/"1"), not the level prefix.
+function gradeDigits(grade: string | null): string {
+  return (grade ?? "").replace(/\D/g, "");
+}
+
+async function classInfoMap(): Promise<Map<string, { days: string[]; time: string }>> {
+  const classes = await listClasses();
+  return new Map(classes.map((c) => [c.id, { days: c.days, time: c.time }]));
+}
+
+async function staffNameMap(): Promise<Map<string, string>> {
+  const results = await queryAllPages({ data_source_id: DB.STAFF });
+  return new Map(results.map((p: any) => [p.id, getTitle(p, "이름")]));
+}
+
 export async function getTodaySchedule(today: string) {
-  const [alarmStudents, firstDayStudents, todoResults, names] = await Promise.all([
+  const [alarmStudents, firstDayStudents, todoResults, names, classMap, staffMap] = await Promise.all([
     queryAllPages({
       data_source_id: DB.STUDENT,
       filter: { property: "조치알람일", date: { equals: today } },
@@ -346,39 +402,71 @@ export async function getTodaySchedule(today: string) {
       filter: { property: "예정일", date: { equals: today } },
     }),
     studentNameMap(),
+    classInfoMap(),
+    staffNameMap(),
   ]);
 
   const alarms = alarmStudents.map((p: any) => ({
     id: p.id,
     studentName: getTitle(p, "이름"),
-    learningLevel: getRichText(p, "학습레벨"),
-    action: getRichText(p, "조치"),
-  }));
-
-  const firstDays = firstDayStudents.map((p: any) => ({
-    id: p.id,
-    studentName: getTitle(p, "이름"),
     school: getRichText(p, "학교"),
+    content: getRichText(p, "조치"),
+    counselor: getRichText(p, "조치담당자"),
   }));
 
-  const byType = (type: string) =>
+  const firstDays = firstDayStudents.map((p: any) => {
+    const classId = getRelationIds(p, "소속반")[0];
+    const cls = classId ? classMap.get(classId) : undefined;
+    return {
+      id: p.id,
+      studentName: getTitle(p, "이름"),
+      school: getRichText(p, "학교"),
+      gradeNum: gradeDigits(getSelect(p, "학년")),
+      classDays: cls?.days ?? [],
+      classTime: cls?.time ?? "",
+    };
+  });
+
+  const byTypes = (types: string[]) =>
     todoResults
-      .filter((p: any) => getSelect(p, "유형") === type && !getCheckbox(p, "완료여부"))
-      .map((p: any) => ({
-        id: p.id,
-        title: getTitle(p, "제목"),
-        time: getRichText(p, "시간"),
-        studentName: firstRelationName(p, "관련학생", names),
-        done: getCheckbox(p, "완료여부"),
-      }));
+      .filter((p: any) => types.includes(getSelect(p, "유형") ?? "") && !getCheckbox(p, "완료여부"))
+      .map((p: any) => {
+        const studentId = getRelationIds(p, "관련학생")[0];
+        const ownerId = getRelationIds(p, "담당자")[0];
+        return {
+          id: p.id,
+          title: getTitle(p, "제목"),
+          time: getRichText(p, "시간"),
+          studentName: studentId ? names.get(studentId) ?? "-" : "-",
+          school: "", // filled in below once we know the student
+          gradeNum: "",
+          owner: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
+          done: getCheckbox(p, "완료여부"),
+          _studentId: studentId as string | undefined,
+        };
+      });
+
+  // byTypes only has the name from studentNameMap (id->name); pull
+  // school/grade for those rows from a second full-student pass.
+  const studentBrief = await studentBriefMap();
+  const withStudentInfo = (items: ReturnType<typeof byTypes>) =>
+    items.map(({ _studentId, ...rest }) => {
+      const info = _studentId ? studentBrief.get(_studentId) : undefined;
+      return { ...rest, school: info?.school ?? "", gradeNum: info?.gradeNum ?? "" };
+    });
 
   return {
     alarms,
     firstDays,
-    newStudentCounseling: byType("신입생상담"),
-    makeupClasses: byType("보강"),
-    retests: byType("재시"),
+    newStudentEvents: withStudentInfo(byTypes(["신입생상담", "레벨체크"])),
+    makeupClasses: withStudentInfo(byTypes(["보강"])),
+    retests: withStudentInfo(byTypes(["재시"])),
   };
+}
+
+async function studentBriefMap(): Promise<Map<string, { school: string; gradeNum: string }>> {
+  const students = await searchStudents("");
+  return new Map(students.map((s) => [s.id, { school: s.school, gradeNum: gradeDigits(s.grade) }]));
 }
 
 export async function createClassProgress(input: {
@@ -412,7 +500,6 @@ export async function createClassProgress(input: {
 
   const dailyRecordIds: string[] = [];
   const briefingIds: string[] = [];
-  const makeupIds: string[] = [];
   for (const studentId of studentIds) {
     const studentPage: any = await notion.pages.retrieve({ page_id: studentId });
     const studentName = getTitle(studentPage, "이름");
@@ -433,22 +520,6 @@ export async function createClassProgress(input: {
       } as any,
     });
     dailyRecordIds.push(daily.id);
-
-    if (flags.absent) {
-      const makeup = await notion.pages.create({
-        parent: { data_source_id: DB.TODO } as any,
-        properties: {
-          제목: { title: [{ text: { content: `보강 - ${studentName}` } }] },
-          유형: { select: { name: "보강" } },
-          관련학생: { relation: [{ id: studentId }] },
-          관련반: { relation: [{ id: input.classId }] },
-          예정일: { date: { start: input.date } },
-          완료여부: { checkbox: false },
-          우선순위: { select: { name: "보통" } },
-        } as any,
-      });
-      makeupIds.push(makeup.id);
-    }
 
     const briefingText =
       input.briefingTexts?.[studentId] ??
@@ -488,7 +559,6 @@ export async function createClassProgress(input: {
     progressPageId: progressPage.id,
     studentCount: dailyRecordIds.length,
     briefingCount: briefingIds.length,
-    makeupCount: makeupIds.length,
   };
 }
 
@@ -593,6 +663,7 @@ export async function updateStudentInfo(input: {
   tuitionDay?: number;
   learningLevel?: string;
   action?: string;
+  actionOwner?: string;
   actionAlarmDate?: string;
 }) {
   const properties: any = {};
@@ -602,10 +673,21 @@ export async function updateStudentInfo(input: {
     properties["학습레벨"] = { rich_text: [{ text: { content: input.learningLevel } }] };
   if (input.action !== undefined)
     properties["조치"] = { rich_text: [{ text: { content: input.action } }] };
+  if (input.actionOwner !== undefined)
+    properties["조치담당자"] = { rich_text: [{ text: { content: input.actionOwner } }] };
   if (input.actionAlarmDate)
     properties["조치알람일"] = { date: { start: input.actionAlarmDate } };
 
   await notion.pages.update({ page_id: input.studentId, properties });
+}
+
+async function findStaffIdByName(name: string): Promise<string | null> {
+  const res = await notion.dataSources.query({
+    data_source_id: DB.STAFF,
+    filter: { property: "이름", title: { equals: name } },
+    page_size: 1,
+  });
+  return (res.results[0] as any)?.id ?? null;
 }
 
 export async function createScheduleEntry(input: {
@@ -614,16 +696,19 @@ export async function createScheduleEntry(input: {
   date: string;
   time: string;
   note: string;
+  ownerName?: string;
 }) {
   const studentName = input.studentId
     ? getTitle((await notion.pages.retrieve({ page_id: input.studentId })) as any, "이름")
     : "";
+  const ownerId = input.ownerName ? await findStaffIdByName(input.ownerName) : null;
   await notion.pages.create({
     parent: { data_source_id: DB.TODO } as any,
     properties: {
       제목: { title: [{ text: { content: `${input.type}${studentName ? " - " + studentName : ""}` } }] },
       유형: { select: { name: input.type } },
       ...(input.studentId ? { 관련학생: { relation: [{ id: input.studentId }] } } : {}),
+      ...(ownerId ? { 담당자: { relation: [{ id: ownerId }] } } : {}),
       예정일: { date: { start: input.date } },
       시간: { rich_text: [{ text: { content: input.time } }] },
       완료여부: { checkbox: false },

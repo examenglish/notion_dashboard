@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
-  const { studentId, enrolledAt, tuitionDay, learningLevel, action, actionAlarmDate } = body ?? {};
+  const { studentId, enrolledAt, tuitionDay, learningLevel, action, actionOwner, actionAlarmDate } = body ?? {};
   if (!studentId) {
     return NextResponse.json({ error: "studentId는 필수입니다." }, { status: 400 });
   }
@@ -15,6 +15,7 @@ export async function POST(req: NextRequest) {
     tuitionDay: tuitionDay === "" || tuitionDay === undefined ? undefined : Number(tuitionDay),
     learningLevel,
     action,
+    actionOwner,
     actionAlarmDate: actionAlarmDate || undefined,
   });
   return NextResponse.json({ ok: true });

@@ -25,14 +25,6 @@ type AdminInboxItem = {
   done: boolean;
 };
 
-type BriefingItem = {
-  id: string;
-  date: string | null;
-  type: string | null;
-  studentName: string;
-  content: string;
-};
-
 type CounselingItem = {
   id: string;
   date: string | null;
@@ -63,16 +55,12 @@ export default function DashboardClient() {
   const [selected, setSelected] = useState<StudentDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [adminInbox, setAdminInbox] = useState<AdminInboxItem[]>([]);
-  const [briefings, setBriefings] = useState<BriefingItem[]>([]);
   const [counseling, setCounseling] = useState<CounselingItem[]>([]);
 
   useEffect(() => {
     fetch("/api/admin-inbox")
       .then((r) => r.json())
       .then(setAdminInbox);
-    fetch("/api/briefings")
-      .then((r) => r.json())
-      .then(setBriefings);
     fetch("/api/counseling")
       .then((r) => r.json())
       .then(setCounseling);
@@ -173,7 +161,7 @@ export default function DashboardClient() {
         </div>
       </div>
 
-      <div className="grid-3">
+      <div className="grid-2">
         <RecentListCard
           title="행정입력함"
           items={adminInbox}
@@ -188,22 +176,6 @@ export default function DashboardClient() {
               <div className="recent-list-meta">
                 {i.date ?? "-"} · {i.done ? "처리완료" : "미처리"}
               </div>
-            </>
-          )}
-        />
-
-        <RecentListCard
-          title="데일리브리핑"
-          items={briefings}
-          keyOf={(i) => i.id}
-          renderItem={(i) => (
-            <>
-              <div className="recent-list-top">
-                <strong>{i.studentName}</strong>
-                <span className="badge">{i.type ?? "-"}</span>
-              </div>
-              <div>{i.content}</div>
-              <div className="recent-list-meta">{i.date ?? "-"}</div>
             </>
           )}
         />

@@ -227,11 +227,6 @@ function ClassRecordForm() {
                   </div>
                 </div>
               ))}
-            {roster.some((s) => perStudent[s.id]?.absent) && (
-              <p className="muted" style={{ marginTop: 8 }}>
-                결석 체크한 학생은 저장 시 "보강" 목록에 자동으로 추가됩니다.
-              </p>
-            )}
           </div>
         </div>
       </form>
@@ -354,6 +349,7 @@ function ScheduleEntryForm() {
   const [date, setDate] = useState(todayStr());
   const [time, setTime] = useState("");
   const [note, setNote] = useState("");
+  const [owner, setOwner] = useState("");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -368,7 +364,7 @@ function ScheduleEntryForm() {
       const res = await fetch("/api/schedule-entry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, studentId: studentId || null, date, time, note }),
+        body: JSON.stringify({ type, studentId: studentId || null, date, time, note, ownerName: owner }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -405,6 +401,8 @@ function ScheduleEntryForm() {
 
       <label htmlFor="scheduleTime">시간</label>
       <input id="scheduleTime" type="text" placeholder="예: 16:30" value={time} onChange={(e) => setTime(e.target.value)} />
+
+      <StaffPicker value={owner} onChange={setOwner} label="담당자 (보강자/진행자)" />
 
       <label htmlFor="scheduleNote">메모</label>
       <textarea id="scheduleNote" value={note} onChange={(e) => setNote(e.target.value)} />
@@ -504,6 +502,7 @@ function StudentInfoForm() {
   const [tuitionDay, setTuitionDay] = useState("");
   const [learningLevel, setLearningLevel] = useState("");
   const [action, setAction] = useState("");
+  const [actionOwner, setActionOwner] = useState("");
   const [actionAlarmDate, setActionAlarmDate] = useState("");
   const [evalReasons, setEvalReasons] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -533,7 +532,15 @@ function StudentInfoForm() {
       const res = await fetch("/api/student-info", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ studentId, enrolledAt, tuitionDay, learningLevel, action: combinedAction, actionAlarmDate }),
+        body: JSON.stringify({
+          studentId,
+          enrolledAt,
+          tuitionDay,
+          learningLevel,
+          action: combinedAction,
+          actionOwner,
+          actionAlarmDate,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -584,6 +591,8 @@ function StudentInfoForm() {
 
       <label htmlFor="action">조치</label>
       <textarea id="action" value={action} onChange={(e) => setAction(e.target.value)} />
+
+      <StaffPicker value={actionOwner} onChange={setActionOwner} label="담당자(상담자)" />
 
       <label htmlFor="actionAlarmDate">조치 알람일 (이 날짜에 대시보드 "오늘의 일정"에 표시)</label>
       <input

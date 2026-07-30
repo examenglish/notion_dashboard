@@ -2,12 +2,30 @@
 
 import { useEffect, useState } from "react";
 
-type TodoItem = { id: string; title: string; time: string; studentName: string; done: boolean };
+type AlarmItem = { id: string; studentName: string; school: string; content: string; counselor: string };
+type FirstDayItem = {
+  id: string;
+  studentName: string;
+  school: string;
+  gradeNum: string;
+  classDays: string[];
+  classTime: string;
+};
+type TodoItem = {
+  id: string;
+  title: string;
+  time: string;
+  studentName: string;
+  school: string;
+  gradeNum: string;
+  owner: string;
+  done: boolean;
+};
 
 type Schedule = {
-  alarms: { id: string; studentName: string; learningLevel: string; action: string }[];
-  firstDays: { id: string; studentName: string; school: string }[];
-  newStudentCounseling: TodoItem[];
+  alarms: AlarmItem[];
+  firstDays: FirstDayItem[];
+  newStudentEvents: TodoItem[];
   makeupClasses: TodoItem[];
   retests: TodoItem[];
 };
@@ -15,7 +33,7 @@ type Schedule = {
 const EMPTY: Schedule = {
   alarms: [],
   firstDays: [],
-  newStudentCounseling: [],
+  newStudentEvents: [],
   makeupClasses: [],
   retests: [],
 };
@@ -47,6 +65,11 @@ function Section({
   );
 }
 
+function schoolGrade(school: string, gradeNum: string) {
+  const s = school || "학교미상";
+  return gradeNum ? `${s}(${gradeNum})` : s;
+}
+
 export default function TodayScheduleCard() {
   const [schedule, setSchedule] = useState<Schedule>(EMPTY);
   const [loading, setLoading] = useState(true);
@@ -58,19 +81,10 @@ export default function TodayScheduleCard() {
       .finally(() => setLoading(false));
   }, []);
 
-  async function completeItem(key: "newStudentCounseling" | "makeupClasses" | "retests", id: string) {
+  async function completeItem(key: "newStudentEvents" | "makeupClasses", id: string) {
     // Optimistic removal — completed items drop off "오늘의 일정" immediately.
     setSchedule((cur) => ({ ...cur, [key]: cur[key].filter((t) => t.id !== id) }));
     await fetch(`/api/schedule-entry/${id}`, { method: "PATCH" });
-  }
-
-  function todoRender(key: "newStudentCounseling" | "makeupClasses" | "retests") {
-    return (t: TodoItem) => (
-      <label style={{ display: "flex", alignItems: "center", gap: 6, margin: 0, cursor: "pointer" }}>
-        <input type="checkbox" checked={false} onChange={() => completeItem(key, t.id)} />
-        <span className="muted">{t.time || "시간 미정"}</span> {t.studentName || t.title}
-      </label>
-    );
   }
 
   return (
@@ -81,30 +95,69 @@ export default function TodayScheduleCard() {
       ) : (
         <div className="schedule-grid">
           <Section
-            title="학습레벨/조치 알람"
+            title="학습레벨/조치사항"
             items={schedule.alarms}
-            render={(a) => (
+            render={(a: AlarmItem) => (
               <>
-                <strong>{a.studentName}</strong> — {a.learningLevel || "레벨 미기재"} · {a.action || "조치 미기재"}
+                <strong>{a.studentName}</strong> <span className="muted">{a.school}</span> — {a.content || "내용 미기재"}
+                {" "}
+                <span className="muted">(상담자: {a.counselor || "-"})</span>
               </>
             )}
           />
+
+          <Section
+            title="신입생 상담 및 레벨테스트"
+            items={schedule.newStudentEvents}
+            render={(t: TodoItem) => (
+              <label style={{ display: "flex", alignItems: "center", gap: 6, margin: 0, cursor: "pointer" }}>
+                <input type="checkbox" checked={false} onChange={() => completeItem("newStudentEvents", t.id)} />
+                <strong>{t.studentName}</strong>
+                <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
+                <span className="muted">{t.time || "시간 미정"}</span>
+              </label>
+            )}
+          />
+
           <Section
             title="신입생 첫등원"
             items={schedule.firstDays}
-            render={(f) => (
+            render={(f: FirstDayItem) => (
               <>
-                <strong>{f.studentName}</strong> <span className="muted">({f.school})</span>
+                <strong>{f.studentName}</strong> <span className="muted">{schoolGrade(f.school, f.gradeNum)}</span>
+                {", "}
+                <span className="muted">
+                  {f.classDays.length > 0 ? f.classDays.join("·") : "요일 미정"} {f.classTime || ""}
+                </span>
               </>
             )}
           />
+
           <Section
-            title="신입생 상담"
-            items={schedule.newStudentCounseling}
-            render={todoRender("newStudentCounseling")}
+            title="보강"
+            items={schedule.makeupClasses}
+            render={(t: TodoItem) => (
+              <label style={{ display: "flex", alignItems: "center", gap: 6, margin: 0, cursor: "pointer" }}>
+                <input type="checkbox" checked={false} onChange={() => completeItem("makeupClasses", t.id)} />
+                <strong>{t.studentName}</strong>
+                <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
+                <span className="muted">{t.time || "시간 미정"}</span>
+                <span className="muted">· 보강자: {t.owner}</span>
+              </label>
+            )}
           />
-          <Section title="보강" items={schedule.makeupClasses} render={todoRender("makeupClasses")} />
-          <Section title="재시" items={schedule.retests} render={todoRender("retests")} />
+
+          <Section
+            title="재시"
+            items={schedule.retests}
+            render={(t: TodoItem) => (
+              <>
+                <strong>{t.studentName}</strong> <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
+                {", "}
+                <span className="muted">{t.time || "시간 미정"}</span>
+              </>
+            )}
+          />
         </div>
       )}
     </div>
