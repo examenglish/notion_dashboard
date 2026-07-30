@@ -2,13 +2,15 @@
 
 import { useEffect, useState } from "react";
 import StudentPicker from "./StudentPicker";
+import StaffPicker from "./StaffPicker";
 import DailyBriefingPreviewModal from "./DailyBriefingPreviewModal";
 import { todayKST as todayStr } from "@/lib/date";
+import { stripClassSuffix } from "@/lib/format";
 
 type ClassOption = { id: string; name: string };
 type RosterStudent = { id: string; name: string };
 
-const SUBJECT_OPTIONS = ["문법", "독해", "서술형", "구문", "듣기"];
+const SUBJECT_OPTIONS = ["문법", "독해", "서술형", "구문", "듣기", "모의고사", "어법", "내신대비"];
 
 function confirmSave() {
   return window.confirm("저장하시겠습니까?");
@@ -25,7 +27,9 @@ function ClassRecordForm() {
   const [notice, setNotice] = useState("");
   const [roster, setRoster] = useState<RosterStudent[]>([]);
   const [loadingRoster, setLoadingRoster] = useState(false);
-  const [perStudent, setPerStudent] = useState<Record<string, { vocabFail: boolean; homeworkIncomplete: boolean }>>({});
+  const [perStudent, setPerStudent] = useState<
+    Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean }>
+  >({});
   const [showPreview, setShowPreview] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +52,9 @@ function ClassRecordForm() {
       .then((list: RosterStudent[]) => {
         setRoster(list);
         setPerStudent(
-          Object.fromEntries(list.map((s) => [s.id, { vocabFail: false, homeworkIncomplete: false }]))
+          Object.fromEntries(
+            list.map((s) => [s.id, { vocabFail: false, homeworkIncomplete: false, absent: false }])
+          )
         );
       })
       .finally(() => setLoadingRoster(false));
@@ -58,7 +64,7 @@ function ClassRecordForm() {
     setSubjects((cur) => (cur.includes(name) ? cur.filter((s) => s !== name) : [...cur, name]));
   }
 
-  function toggleFlag(studentId: string, key: "vocabFail" | "homeworkIncomplete") {
+  function toggleFlag(studentId: string, key: "vocabFail" | "homeworkIncomplete" | "absent") {
     setPerStudent((cur) => ({
       ...cur,
       [studentId]: { ...cur[studentId], [key]: !cur[studentId]?.[key] },
@@ -112,97 +118,121 @@ function ClassRecordForm() {
     if (!res.ok) setError(res.error ?? "저장에 실패했습니다.");
   }
 
-  const selectedClassName = classes.find((c) => c.id === classId)?.name ?? "";
+  const selectedClassName = stripClassSuffix(classes.find((c) => c.id === classId)?.name ?? "");
 
   return (
     <>
       <form className="card" onSubmit={(e) => e.preventDefault()}>
         <h2>오늘 수업 기록</h2>
 
-        <div className="field-row">
+        <div className="class-record-layout">
           <div>
-            <label htmlFor="date">날짜</label>
-            <input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
-          </div>
-          <div>
-            <label htmlFor="class">반</label>
-            <select id="class" value={classId} onChange={(e) => setClassId(e.target.value)} required>
-              {classes.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <label>수업과목</label>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 4 }}>
-          {SUBJECT_OPTIONS.map((s) => (
-            <label key={s} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, margin: 0 }}>
-              <input type="checkbox" checked={subjects.includes(s)} onChange={() => toggleSubject(s)} />
-              {s}
-            </label>
-          ))}
-        </div>
-
-        <label htmlFor="progress">진도</label>
-        <textarea id="progress" value={progress} onChange={(e) => setProgress(e.target.value)} required />
-
-        <label htmlFor="homework">과제</label>
-        <textarea id="homework" value={homework} onChange={(e) => setHomework(e.target.value)} />
-
-        <label htmlFor="nextAssignment">다음시간 테스트</label>
-        <input id="nextAssignment" type="text" value={nextAssignment} onChange={(e) => setNextAssignment(e.target.value)} />
-
-        <label htmlFor="notice">전달사항</label>
-        <textarea id="notice" value={notice} onChange={(e) => setNotice(e.target.value)} />
-
-        <label>학생별 체크 ({selectedClassName || "반 선택"})</label>
-        {loadingRoster && <p className="muted">명단 불러오는 중...</p>}
-        {!loadingRoster && roster.length === 0 && <p className="muted">이 반에 등록된 학생이 없습니다.</p>}
-        {!loadingRoster &&
-          roster.map((s) => (
-            <div key={s.id} className="roster-check-row">
-              <span>{s.name}</span>
-              <div style={{ display: "flex", gap: 12 }}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={perStudent[s.id]?.vocabFail ?? false}
-                    onChange={() => toggleFlag(s.id, "vocabFail")}
-                  />
-                  단어미통과
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={perStudent[s.id]?.homeworkIncomplete ?? false}
-                    onChange={() => toggleFlag(s.id, "homeworkIncomplete")}
-                  />
-                  과제미완료
-                </label>
+            <div className="field-row">
+              <div>
+                <label htmlFor="date">날짜</label>
+                <input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+              </div>
+              <div>
+                <label htmlFor="class">반</label>
+                <select id="class" value={classId} onChange={(e) => setClassId(e.target.value)} required>
+                  {classes.map((c) => (
+                    <option key={c.id} value={c.id}>{stripClassSuffix(c.name)}</option>
+                  ))}
+                </select>
               </div>
             </div>
-          ))}
 
-        {error && <p className="error-text">{error}</p>}
-        {done && <p className="success-box" style={{ marginTop: 12 }}>저장됐습니다.</p>}
+            <label>수업과목</label>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 4 }}>
+              {SUBJECT_OPTIONS.map((s) => (
+                <label key={s} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, margin: 0 }}>
+                  <input type="checkbox" checked={subjects.includes(s)} onChange={() => toggleSubject(s)} />
+                  {s}
+                </label>
+              ))}
+            </div>
 
-        <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
-          <button
-            type="button"
-            className="secondary"
-            onClick={handleOpenPreview}
-            disabled={!classId || roster.length === 0}
-          >
-            미리보기
-          </button>
-          <button
-            type="button"
-            onClick={handleDirectSave}
-            disabled={!classId || roster.length === 0 || saving}
-          >
-            {saving ? "저장 중..." : "저장"}
-          </button>
+            <label htmlFor="progress">진도</label>
+            <textarea id="progress" rows={2} value={progress} onChange={(e) => setProgress(e.target.value)} required />
+
+            <label htmlFor="homework">과제</label>
+            <textarea id="homework" rows={2} value={homework} onChange={(e) => setHomework(e.target.value)} />
+
+            <label htmlFor="nextAssignment">다음시간 테스트</label>
+            <textarea
+              id="nextAssignment"
+              rows={2}
+              value={nextAssignment}
+              onChange={(e) => setNextAssignment(e.target.value)}
+            />
+
+            <label htmlFor="notice">전달사항</label>
+            <input id="notice" type="text" value={notice} onChange={(e) => setNotice(e.target.value)} />
+
+            {error && <p className="error-text">{error}</p>}
+            {done && <p className="success-box" style={{ marginTop: 12 }}>저장됐습니다.</p>}
+
+            <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                className="secondary"
+                onClick={handleOpenPreview}
+                disabled={!classId || roster.length === 0}
+              >
+                미리보기
+              </button>
+              <button
+                type="button"
+                onClick={handleDirectSave}
+                disabled={!classId || roster.length === 0 || saving}
+              >
+                {saving ? "저장 중..." : "저장"}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label>학생별 체크 ({selectedClassName || "반 선택"})</label>
+            {loadingRoster && <p className="muted">명단 불러오는 중...</p>}
+            {!loadingRoster && roster.length === 0 && <p className="muted">이 반에 등록된 학생이 없습니다.</p>}
+            {!loadingRoster &&
+              roster.map((s) => (
+                <div key={s.id} className="roster-check-row">
+                  <span>{s.name}</span>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={perStudent[s.id]?.absent ?? false}
+                        onChange={() => toggleFlag(s.id, "absent")}
+                      />
+                      결석
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={perStudent[s.id]?.vocabFail ?? false}
+                        onChange={() => toggleFlag(s.id, "vocabFail")}
+                      />
+                      단어미통과
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={perStudent[s.id]?.homeworkIncomplete ?? false}
+                        onChange={() => toggleFlag(s.id, "homeworkIncomplete")}
+                      />
+                      과제미완료
+                    </label>
+                  </div>
+                </div>
+              ))}
+            {roster.some((s) => perStudent[s.id]?.absent) && (
+              <p className="muted" style={{ marginTop: 8 }}>
+                결석 체크한 학생은 저장 시 "보강" 목록에 자동으로 추가됩니다.
+              </p>
+            )}
+          </div>
         </div>
       </form>
 
@@ -393,7 +423,6 @@ function ScheduleEntryForm() {
 
 function CounselingForm() {
   const [studentId, setStudentId] = useState("");
-  const [staff, setStaff] = useState<{ id: string; name: string }[]>([]);
   const [counselor, setCounselor] = useState("");
   const [date, setDate] = useState(todayStr());
   const [transcript, setTranscript] = useState("");
@@ -402,15 +431,6 @@ function CounselingForm() {
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch("/api/staff")
-      .then((r) => r.json())
-      .then((list: { id: string; name: string }[]) => {
-        setStaff(list);
-        if (list.length > 0) setCounselor((cur) => cur || list[0].name);
-      });
-  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -448,14 +468,7 @@ function CounselingForm() {
       <StudentPicker studentId={studentId} onChange={setStudentId} />
 
       <div className="field-row">
-        <div>
-          <label htmlFor="counselor">상담자</label>
-          <select id="counselor" value={counselor} onChange={(e) => setCounselor(e.target.value)}>
-            {staff.map((s) => (
-              <option key={s.id} value={s.name}>{s.name}</option>
-            ))}
-          </select>
-        </div>
+        <StaffPicker value={counselor} onChange={setCounselor} />
         <div>
           <label htmlFor="counselingDate">날짜</label>
           <input id="counselingDate" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
@@ -595,8 +608,8 @@ function StudentInfoForm() {
 export default function InputClient({ role }: { role: string | null }) {
   return (
     <div className="page">
-      <div className="grid-2">
-        {role !== "행정" && <ClassRecordForm />}
+      {role !== "행정" && <ClassRecordForm />}
+      <div className="grid-3">
         <ScheduleEntryForm />
         <CounselingForm />
         <AdminInputForm />

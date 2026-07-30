@@ -363,7 +363,7 @@ export async function getTodaySchedule(today: string) {
 
   const byType = (type: string) =>
     todoResults
-      .filter((p: any) => getSelect(p, "유형") === type)
+      .filter((p: any) => getSelect(p, "유형") === type && !getCheckbox(p, "완료여부"))
       .map((p: any) => ({
         id: p.id,
         title: getTitle(p, "제목"),
@@ -389,7 +389,7 @@ export async function createClassProgress(input: {
   homework: string;
   nextAssignment: string;
   notice: string;
-  perStudent: Record<string, { vocabFail: boolean; homeworkIncomplete: boolean }>;
+  perStudent: Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean }>;
   briefingTexts?: Record<string, string>;
 }) {
   const classPage: any = await notion.pages.retrieve({ page_id: input.classId });
@@ -412,10 +412,11 @@ export async function createClassProgress(input: {
 
   const dailyRecordIds: string[] = [];
   const briefingIds: string[] = [];
+  const makeupIds: string[] = [];
   for (const studentId of studentIds) {
     const studentPage: any = await notion.pages.retrieve({ page_id: studentId });
     const studentName = getTitle(studentPage, "이름");
-    const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false };
+    const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false };
 
     const daily = await notion.pages.create({
       parent: { data_source_id: DB.DAILY_RECORD } as any,
@@ -425,12 +426,29 @@ export async function createClassProgress(input: {
         반: { relation: [{ id: input.classId }] },
         날짜: { date: { start: input.date } },
         진도내용: { rich_text: [{ text: { content: input.progress } }] },
+        출결: { select: { name: flags.absent ? "결석" : "출석" } },
         과제여부: { checkbox: !flags.homeworkIncomplete },
         단어테스트결과: { select: { name: flags.vocabFail ? "재시험" : "통과" } },
         반별진도원본: { relation: [{ id: progressPage.id }] },
       } as any,
     });
     dailyRecordIds.push(daily.id);
+
+    if (flags.absent) {
+      const makeup = await notion.pages.create({
+        parent: { data_source_id: DB.TODO } as any,
+        properties: {
+          제목: { title: [{ text: { content: `보강 - ${studentName}` } }] },
+          유형: { select: { name: "보강" } },
+          관련학생: { relation: [{ id: studentId }] },
+          관련반: { relation: [{ id: input.classId }] },
+          예정일: { date: { start: input.date } },
+          완료여부: { checkbox: false },
+          우선순위: { select: { name: "보통" } },
+        } as any,
+      });
+      makeupIds.push(makeup.id);
+    }
 
     const briefingText =
       input.briefingTexts?.[studentId] ??
@@ -466,7 +484,12 @@ export async function createClassProgress(input: {
     } as any,
   });
 
-  return { progressPageId: progressPage.id, studentCount: dailyRecordIds.length, briefingCount: briefingIds.length };
+  return {
+    progressPageId: progressPage.id,
+    studentCount: dailyRecordIds.length,
+    briefingCount: briefingIds.length,
+    makeupCount: makeupIds.length,
+  };
 }
 
 // ---- Recent-activity feeds (dashboard "최근 10개 + 전체보기" widgets) ----
@@ -606,6 +629,13 @@ export async function createScheduleEntry(input: {
       완료여부: { checkbox: false },
       우선순위: { select: { name: "보통" } },
     } as any,
+  });
+}
+
+export async function completeScheduleEntry(id: string) {
+  await notion.pages.update({
+    page_id: id,
+    properties: { 완료여부: { checkbox: true } } as any,
   });
 }
 

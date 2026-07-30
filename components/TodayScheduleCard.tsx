@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 
+type TodoItem = { id: string; title: string; time: string; studentName: string; done: boolean };
+
 type Schedule = {
   alarms: { id: string; studentName: string; learningLevel: string; action: string }[];
   firstDays: { id: string; studentName: string; school: string }[];
-  newStudentCounseling: { id: string; title: string; time: string; studentName: string; done: boolean }[];
-  makeupClasses: { id: string; title: string; time: string; studentName: string; done: boolean }[];
-  retests: { id: string; title: string; time: string; studentName: string; done: boolean }[];
+  newStudentCounseling: TodoItem[];
+  makeupClasses: TodoItem[];
+  retests: TodoItem[];
 };
 
 const EMPTY: Schedule = {
@@ -56,6 +58,21 @@ export default function TodayScheduleCard() {
       .finally(() => setLoading(false));
   }, []);
 
+  async function completeItem(key: "newStudentCounseling" | "makeupClasses" | "retests", id: string) {
+    // Optimistic removal — completed items drop off "오늘의 일정" immediately.
+    setSchedule((cur) => ({ ...cur, [key]: cur[key].filter((t) => t.id !== id) }));
+    await fetch(`/api/schedule-entry/${id}`, { method: "PATCH" });
+  }
+
+  function todoRender(key: "newStudentCounseling" | "makeupClasses" | "retests") {
+    return (t: TodoItem) => (
+      <label style={{ display: "flex", alignItems: "center", gap: 6, margin: 0, cursor: "pointer" }}>
+        <input type="checkbox" checked={false} onChange={() => completeItem(key, t.id)} />
+        <span className="muted">{t.time || "시간 미정"}</span> {t.studentName || t.title}
+      </label>
+    );
+  }
+
   return (
     <div className="card">
       <h2>오늘의 일정</h2>
@@ -84,30 +101,10 @@ export default function TodayScheduleCard() {
           <Section
             title="신입생 상담"
             items={schedule.newStudentCounseling}
-            render={(t) => (
-              <>
-                <span className="muted">{t.time || "시간 미정"}</span> {t.studentName || t.title}
-              </>
-            )}
+            render={todoRender("newStudentCounseling")}
           />
-          <Section
-            title="보강"
-            items={schedule.makeupClasses}
-            render={(t) => (
-              <>
-                <span className="muted">{t.time || "시간 미정"}</span> {t.studentName || t.title}
-              </>
-            )}
-          />
-          <Section
-            title="재시"
-            items={schedule.retests}
-            render={(t) => (
-              <>
-                <span className="muted">{t.time || "시간 미정"}</span> {t.studentName || t.title}
-              </>
-            )}
-          />
+          <Section title="보강" items={schedule.makeupClasses} render={todoRender("makeupClasses")} />
+          <Section title="재시" items={schedule.retests} render={todoRender("retests")} />
         </div>
       )}
     </div>

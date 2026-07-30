@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { formatBriefingText } from "@/lib/briefingFormat";
+import { stripClassSuffix } from "@/lib/format";
 
 type RosterStudent = { id: string; name: string };
 type PerStudentFlags = Record<string, { vocabFail: boolean; homeworkIncomplete: boolean }>;
@@ -70,7 +71,7 @@ export default function DailyBriefingPreviewModal({
   const [editedTexts, setEditedTexts] = useState<Record<string, string>>(() => initialTexts(draft));
 
   const isDraftMode = viewDate === draft.date && viewClassId === draft.classId && !saved;
-  const viewClassName = classes.find((c) => c.id === viewClassId)?.name ?? draft.className;
+  const viewClassName = stripClassSuffix(classes.find((c) => c.id === viewClassId)?.name ?? draft.className);
 
   useEffect(() => {
     if (isDraftMode) {
@@ -146,7 +147,7 @@ export default function DailyBriefingPreviewModal({
             }}
           >
             {classes.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+              <option key={c.id} value={c.id}>{stripClassSuffix(c.name)}</option>
             ))}
           </select>
         </div>

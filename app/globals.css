@@ -147,6 +147,25 @@ input[type="date"]::-webkit-calendar-picker-indicator:hover {
   background: #eef1f6;
 }
 
+.class-record-layout {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 24px;
+  align-items: start;
+}
+
+.class-record-layout > div:last-child {
+  max-height: 640px;
+  overflow-y: auto;
+  padding-left: 4px;
+}
+
+@media (max-width: 860px) {
+  .class-record-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 .field-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
