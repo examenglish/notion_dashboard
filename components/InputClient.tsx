@@ -28,6 +28,8 @@ function ClassRecordForm() {
   const [perStudent, setPerStudent] = useState<Record<string, { vocabFail: boolean; homeworkIncomplete: boolean }>>({});
   const [showPreview, setShowPreview] = useState(false);
   const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     fetch("/api/classes")
@@ -63,18 +65,28 @@ function ClassRecordForm() {
     }));
   }
 
-  function handleOpenPreview(e: React.FormEvent) {
-    e.preventDefault();
+  function handleOpenPreview() {
     setDone(false);
+    setError(null);
     setShowPreview(true);
   }
 
-  async function actuallySave(): Promise<{ ok: boolean; error?: string }> {
+  async function actuallySave(briefingTexts?: Record<string, string>): Promise<{ ok: boolean; error?: string }> {
     try {
       const res = await fetch("/api/class-record", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ classId, date, subjects, progress, homework, nextAssignment, notice, perStudent }),
+        body: JSON.stringify({
+          classId,
+          date,
+          subjects,
+          progress,
+          homework,
+          nextAssignment,
+          notice,
+          perStudent,
+          briefingTexts,
+        }),
       });
       const data = await res.json();
       if (!res.ok) return { ok: false, error: data.error ?? "저장에 실패했습니다." };
@@ -90,11 +102,21 @@ function ClassRecordForm() {
     }
   }
 
+  async function handleDirectSave() {
+    if (!confirmSave()) return;
+    setError(null);
+    setDone(false);
+    setSaving(true);
+    const res = await actuallySave();
+    setSaving(false);
+    if (!res.ok) setError(res.error ?? "저장에 실패했습니다.");
+  }
+
   const selectedClassName = classes.find((c) => c.id === classId)?.name ?? "";
 
   return (
     <>
-      <form className="card" onSubmit={handleOpenPreview}>
+      <form className="card" onSubmit={(e) => e.preventDefault()}>
         <h2>오늘 수업 기록</h2>
 
         <label htmlFor="class">반</label>
@@ -157,11 +179,24 @@ function ClassRecordForm() {
             </div>
           ))}
 
+        {error && <p className="error-text">{error}</p>}
         {done && <p className="success-box" style={{ marginTop: 12 }}>저장됐습니다.</p>}
 
-        <div style={{ marginTop: 16 }}>
-          <button type="submit" disabled={!classId || roster.length === 0}>
-            저장 (미리보기)
+        <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            className="secondary"
+            onClick={handleOpenPreview}
+            disabled={!classId || roster.length === 0}
+          >
+            미리보기
+          </button>
+          <button
+            type="button"
+            onClick={handleDirectSave}
+            disabled={!classId || roster.length === 0 || saving}
+          >
+            {saving ? "저장 중..." : "저장"}
           </button>
         </div>
       </form>

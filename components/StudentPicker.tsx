@@ -1,8 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type StudentOption = { id: string; name: string; school: string; grade: string | null };
+
+function displayLabel(s: StudentOption) {
+  return `${s.name} (${s.school || "학교미상"} ${s.grade || ""})`.trim();
+}
 
 export default function StudentPicker({
   studentId,
@@ -15,36 +19,103 @@ export default function StudentPicker({
   label?: string;
   allowEmpty?: boolean;
 }) {
-  const [query, setQuery] = useState("");
+  const [text, setText] = useState("");
   const [options, setOptions] = useState<StudentOption[]>([]);
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  // If the parent clears the selection (e.g. after a successful save), clear the box too.
+  useEffect(() => {
+    if (!studentId) setText("");
+  }, [studentId]);
 
   useEffect(() => {
     const handle = setTimeout(() => {
-      fetch(`/api/students?q=${encodeURIComponent(query)}`)
+      fetch(`/api/students?q=${encodeURIComponent(text)}`)
         .then((r) => r.json())
-        .then((list: StudentOption[]) => setOptions(list));
-    }, 250);
+        .then((list: StudentOption[]) => {
+          setOptions(list);
+          setHighlight(0);
+        });
+    }, 200);
     return () => clearTimeout(handle);
-  }, [query]);
+  }, [text]);
+
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  function selectStudent(s: StudentOption) {
+    onChange(s.id);
+    setText(displayLabel(s));
+    setOpen(false);
+  }
+
+  function handleInputChange(v: string) {
+    setText(v);
+    setOpen(true);
+    if (studentId) onChange(""); // typing again invalidates the previous selection
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (!open || options.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlight((h) => Math.min(h + 1, options.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlight((h) => Math.max(h - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      selectStudent(options[highlight]);
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    }
+  }
 
   return (
-    <>
+    <div ref={wrapRef} style={{ position: "relative" }}>
       <label>{label}</label>
       <input
         type="text"
-        placeholder="이름으로 검색 (동명이인은 학교/학년으로 구분)"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        placeholder="이름을 입력하면 바로 목록이 뜹니다"
+        value={text}
+        onChange={(e) => handleInputChange(e.target.value)}
+        onFocus={() => setOpen(true)}
+        onKeyDown={handleKeyDown}
+        autoComplete="off"
       />
-      <select style={{ marginTop: 8 }} value={studentId} onChange={(e) => onChange(e.target.value)}>
-        {allowEmpty && <option value="">선택 안 함</option>}
-        {!allowEmpty && <option value="">학생을 선택하세요</option>}
-        {options.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.name} ({s.school || "학교미상"} {s.grade || ""})
-          </option>
-        ))}
-      </select>
-    </>
+      {studentId && <p className="muted" style={{ margin: "4px 0 0" }}>선택됨: {text}</p>}
+      {allowEmpty && studentId === "" && text === "" && (
+        <p className="muted" style={{ margin: "4px 0 0" }}>비워두면 특정 학생 없이 저장됩니다.</p>
+      )}
+      {open && options.length > 0 && (
+        <div className="autocomplete-list">
+          {options.map((s, i) => (
+            <div
+              key={s.id}
+              className={`autocomplete-item ${i === highlight ? "active" : ""}`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                selectStudent(s);
+              }}
+              onMouseEnter={() => setHighlight(i)}
+            >
+              {displayLabel(s)}
+            </div>
+          ))}
+        </div>
+      )}
+      {open && text && options.length === 0 && (
+        <div className="autocomplete-list">
+          <div className="autocomplete-empty">검색 결과가 없습니다.</div>
+        </div>
+      )}
+    </div>
   );
 }

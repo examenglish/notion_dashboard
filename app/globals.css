@@ -210,6 +210,38 @@ th, td {
   gap: 2px;
 }
 
+.autocomplete-list {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(15, 18, 25, 0.12);
+}
+
+.autocomplete-item {
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.autocomplete-item.active,
+.autocomplete-item:hover {
+  background: #eaf0ff;
+}
+
+.autocomplete-empty {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -275,6 +307,17 @@ th, td {
   font-size: 13px;
   margin: 0;
   color: var(--text);
+}
+
+.modal-briefing-textarea {
+  width: 100%;
+  min-height: 140px;
+  font-family: inherit;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  resize: vertical;
 }
 
 .roster-check-row {

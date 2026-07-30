@@ -390,6 +390,7 @@ export async function createClassProgress(input: {
   nextAssignment: string;
   notice: string;
   perStudent: Record<string, { vocabFail: boolean; homeworkIncomplete: boolean }>;
+  briefingTexts?: Record<string, string>;
 }) {
   const classPage: any = await notion.pages.retrieve({ page_id: input.classId });
   const className = getTitle(classPage, "반이름");
@@ -431,17 +432,19 @@ export async function createClassProgress(input: {
     });
     dailyRecordIds.push(daily.id);
 
-    const briefingText = formatBriefingText({
-      date: input.date,
-      className,
-      studentName,
-      progress: input.progress,
-      homework: input.homework,
-      nextAssignment: input.nextAssignment,
-      notice: input.notice,
-      vocabFail: flags.vocabFail,
-      homeworkIncomplete: flags.homeworkIncomplete,
-    });
+    const briefingText =
+      input.briefingTexts?.[studentId] ??
+      formatBriefingText({
+        date: input.date,
+        className,
+        studentName,
+        progress: input.progress,
+        homework: input.homework,
+        nextAssignment: input.nextAssignment,
+        notice: input.notice,
+        vocabFail: flags.vocabFail,
+        homeworkIncomplete: flags.homeworkIncomplete,
+      });
     const briefing = await notion.pages.create({
       parent: { data_source_id: DB.BRIEFING } as any,
       properties: {

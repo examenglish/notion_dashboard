@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { formatBriefingText } from "@/lib/briefingFormat";
 
 type RosterStudent = { id: string; name: string };
@@ -8,6 +8,34 @@ type PerStudentFlags = Record<string, { vocabFail: boolean; homeworkIncomplete: 
 type ClassOption = { id: string; name: string };
 
 type ExistingBriefing = { id: string; date: string | null; studentId: string | null; content: string };
+
+function initialTexts(draft: {
+  date: string;
+  className: string;
+  progress: string;
+  homework: string;
+  nextAssignment: string;
+  notice: string;
+  roster: RosterStudent[];
+  perStudent: PerStudentFlags;
+}): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const s of draft.roster) {
+    const flags = draft.perStudent[s.id] ?? { vocabFail: false, homeworkIncomplete: false };
+    map[s.id] = formatBriefingText({
+      date: draft.date,
+      className: draft.className,
+      studentName: s.name,
+      progress: draft.progress,
+      homework: draft.homework,
+      nextAssignment: draft.nextAssignment,
+      notice: draft.notice,
+      vocabFail: flags.vocabFail,
+      homeworkIncomplete: flags.homeworkIncomplete,
+    });
+  }
+  return map;
+}
 
 export default function DailyBriefingPreviewModal({
   draft,
@@ -28,7 +56,7 @@ export default function DailyBriefingPreviewModal({
   };
   classes: ClassOption[];
   onClose: () => void;
-  onSave: () => Promise<{ ok: boolean; error?: string }>;
+  onSave: (texts: Record<string, string>) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const [viewDate, setViewDate] = useState(draft.date);
   const [viewClassId, setViewClassId] = useState(draft.classId);
@@ -39,6 +67,7 @@ export default function DailyBriefingPreviewModal({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [editedTexts, setEditedTexts] = useState<Record<string, string>>(() => initialTexts(draft));
 
   const isDraftMode = viewDate === draft.date && viewClassId === draft.classId && !saved;
   const viewClassName = classes.find((c) => c.id === viewClassId)?.name ?? draft.className;
@@ -63,32 +92,10 @@ export default function DailyBriefingPreviewModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewDate, viewClassId]);
 
-  const draftTexts = useMemo(() => {
-    if (!isDraftMode) return [];
-    return draft.roster.map((s) => {
-      const flags = draft.perStudent[s.id] ?? { vocabFail: false, homeworkIncomplete: false };
-      return {
-        studentId: s.id,
-        studentName: s.name,
-        text: formatBriefingText({
-          date: draft.date,
-          className: draft.className,
-          studentName: s.name,
-          progress: draft.progress,
-          homework: draft.homework,
-          nextAssignment: draft.nextAssignment,
-          notice: draft.notice,
-          vocabFail: flags.vocabFail,
-          homeworkIncomplete: flags.homeworkIncomplete,
-        }),
-      };
-    });
-  }, [isDraftMode, draft]);
-
   async function handleSave() {
     setSaving(true);
     setSaveError(null);
-    const res = await onSave();
+    const res = await onSave(editedTexts);
     setSaving(false);
     if (!res.ok) {
       setSaveError(res.error ?? "저장에 실패했습니다.");
@@ -102,6 +109,14 @@ export default function DailyBriefingPreviewModal({
       setCopiedId(id);
       setTimeout(() => setCopiedId(null), 1500);
     });
+  }
+
+  function copyAll() {
+    const combined = draft.roster
+      .map((s) => editedTexts[s.id])
+      .filter(Boolean)
+      .join("\n\n-----\n\n");
+    copyText("__all__", combined);
   }
 
   return (
@@ -137,9 +152,14 @@ export default function DailyBriefingPreviewModal({
         </div>
 
         {isDraftMode && (
-          <p className="muted" style={{ marginTop: 8 }}>
-            아직 저장 전인 오늘 입력 내용의 미리보기입니다. 아래 "저장"을 눌러야 실제로 기록됩니다.
-          </p>
+          <>
+            <p className="muted" style={{ marginTop: 8 }}>
+              아직 저장 전인 오늘 입력 내용의 미리보기입니다. 내용을 직접 수정할 수 있고, 아래 "저장"을 눌러야 실제로 기록됩니다.
+            </p>
+            <button type="button" className="secondary" onClick={copyAll}>
+              {copiedId === "__all__" ? "전체 복사됨" : `전체 복사 (${draft.roster.length}명)`}
+            </button>
+          </>
         )}
         {!isDraftMode && !saved && (
           <p className="muted" style={{ marginTop: 8 }}>
@@ -150,15 +170,19 @@ export default function DailyBriefingPreviewModal({
 
         <div className="modal-list">
           {isDraftMode &&
-            draftTexts.map((d) => (
-              <div key={d.studentId} className="modal-briefing-item">
+            draft.roster.map((s) => (
+              <div key={s.id} className="modal-briefing-item">
                 <div className="modal-briefing-top">
-                  <strong>{d.studentName}</strong>
-                  <button type="button" className="secondary" onClick={() => copyText(d.studentId, d.text)}>
-                    {copiedId === d.studentId ? "복사됨" : "복사"}
+                  <strong>{s.name}</strong>
+                  <button type="button" className="secondary" onClick={() => copyText(s.id, editedTexts[s.id] ?? "")}>
+                    {copiedId === s.id ? "복사됨" : "복사"}
                   </button>
                 </div>
-                <pre className="modal-briefing-text">{d.text}</pre>
+                <textarea
+                  className="modal-briefing-textarea"
+                  value={editedTexts[s.id] ?? ""}
+                  onChange={(e) => setEditedTexts((cur) => ({ ...cur, [s.id]: e.target.value }))}
+                />
               </div>
             ))}
 
