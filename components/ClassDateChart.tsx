@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { todayKST } from "@/lib/date";
 
 type DaySummary = {
@@ -10,6 +10,7 @@ type DaySummary = {
   recordCount: number;
   attendanceRate: number | null;
   homeworkRate: number | null;
+  counselingRate: number | null;
 };
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
@@ -33,6 +34,39 @@ function shiftDate(dateStr: string, delta: number) {
   return next.toISOString().slice(0, 10);
 }
 
+type Row = { name: string; value: number };
+
+function ClassMetricRow({
+  title,
+  color,
+  rows,
+  emptyText,
+}: {
+  title: string;
+  color: string;
+  rows: Row[];
+  emptyText: string;
+}) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <h3 style={{ margin: "0 0 6px", fontSize: 14 }}>{title}</h3>
+      {rows.length === 0 ? (
+        <p className="muted">{emptyText}</p>
+      ) : (
+        <ResponsiveContainer width="100%" height={110}>
+          <BarChart data={rows} layout="vertical" margin={{ left: 8, right: 16 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis type="number" unit="%" domain={[0, 100]} />
+            <YAxis type="category" dataKey="name" width={70} tick={{ fontSize: 12 }} />
+            <Tooltip />
+            <Bar dataKey="value" fill={color} radius={[0, 4, 4, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
+}
+
 export default function ClassDateChart() {
   const [date, setDate] = useState(() => todayKST());
   const [data, setData] = useState<DaySummary[]>([]);
@@ -46,21 +80,31 @@ export default function ClassDateChart() {
       .finally(() => setLoading(false));
   }, [date]);
 
-  const chartData = useMemo(
+  const attendanceRows = useMemo(
     () =>
       data
-        .filter((c) => c.recordCount > 0)
-        .map((c) => ({
-          name: c.className,
-          출석률: c.attendanceRate === null ? 0 : Math.round(c.attendanceRate * 100),
-          과제제출률: c.homeworkRate === null ? 0 : Math.round(c.homeworkRate * 100),
-        })),
+        .filter((c) => c.recordCount > 0 && c.attendanceRate !== null)
+        .map((c) => ({ name: c.className, value: Math.round((c.attendanceRate as number) * 100) })),
+    [data]
+  );
+  const homeworkRows = useMemo(
+    () =>
+      data
+        .filter((c) => c.recordCount > 0 && c.homeworkRate !== null)
+        .map((c) => ({ name: c.className, value: Math.round((c.homeworkRate as number) * 100) })),
+    [data]
+  );
+  const counselingRows = useMemo(
+    () =>
+      data
+        .filter((c) => c.counselingRate !== null && c.counselingRate > 0)
+        .map((c) => ({ name: c.className, value: Math.round((c.counselingRate as number) * 100) })),
     [data]
   );
 
   return (
     <div className="card">
-      <h2>반별 출석률 / 과제제출률</h2>
+      <h2>반별 출석률 / 과제제출률 / 상담률</h2>
       <div className="date-nav">
         <button type="button" className="secondary" onClick={() => setDate((d) => shiftDate(d, -1))}>
           ◀
@@ -77,21 +121,27 @@ export default function ClassDateChart() {
       </div>
 
       {loading && <p className="muted">불러오는 중...</p>}
-      {!loading && chartData.length === 0 && (
-        <p className="muted">이 날짜에 등록된 출결 기록이 없습니다.</p>
-      )}
-      {!loading && chartData.length > 0 && (
-        <ResponsiveContainer width="100%" height={280}>
-          <BarChart data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="name" />
-            <YAxis unit="%" domain={[0, 100]} />
-            <Tooltip />
-            <Legend />
-            <Bar dataKey="출석률" fill="#2f6fed" radius={[4, 4, 0, 0]} />
-            <Bar dataKey="과제제출률" fill="#22c55e" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+      {!loading && (
+        <div style={{ marginTop: 12 }}>
+          <ClassMetricRow
+            title="반별 출석률"
+            color="#2f6fed"
+            rows={attendanceRows}
+            emptyText="이 날짜에 등록된 출결 기록이 없습니다."
+          />
+          <ClassMetricRow
+            title="반별 과제제출률"
+            color="#22c55e"
+            rows={homeworkRows}
+            emptyText="이 날짜에 등록된 과제 기록이 없습니다."
+          />
+          <ClassMetricRow
+            title="반별 상담률"
+            color="#f59e0b"
+            rows={counselingRows}
+            emptyText="이 날짜에 등록된 상담 기록이 없습니다."
+          />
+        </div>
       )}
     </div>
   );

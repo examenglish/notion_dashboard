@@ -299,10 +299,14 @@ export async function getClassSummary() {
 // Per-class attendance/homework rate for one specific day (not cumulative),
 // driving the ◀ 날짜 ▶ navigator on the dashboard.
 export async function getClassSummaryByDate(date: string) {
-  const [classes, records] = await Promise.all([
+  const [classes, records, counselingEntries] = await Promise.all([
     listClasses(),
     queryAllPages({
       data_source_id: DB.DAILY_RECORD,
+      filter: { property: "날짜", date: { equals: date } },
+    }),
+    queryAllPages({
+      data_source_id: DB.COUNSELING,
       filter: { property: "날짜", date: { equals: date } },
     }),
   ]);
@@ -316,17 +320,27 @@ export async function getClassSummaryByDate(date: string) {
     }
   }
 
+  const counseledStudentIds = new Set<string>();
+  for (const entry of counselingEntries) {
+    for (const studentId of getRelationIds(entry, "학생")) {
+      counseledStudentIds.add(studentId);
+    }
+  }
+
   return classes.map((c) => {
     const recs = byClass.get(c.id) ?? [];
     const total = recs.length;
     const present = recs.filter((r) => getSelect(r, "출결") !== "결석").length;
     const homeworkDone = recs.filter((r) => getCheckbox(r, "과제여부")).length;
+    const rosterSize = c.studentIds.length;
+    const counseledInClass = c.studentIds.filter((id) => counseledStudentIds.has(id)).length;
     return {
       classId: c.id,
       className: c.name,
       recordCount: total,
       attendanceRate: total === 0 ? null : present / total,
       homeworkRate: total === 0 ? null : homeworkDone / total,
+      counselingRate: rosterSize === 0 ? null : counseledInClass / rosterSize,
     };
   });
 }
@@ -397,22 +411,38 @@ export async function getMonthlyStudentMetrics() {
 
 // Donut-chart data: this (KST) month's 출결/단어테스트결과 breakdown across
 // every DB④ record, for the dashboard's "이번달 현황" pies.
+// "초2"/"중1"/"고3" -> "초등"/"중등"/"고등" bucket for a clean donut.
+function gradeBucket(grade: string | null): string {
+  if (!grade) return "기타";
+  if (grade.startsWith("초")) return "초등";
+  if (grade.startsWith("중")) return "중등";
+  if (grade.startsWith("고")) return "고등";
+  return "기타";
+}
+
+async function studentGradeMap(): Promise<Map<string, string | null>> {
+  const results = await queryAllPages({ data_source_id: DB.STUDENT });
+  return new Map(results.map((p: any) => [p.id, getSelect(p, "학년")]));
+}
+
 export async function getMonthlyOutcomeBreakdown(month?: string) {
   const [y, m] = (month ?? todayKST().slice(0, 7)).split("-").map(Number);
   const monthStart = `${y}-${String(m).padStart(2, "0")}-01`;
   const nextY = m === 12 ? y + 1 : y;
   const nextM = m === 12 ? 1 : m + 1;
   const nextMonthStart = `${nextY}-${String(nextM).padStart(2, "0")}-01`;
+  const dateFilter = {
+    and: [
+      { property: "날짜", date: { on_or_after: monthStart } },
+      { property: "날짜", date: { before: nextMonthStart } },
+    ],
+  };
 
-  const records = await queryAllPages({
-    data_source_id: DB.DAILY_RECORD,
-    filter: {
-      and: [
-        { property: "날짜", date: { on_or_after: monthStart } },
-        { property: "날짜", date: { before: nextMonthStart } },
-      ],
-    },
-  });
+  const [records, counselingEntries, gradeMap] = await Promise.all([
+    queryAllPages({ data_source_id: DB.DAILY_RECORD, filter: dateFilter }),
+    queryAllPages({ data_source_id: DB.COUNSELING, filter: dateFilter }),
+    studentGradeMap(),
+  ]);
 
   const attendance = { 출석: 0, 지각: 0, 결석: 0 };
   const vocab = { 통과: 0, 재시험: 0, 미응시: 0 };
@@ -426,7 +456,17 @@ export async function getMonthlyOutcomeBreakdown(month?: string) {
     else homework.미완료 += 1;
   }
 
-  return { attendance, vocab, homework };
+  const counselingByGrade: Record<string, number> = { 초등: 0, 중등: 0, 고등: 0, 기타: 0 };
+  const counselingByCounselor: Record<string, number> = {};
+  for (const entry of counselingEntries) {
+    const studentIds = getRelationIds(entry, "학생");
+    const bucket = gradeBucket(gradeMap.get(studentIds[0]) ?? null);
+    counselingByGrade[bucket] += 1;
+    const counselor = getRichText(entry, "상담자") || "미지정";
+    counselingByCounselor[counselor] = (counselingByCounselor[counselor] ?? 0) + 1;
+  }
+
+  return { attendance, vocab, homework, counselingByGrade, counselingByCounselor };
 }
 
 // "오늘의 일정": alarms + new-student events + makeup/retest sessions due today.

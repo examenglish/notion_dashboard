@@ -14,6 +14,7 @@ import {
 import RecentListCard from "./RecentListCard";
 import ClassDateChart from "./ClassDateChart";
 import TodayScheduleCard from "./TodayScheduleCard";
+import DateTimeHeader from "./DateTimeHeader";
 import MonthlyOutcomeCharts from "./MonthlyOutcomeCharts";
 import StudentTable, { StudentRow } from "./StudentTable";
 
@@ -107,6 +108,7 @@ export default function DashboardClient() {
 
   return (
     <div className="page">
+      <DateTimeHeader />
       <TodayScheduleCard />
 
       <div className="grid-2">
@@ -174,7 +176,10 @@ export default function DashboardClient() {
             <>
               <div className="recent-list-top">
                 <strong>{i.studentName}</strong>
-                <span className={i.type !== "기타" ? "badge badge-urgent" : "badge"}>{i.type ?? "-"}</span>
+                <span className={i.type === "긴급상담요청" ? "badge badge-urgent" : "badge"}>
+                  {i.type === "긴급상담요청" && "🚨 "}
+                  {i.type ?? "-"}
+                </span>
               </div>
               <div>{i.content}</div>
               <div className="recent-list-meta">
