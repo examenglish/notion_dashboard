@@ -14,9 +14,10 @@ import {
 
 type ProgressEntry = { date: string | null; progress: string; homework: string; attendance: string | null; homeworkDone: boolean };
 type MakeupEntry = { date: string | null; time: string; owner: string; done: boolean };
+type ActionEntry = { date: string | null; content: string; owner: string };
 type CounselingEntry = { date: string | null; counselor: string; content: string; followUp: string };
 
-type History = { progress: ProgressEntry[]; makeup: MakeupEntry[]; counseling: CounselingEntry[] };
+type History = { progress: ProgressEntry[]; makeup: MakeupEntry[]; actions: ActionEntry[]; counseling: CounselingEntry[] };
 
 type StudentBasic = { name: string; school: string; grade: string | null };
 
@@ -122,6 +123,23 @@ export default function StudentHistoryModal({
                       보강자: {m.owner}
                       {" · "}
                       {m.done ? "완료" : "예정"}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <h3 style={{ marginTop: 20 }}>조치사항 이력</h3>
+              {history.actions.length === 0 ? (
+                <p className="muted">조치사항 이력이 없습니다.</p>
+              ) : (
+                <ul className="history-log">
+                  {history.actions.map((a, i) => (
+                    <li key={i}>
+                      <strong>{a.date ?? "-"}</strong>
+                      {" · "}
+                      담당자: {a.owner}
+                      <br />
+                      {a.content || "-"}
                     </li>
                   ))}
                 </ul>

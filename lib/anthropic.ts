@@ -64,16 +64,16 @@ export function resolveRelativeDate(text: string, todayStr: string): string | nu
 const NL_TOOLS: Anthropic.Tool[] = [
   {
     name: "log_admin_inbox",
-    description: "사전결석변경, 긴급상담요청, 신규생문의, 기타 전달사항을 행정실에 등록한다.",
+    description: "결석예정, 긴급상담요청, 신규생문의, 기타 전달사항을 행정실에 등록한다.",
     input_schema: {
       type: "object",
       properties: {
-        type: { type: "string", enum: ["사전결석변경", "긴급상담요청", "신규생문의", "기타"] },
+        type: { type: "string", enum: ["결석예정", "긴급상담요청", "신규생문의", "기타"] },
         studentName: { type: "string", description: "학생 이름. 해당 없으면 빈 문자열." },
         studentSchool: { type: "string", description: "학생 학교 이름(예: 여명중). 문장에 언급되어 있으면 채우고, 없으면 빈 문자열." },
         content: { type: "string", description: "전달할 내용 요약" },
-        startDate: { type: "string", description: "YYYY-MM-DD. 사전결석변경의 시작일 또는 사건 날짜." },
-        endDate: { type: "string", description: "YYYY-MM-DD. 기간이 있는 사전결석변경에만 사용, 없으면 빈 문자열." },
+        startDate: { type: "string", description: "YYYY-MM-DD. 결석예정의 시작일 또는 사건 날짜." },
+        endDate: { type: "string", description: "YYYY-MM-DD. 기간이 있는 결석예정에만 사용, 없으면 빈 문자열." },
       },
       required: ["type", "content", "startDate"],
     },
@@ -184,7 +184,7 @@ ${buildDateTable(ref.today)}
 - 담당자/상담자 이름도 마찬가지로 서술형 필드뿐 아니라 ownerName/counselor/actionOwner 필드에 별도로 채운다. 아래 직원 명단과 최대한 일치시킨다.
 
 분류 규칙 (log_admin_inbox의 type):
-- 학생이 결석/지각/조퇴한다는 내용 → 반드시 "사전결석변경"
+- 학생이 결석/지각/조퇴한다는 내용 → 반드시 "결석예정"
 - 시급하게 상담이 필요하다는 내용(성적 하락, 문제 행동, 퇴원 의사 등) → "긴급상담요청"
 - 아직 등록하지 않은 신규 학생/학부모의 문의 → "신규생문의"
 - 위 세 가지 중 어디에도 해당하지 않는 전달사항 → "기타" (마지막 수단으로만 사용)

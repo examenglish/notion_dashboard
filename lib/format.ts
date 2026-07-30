@@ -16,3 +16,15 @@ export function classColor(name: string): string {
   for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
   return CLASS_COLORS[hash % CLASS_COLORS.length];
 }
+
+// Muted, toned-down chart palette (slate blue / sage green / warm gray
+// family) shared by the dashboard's donut charts and the per-class summary
+// card, kept separate from classColor()'s saturated badge palette above.
+export const CHART_COLORS = {
+  slateBlue: "#6b7fa8",
+  sageGreen: "#84a186",
+  warmGray: "#a89f91",
+  dustyRose: "#b98277",
+  mutedAmber: "#c7a468",
+  mutedTeal: "#6f9d94",
+};

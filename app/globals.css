@@ -671,3 +671,28 @@ th, td {
     display: none !important;
   }
 }
+
+.class-summary-rotator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.class-summary-rotator > div.class-summary-fade {
+  flex: 1;
+  min-width: 0;
+}
+
+.class-summary-fade {
+  animation: classSummaryFadeIn 0.5s ease;
+}
+
+@keyframes classSummaryFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { todayKST } from "@/lib/date";
-import { stripClassSuffix } from "@/lib/format";
+import { stripClassSuffix, CHART_COLORS } from "@/lib/format";
 
 type DaySummary = {
   classId: string;
@@ -11,10 +10,12 @@ type DaySummary = {
   recordCount: number;
   attendanceRate: number | null;
   homeworkRate: number | null;
+  vocabPassRate: number | null;
   counselingRate: number | null;
 };
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
+const ROTATE_INTERVAL_MS = 5000;
 
 // Pure calendar-date arithmetic (via Date.UTC) so this never depends on the
 // browser's or server's local timezone — only on the Y/M/D digits themselves.
@@ -35,35 +36,24 @@ function shiftDate(dateStr: string, delta: number) {
   return next.toISOString().slice(0, 10);
 }
 
-type Row = { name: string; value: number };
-
-function ClassMetricRow({
-  title,
-  color,
-  rows,
-  emptyText,
-}: {
-  title: string;
-  color: string;
-  rows: Row[];
-  emptyText: string;
-}) {
+function MetricBar({ label, value, color }: { label: string; value: number | null; color: string }) {
+  const pctVal = value === null ? 0 : Math.round(value * 100);
   return (
-    <div style={{ marginBottom: 16 }}>
-      <h3 style={{ margin: "0 0 6px", fontSize: 14 }}>{title}</h3>
-      {rows.length === 0 ? (
-        <p className="muted">{emptyText}</p>
-      ) : (
-        <ResponsiveContainer width="100%" height={110}>
-          <BarChart data={rows} layout="vertical" margin={{ left: 8, right: 16 }}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis type="number" unit="%" domain={[0, 100]} />
-            <YAxis type="category" dataKey="name" width={70} tick={{ fontSize: 12 }} />
-            <Tooltip />
-            <Bar dataKey="value" fill={color} radius={[0, 4, 4, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      )}
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+        <span>{label}</span>
+        <span style={{ fontWeight: 700 }}>{value === null ? "-" : `${pctVal}%`}</span>
+      </div>
+      <div style={{ background: "var(--border)", borderRadius: 6, height: 8, overflow: "hidden", marginTop: 4 }}>
+        <div
+          style={{
+            width: `${pctVal}%`,
+            height: "100%",
+            background: color,
+            transition: "width 0.4s ease",
+          }}
+        />
+      </div>
     </div>
   );
 }
@@ -72,40 +62,49 @@ export default function ClassDateChart() {
   const [date, setDate] = useState(() => todayKST());
   const [data, setData] = useState<DaySummary[]>([]);
   const [loading, setLoading] = useState(false);
+  const [index, setIndex] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     setLoading(true);
     fetch(`/api/classes/summary-by-date?date=${date}`)
       .then((r) => r.json())
-      .then(setData)
+      .then((d: DaySummary[]) => {
+        setData(d);
+        setIndex(0);
+      })
       .finally(() => setLoading(false));
   }, [date]);
 
-  const attendanceRows = useMemo(
-    () =>
-      data
-        .filter((c) => c.recordCount > 0 && c.attendanceRate !== null)
-        .map((c) => ({ name: stripClassSuffix(c.className), value: Math.round((c.attendanceRate as number) * 100) })),
-    [data]
-  );
-  const homeworkRows = useMemo(
-    () =>
-      data
-        .filter((c) => c.recordCount > 0 && c.homeworkRate !== null)
-        .map((c) => ({ name: stripClassSuffix(c.className), value: Math.round((c.homeworkRate as number) * 100) })),
-    [data]
-  );
-  const counselingRows = useMemo(
-    () =>
-      data
-        .filter((c) => c.counselingRate !== null && c.counselingRate > 0)
-        .map((c) => ({ name: stripClassSuffix(c.className), value: Math.round((c.counselingRate as number) * 100) })),
-    [data]
-  );
+  const activeClasses = useMemo(() => data.filter((c) => c.recordCount > 0), [data]);
+
+  function startTimer(len: number) {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (len <= 1) return;
+    timerRef.current = setInterval(() => {
+      setIndex((i) => (i + 1) % len);
+    }, ROTATE_INTERVAL_MS);
+  }
+
+  useEffect(() => {
+    startTimer(activeClasses.length);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeClasses.length, date]);
+
+  function goTo(delta: number) {
+    if (activeClasses.length === 0) return;
+    setIndex((i) => (i + delta + activeClasses.length) % activeClasses.length);
+    startTimer(activeClasses.length);
+  }
+
+  const current = activeClasses[index];
 
   return (
     <div className="card">
-      <h2>반별 출석률 / 과제제출률 / 상담률</h2>
+      <h2>반별 현황</h2>
       <div className="date-nav">
         <button type="button" className="secondary date-nav-arrow" onClick={() => setDate((d) => shiftDate(d, -1))}>
           ◀
@@ -122,27 +121,30 @@ export default function ClassDateChart() {
       </div>
 
       {loading && <p className="muted">불러오는 중...</p>}
-      {!loading && (
-        <div style={{ marginTop: 12 }}>
-          <ClassMetricRow
-            title="반별 출석률"
-            color="#2f6fed"
-            rows={attendanceRows}
-            emptyText="이 날짜에 등록된 출결 기록이 없습니다."
-          />
-          <ClassMetricRow
-            title="반별 과제제출률"
-            color="#22c55e"
-            rows={homeworkRows}
-            emptyText="이 날짜에 등록된 과제 기록이 없습니다."
-          />
-          <ClassMetricRow
-            title="반별 상담률"
-            color="#f59e0b"
-            rows={counselingRows}
-            emptyText="이 날짜에 등록된 상담 기록이 없습니다."
-          />
-        </div>
+      {!loading && activeClasses.length === 0 && (
+        <p className="muted">이 날짜에 등록된 기록이 없습니다.</p>
+      )}
+      {!loading && current && (
+        <>
+          <div className="class-summary-rotator">
+            <button type="button" className="secondary date-nav-arrow" onClick={() => goTo(-1)}>◀</button>
+            <div key={current.classId} className="class-summary-fade">
+              <h3 style={{ textAlign: "center", fontSize: 20, margin: "0 0 16px" }}>
+                {stripClassSuffix(current.className)}
+              </h3>
+              <MetricBar label="출석률" value={current.attendanceRate} color={CHART_COLORS.slateBlue} />
+              <MetricBar label="과제 제출률" value={current.homeworkRate} color={CHART_COLORS.sageGreen} />
+              <MetricBar label="상담률" value={current.counselingRate} color={CHART_COLORS.mutedAmber} />
+              <MetricBar label="단어 통과율" value={current.vocabPassRate} color={CHART_COLORS.mutedTeal} />
+            </div>
+            <button type="button" className="secondary date-nav-arrow" onClick={() => goTo(1)}>▶</button>
+          </div>
+          {activeClasses.length > 1 && (
+            <p className="muted" style={{ textAlign: "center", marginTop: 4 }}>
+              {index + 1} / {activeClasses.length}
+            </p>
+          )}
+        </>
       )}
     </div>
   );

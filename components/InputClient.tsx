@@ -19,6 +19,7 @@ function confirmSave() {
 function ClassRecordForm() {
   const [classes, setClasses] = useState<ClassOption[]>([]);
   const [classId, setClassId] = useState("");
+  const [manualClassName, setManualClassName] = useState("");
   const [date, setDate] = useState(todayStr());
   const [subjects, setSubjects] = useState<string[]>([]);
   const [progress, setProgress] = useState("");
@@ -42,7 +43,6 @@ function ClassRecordForm() {
       .then((r) => r.json())
       .then((list: ClassOption[]) => {
         setClasses(list);
-        if (list.length > 0) setClassId(list[0].id);
       });
   }, []);
 
@@ -111,7 +111,8 @@ function ClassRecordForm() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          classId,
+          classId: classId || undefined,
+          manualClassName: classId ? undefined : manualClassName.trim() || undefined,
           date,
           subjects,
           progress,
@@ -149,6 +150,8 @@ function ClassRecordForm() {
   }
 
   const selectedClassName = stripClassSuffix(classes.find((c) => c.id === classId)?.name ?? "");
+  const hasClass = !!classId || !!manualClassName.trim();
+  const canSave = hasClass && (classId ? fullRoster.length > 0 : true) && !saving;
 
   return (
     <>
@@ -164,7 +167,14 @@ function ClassRecordForm() {
               </div>
               <div>
                 <label htmlFor="class">반</label>
-                <select id="class" value={classId} onChange={(e) => setClassId(e.target.value)} required>
+                <select
+                  id="class"
+                  value={classId}
+                  onChange={(e) => {
+                    setClassId(e.target.value);
+                    if (e.target.value) setManualClassName("");
+                  }}
+                >
                   <option value="">반 선택</option>
                   {classes.map((c) => (
                     <option key={c.id} value={c.id}>{stripClassSuffix(c.name)}</option>
@@ -172,6 +182,18 @@ function ClassRecordForm() {
                 </select>
               </div>
             </div>
+
+            <label htmlFor="manualClass">반이름 직접입력 (목록에 없는 반일 때)</label>
+            <input
+              id="manualClass"
+              type="text"
+              value={manualClassName}
+              onChange={(e) => {
+                setManualClassName(e.target.value);
+                if (e.target.value) setClassId("");
+              }}
+              placeholder="예: 고3 E반"
+            />
 
             <label>수업과목</label>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 4 }}>
@@ -215,7 +237,7 @@ function ClassRecordForm() {
               <button
                 type="button"
                 onClick={handleDirectSave}
-                disabled={!classId || fullRoster.length === 0 || saving}
+                disabled={!canSave}
               >
                 {saving ? "저장 중..." : "저장"}
               </button>
@@ -302,7 +324,7 @@ function ClassRecordForm() {
 }
 
 function AdminInputForm() {
-  const [type, setType] = useState("사전결석변경");
+  const [type, setType] = useState("결석예정");
   const [studentId, setStudentId] = useState("");
   const [startDate, setStartDate] = useState(todayStr());
   const [endDate, setEndDate] = useState("");
@@ -311,7 +333,7 @@ function AdminInputForm() {
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isAbsence = type === "사전결석변경";
+  const isAbsence = type === "결석예정";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -348,11 +370,11 @@ function AdminInputForm() {
 
   return (
     <form className="card" onSubmit={handleSubmit}>
-      <h2>사전결석변경 / 긴급상담요청</h2>
+      <h2>결석예정 / 긴급상담요청</h2>
 
       <label htmlFor="type">유형</label>
       <select id="type" value={type} onChange={(e) => setType(e.target.value)}>
-        <option value="사전결석변경">사전결석변경</option>
+        <option value="결석예정">결석예정</option>
         <option value="긴급상담요청">긴급상담요청</option>
       </select>
 

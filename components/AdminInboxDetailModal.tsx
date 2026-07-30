@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-const TYPE_OPTIONS = ["사전결석변경", "긴급상담요청", "신규생문의", "기타"];
+const TYPE_OPTIONS = ["결석예정", "긴급상담요청", "신규생문의", "기타"];
 
 export type AdminInboxRecord = {
   id: string;

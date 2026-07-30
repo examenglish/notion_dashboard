@@ -1,6 +1,7 @@
 import { Client } from "@notionhq/client";
 import { todayKST } from "./date";
 import { formatBriefingText } from "./briefingFormat";
+import { stripClassSuffix } from "./format";
 
 // Server-only. Never import this file from a "use client" component.
 if (typeof window !== "undefined") {
@@ -154,6 +155,26 @@ export async function listClasses() {
   }));
 }
 
+// Used when a staff member types a class name directly instead of picking
+// from the dropdown (e.g. a brand-new class not yet set up in DB①). Matches
+// an existing class by exact name first (ignoring the "(숫자)" seed-data
+// suffix some class names carry); creates a minimal DB① record only if
+// nothing matches.
+export async function resolveOrCreateClass(name: string): Promise<string> {
+  const trimmed = name.trim();
+  const classes = await listClasses();
+  const exact = classes.find((c) => c.name === trimmed || stripClassSuffix(c.name) === trimmed);
+  if (exact) return exact.id;
+
+  const page = await notion.pages.create({
+    parent: { data_source_id: DB.CLASS } as any,
+    properties: {
+      반이름: { title: [{ text: { content: trimmed } }] },
+    } as any,
+  });
+  return page.id;
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Compares calendar-date strings (YYYY-MM-DD) as abstract Y/M/D via Date.UTC,
@@ -290,12 +311,21 @@ export async function getStudentFullHistory(studentId: string) {
     homeworkDone: r.homeworkDone,
   }));
 
-  const [makeupTodos, counselingEntries, staffMap] = await Promise.all([
+  const [makeupTodos, actionTodos, counselingEntries, staffMap] = await Promise.all([
     queryAllPages({
       data_source_id: DB.TODO,
       filter: {
         and: [
           { property: "유형", select: { equals: "보강" } },
+          { property: "관련학생", relation: { contains: studentId } },
+        ],
+      },
+    }),
+    queryAllPages({
+      data_source_id: DB.TODO,
+      filter: {
+        and: [
+          { property: "유형", select: { equals: "조치사항" } },
           { property: "관련학생", relation: { contains: studentId } },
         ],
       },
@@ -319,6 +349,17 @@ export async function getStudentFullHistory(studentId: string) {
     })
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
 
+  const actions = actionTodos
+    .map((p: any) => {
+      const ownerId = getRelationIds(p, "담당자")[0];
+      return {
+        date: getDate(p, "예정일"),
+        content: getTitle(p, "제목"),
+        owner: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
+      };
+    })
+    .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+
   const counseling = counselingEntries
     .map((p: any) => ({
       date: getDate(p, "날짜"),
@@ -328,7 +369,7 @@ export async function getStudentFullHistory(studentId: string) {
     }))
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
 
-  return { progress, makeup, counseling };
+  return { progress, makeup, actions, counseling };
 }
 
 export async function getStudentExamScores(studentId: string) {
@@ -407,6 +448,7 @@ export async function getClassSummaryByDate(date: string) {
     const total = recs.length;
     const present = recs.filter((r) => getSelect(r, "출결") !== "결석").length;
     const homeworkDone = recs.filter((r) => getCheckbox(r, "과제여부")).length;
+    const vocabPass = recs.filter((r) => getSelect(r, "단어테스트결과") === "통과").length;
     const rosterSize = c.studentIds.length;
     const counseledInClass = c.studentIds.filter((id) => counseledStudentIds.has(id)).length;
     return {
@@ -415,6 +457,7 @@ export async function getClassSummaryByDate(date: string) {
       recordCount: total,
       attendanceRate: total === 0 ? null : present / total,
       homeworkRate: total === 0 ? null : homeworkDone / total,
+      vocabPassRate: total === 0 ? null : vocabPass / total,
       counselingRate: rosterSize === 0 ? null : counseledInClass / rosterSize,
     };
   });
@@ -894,6 +937,28 @@ export async function updateStudentInfo(input: {
     properties["조치알람일"] = { date: { start: input.actionAlarmDate } };
 
   await notion.pages.update({ page_id: input.studentId, properties });
+
+  // DB②의 조치/조치담당자/조치알람일은 매번 덮어써지는 "현재 상태" 필드라
+  // 이력이 남지 않는다. action이 있을 때는 DB⑱에 조치사항 유형 레코드를
+  // 하나 더 남겨서, 학생별 히스토리(StudentHistoryModal)에서 언제 어떤
+  // 조치가 있었는지 계속 확인할 수 있게 한다.
+  if (input.action) {
+    const studentPage: any = await notion.pages.retrieve({ page_id: input.studentId });
+    const studentName = getTitle(studentPage, "이름");
+    const ownerId = input.actionOwner ? await findStaffIdByName(input.actionOwner) : null;
+    await notion.pages.create({
+      parent: { data_source_id: DB.TODO } as any,
+      properties: {
+        제목: { title: [{ text: { content: input.action } }] },
+        유형: { select: { name: "조치사항" } },
+        관련학생: { relation: [{ id: input.studentId }] },
+        ...(ownerId ? { 담당자: { relation: [{ id: ownerId }] } } : {}),
+        예정일: { date: { start: input.actionAlarmDate || todayKST() } },
+        완료여부: { checkbox: false },
+        우선순위: { select: { name: "보통" } },
+      } as any,
+    });
+  }
 }
 
 // Minimal DB② student record, created on the fly when a 자연어 입력 mentions
