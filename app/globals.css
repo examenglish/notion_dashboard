@@ -454,6 +454,13 @@ th, td {
   margin-bottom: 14px;
 }
 
+.date-nav button {
+  flex-shrink: 0;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
 .sortable-table {
   width: 100%;
   border-collapse: collapse;
