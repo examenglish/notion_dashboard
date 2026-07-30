@@ -18,6 +18,7 @@ import DateTimeHeader from "./DateTimeHeader";
 import MonthlyOutcomeCharts from "./MonthlyOutcomeCharts";
 import StudentTable, { StudentRow } from "./StudentTable";
 import CounselingEditModal, { CounselingRecord } from "./CounselingEditModal";
+import NaturalLanguageInput from "./NaturalLanguageInput";
 import StudentHistoryModal from "./StudentHistoryModal";
 
 type AdminInboxItem = {
@@ -71,10 +72,14 @@ export default function DashboardClient() {
       .then(setCounseling);
   }
 
-  useEffect(() => {
+  function reloadAdminInbox() {
     fetch("/api/admin-inbox")
       .then((r) => r.json())
       .then(setAdminInbox);
+  }
+
+  useEffect(() => {
+    reloadAdminInbox();
     reloadCounseling();
   }, []);
 
@@ -120,6 +125,8 @@ export default function DashboardClient() {
     <div className="page">
       <DateTimeHeader />
       <TodayScheduleCard />
+
+      <NaturalLanguageInput onSaved={() => { reloadAdminInbox(); reloadCounseling(); }} />
 
       <div className="grid-2">
         <ClassDateChart />
