@@ -103,7 +103,7 @@ export default function DashboardClient() {
     return selected.dailyRecords.map((r) => ({
       date: r.date?.slice(5) ?? "",
       출석: r.attendance === "결석" ? 0 : 1,
-      숙제: r.homeworkDone ? 1 : 0,
+      과제: r.homeworkDone ? 1 : 0,
     }));
   }, [selected]);
 
@@ -137,11 +137,11 @@ export default function DashboardClient() {
               </span>
               <div style={{ display: "flex", gap: 16, margin: "10px 0" }}>
                 <span className="badge">누적출석률 {pct(selected.student.attendanceRate)}</span>
-                <span className="badge">숙제제출률 {pct(selected.student.homeworkRate)}</span>
+                <span className="badge">과제제출률 {pct(selected.student.homeworkRate)}</span>
                 <span className="badge">단어테스트통과율 {pct(selected.student.vocabPassRate)}</span>
               </div>
 
-              <h2 style={{ marginTop: 20 }}>출결/숙제 추이</h2>
+              <h2 style={{ marginTop: 20 }}>출결/과제 추이</h2>
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={trendData}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -150,7 +150,7 @@ export default function DashboardClient() {
                   <Tooltip />
                   <Legend />
                   <Line type="monotone" dataKey="출석" stroke="#2f6fed" strokeWidth={2} />
-                  <Line type="monotone" dataKey="숙제" stroke="#22c55e" strokeWidth={2} />
+                  <Line type="monotone" dataKey="과제" stroke="#22c55e" strokeWidth={2} />
                 </LineChart>
               </ResponsiveContainer>
 

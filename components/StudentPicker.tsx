@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-type StudentOption = { id: string; name: string };
+type StudentOption = { id: string; name: string; school: string; grade: string | null };
 
 export default function StudentPicker({
   studentId,
@@ -32,7 +32,7 @@ export default function StudentPicker({
       <label>{label}</label>
       <input
         type="text"
-        placeholder="이름으로 검색"
+        placeholder="이름으로 검색 (동명이인은 학교/학년으로 구분)"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
@@ -41,7 +41,7 @@ export default function StudentPicker({
         {!allowEmpty && <option value="">학생을 선택하세요</option>}
         {options.map((s) => (
           <option key={s.id} value={s.id}>
-            {s.name}
+            {s.name} ({s.school || "학교미상"} {s.grade || ""})
           </option>
         ))}
       </select>

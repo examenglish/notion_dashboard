@@ -81,7 +81,7 @@ export default function StudentTable({
                 className={sortKey === "homeworkRate" ? "active" : ""}
                 onClick={() => toggleSort("homeworkRate")}
               >
-                숙제제출률{arrow("homeworkRate")}
+                과제제출률{arrow("homeworkRate")}
               </th>
               <th
                 className={sortKey === "vocabPassRate" ? "active" : ""}

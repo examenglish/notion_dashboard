@@ -53,14 +53,14 @@ export default function ClassDateChart() {
         .map((c) => ({
           name: c.className,
           출석률: c.attendanceRate === null ? 0 : Math.round(c.attendanceRate * 100),
-          숙제제출률: c.homeworkRate === null ? 0 : Math.round(c.homeworkRate * 100),
+          과제제출률: c.homeworkRate === null ? 0 : Math.round(c.homeworkRate * 100),
         })),
     [data]
   );
 
   return (
     <div className="card">
-      <h2>반별 출석률 / 숙제제출률</h2>
+      <h2>반별 출석률 / 과제제출률</h2>
       <div className="date-nav">
         <button type="button" className="secondary" onClick={() => setDate((d) => shiftDate(d, -1))}>
           ◀
@@ -89,7 +89,7 @@ export default function ClassDateChart() {
             <Tooltip />
             <Legend />
             <Bar dataKey="출석률" fill="#2f6fed" radius={[4, 4, 0, 0]} />
-            <Bar dataKey="숙제제출률" fill="#22c55e" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="과제제출률" fill="#22c55e" radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       )}
