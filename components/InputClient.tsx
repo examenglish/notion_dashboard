@@ -165,6 +165,7 @@ function ClassRecordForm() {
               <div>
                 <label htmlFor="class">반</label>
                 <select id="class" value={classId} onChange={(e) => setClassId(e.target.value)} required>
+                  <option value="">반 선택</option>
                   {classes.map((c) => (
                     <option key={c.id} value={c.id}>{stripClassSuffix(c.name)}</option>
                   ))}

@@ -109,7 +109,7 @@ function DateNav({ date, onShift, onToday }: { date: string; onShift: (delta: nu
       <strong>{formatLabel(date)}</strong>
       <button type="button" className="secondary date-nav-arrow" onClick={() => onShift(1)}>▶</button>
       {date !== todayKST() && (
-        <button type="button" className="secondary" onClick={onToday}>오늘</button>
+        <button type="button" className="secondary date-nav-today" onClick={onToday}>오늘</button>
       )}
     </div>
   );

@@ -30,7 +30,29 @@ function currentMonth() {
   return new Date().toISOString().slice(0, 7);
 }
 
-function Donut({ title, data, colors }: { title: string; data: Record<string, number>; colors: Record<string, string> }) {
+const RADIAN = Math.PI / 180;
+function renderInsideLabel({ cx, cy, midAngle, innerRadius, outerRadius, value }: any) {
+  const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+  return (
+    <text x={x} y={y} textAnchor="middle" dominantBaseline="middle" fill="#000" fontWeight={700} fontSize={13}>
+      {value}
+    </text>
+  );
+}
+
+function Donut({
+  title,
+  data,
+  colors,
+  showValueLabels,
+}: {
+  title: string;
+  data: Record<string, number>;
+  colors: Record<string, string>;
+  showValueLabels?: boolean;
+}) {
   const chartData = Object.entries(data)
     .filter(([, v]) => v > 0)
     .map(([name, value]) => ({ name, value }));
@@ -44,7 +66,16 @@ function Donut({ title, data, colors }: { title: string; data: Record<string, nu
       ) : (
         <ResponsiveContainer width="100%" height={200}>
           <PieChart>
-            <Pie data={chartData} dataKey="value" nameKey="name" innerRadius={45} outerRadius={72} paddingAngle={2}>
+            <Pie
+              data={chartData}
+              dataKey="value"
+              nameKey="name"
+              innerRadius={45}
+              outerRadius={72}
+              paddingAngle={2}
+              label={showValueLabels ? renderInsideLabel : undefined}
+              labelLine={false}
+            >
               {chartData.map((d) => (
                 <Cell key={d.name} fill={colors[d.name] ?? classColor(d.name)} />
               ))}
@@ -86,9 +117,9 @@ export default function MonthlyOutcomeCharts() {
         <p className="muted">불러오는 중...</p>
       ) : (
         <div className="donut-grid">
-          <Donut title="출결상태 분포" data={data?.attendance ?? { 출석: 0, 지각: 0, 결석: 0 }} colors={ATTENDANCE_COLORS} />
-          <Donut title="단어테스트 결과분포" data={data?.vocab ?? { 통과: 0, 재시험: 0, 미응시: 0 }} colors={VOCAB_COLORS} />
-          <Donut title="과제완료율" data={data?.homework ?? { 완료: 0, 미완료: 0 }} colors={HOMEWORK_COLORS} />
+          <Donut title="출결상태 분포" data={data?.attendance ?? { 출석: 0, 지각: 0, 결석: 0 }} colors={ATTENDANCE_COLORS} showValueLabels />
+          <Donut title="단어테스트 결과분포" data={data?.vocab ?? { 통과: 0, 재시험: 0, 미응시: 0 }} colors={VOCAB_COLORS} showValueLabels />
+          <Donut title="과제완료율" data={data?.homework ?? { 완료: 0, 미완료: 0 }} colors={HOMEWORK_COLORS} showValueLabels />
           <Donut title="상담자별 상담비율" data={data?.counselingByCounselor ?? {}} colors={{}} />
         </div>
       )}

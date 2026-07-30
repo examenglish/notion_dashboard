@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { todayKST } from "@/lib/date";
+import { stripClassSuffix } from "@/lib/format";
 
 type DaySummary = {
   classId: string;
@@ -84,21 +85,21 @@ export default function ClassDateChart() {
     () =>
       data
         .filter((c) => c.recordCount > 0 && c.attendanceRate !== null)
-        .map((c) => ({ name: c.className, value: Math.round((c.attendanceRate as number) * 100) })),
+        .map((c) => ({ name: stripClassSuffix(c.className), value: Math.round((c.attendanceRate as number) * 100) })),
     [data]
   );
   const homeworkRows = useMemo(
     () =>
       data
         .filter((c) => c.recordCount > 0 && c.homeworkRate !== null)
-        .map((c) => ({ name: c.className, value: Math.round((c.homeworkRate as number) * 100) })),
+        .map((c) => ({ name: stripClassSuffix(c.className), value: Math.round((c.homeworkRate as number) * 100) })),
     [data]
   );
   const counselingRows = useMemo(
     () =>
       data
         .filter((c) => c.counselingRate !== null && c.counselingRate > 0)
-        .map((c) => ({ name: c.className, value: Math.round((c.counselingRate as number) * 100) })),
+        .map((c) => ({ name: stripClassSuffix(c.className), value: Math.round((c.counselingRate as number) * 100) })),
     [data]
   );
 
@@ -114,7 +115,7 @@ export default function ClassDateChart() {
           ▶
         </button>
         {date !== todayKST() && (
-          <button type="button" className="secondary" onClick={() => setDate(todayKST())}>
+          <button type="button" className="secondary date-nav-today" onClick={() => setDate(todayKST())}>
             오늘
           </button>
         )}

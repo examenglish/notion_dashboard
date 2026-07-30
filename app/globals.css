@@ -423,6 +423,13 @@ th, td {
   border-radius: 4px;
 }
 
+.date-nav-today {
+  font-size: 0.9em;
+  padding: 3px 6px;
+  line-height: 1.2;
+  border-radius: 4px;
+}
+
 .schedule-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
