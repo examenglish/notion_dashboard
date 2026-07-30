@@ -14,6 +14,7 @@ import {
 import RecentListCard from "./RecentListCard";
 import ClassDateChart from "./ClassDateChart";
 import TodayScheduleCard from "./TodayScheduleCard";
+import MonthlyOutcomeCharts from "./MonthlyOutcomeCharts";
 import StudentTable, { StudentRow } from "./StudentTable";
 
 type AdminInboxItem = {
@@ -107,6 +108,8 @@ export default function DashboardClient() {
   return (
     <div className="page">
       <TodayScheduleCard />
+
+      <MonthlyOutcomeCharts />
 
       <ClassDateChart />
 

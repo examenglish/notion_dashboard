@@ -370,6 +370,29 @@ export async function getMonthlyAttendanceBottom(limit: number) {
     .slice(0, limit);
 }
 
+// Donut-chart data: this (KST) month's 출결/단어테스트결과 breakdown across
+// every DB④ record, for the dashboard's "이번달 현황" pies.
+export async function getMonthlyOutcomeBreakdown() {
+  const [y, m] = todayKST().split("-").map(Number);
+  const monthStart = `${y}-${String(m).padStart(2, "0")}-01`;
+
+  const records = await queryAllPages({
+    data_source_id: DB.DAILY_RECORD,
+    filter: { property: "날짜", date: { on_or_after: monthStart } },
+  });
+
+  const attendance = { 출석: 0, 지각: 0, 결석: 0 };
+  const vocab = { 통과: 0, 재시험: 0, 미응시: 0 };
+  for (const r of records) {
+    const att = getSelect(r, "출결") as keyof typeof attendance | null;
+    if (att && att in attendance) attendance[att] += 1;
+    const voc = getSelect(r, "단어테스트결과") as keyof typeof vocab | null;
+    if (voc && voc in vocab) vocab[voc] += 1;
+  }
+
+  return { attendance, vocab };
+}
+
 // "오늘의 일정": alarms + new-student events + makeup/retest sessions due today.
 // Grade strings look like "중2"/"고1" — several 오늘의 일정 sections only
 // want the trailing digit ("2"/"1"), not the level prefix.
