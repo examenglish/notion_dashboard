@@ -452,6 +452,20 @@ th, td {
   font-size: 13px;
 }
 
+.schedule-item-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.schedule-edit-btn {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  font-size: 11px;
+  border-radius: 4px;
+}
+
 .donut-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

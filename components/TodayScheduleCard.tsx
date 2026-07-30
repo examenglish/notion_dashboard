@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { todayKST } from "@/lib/date";
+import StaffPicker from "./StaffPicker";
 
 type AlarmItem = { id: string; studentName: string; school: string; content: string; counselor: string };
 type FirstDayItem = {
@@ -81,6 +82,15 @@ function useScheduleCache() {
       .then((data: Schedule) => setCache((c) => ({ ...c, [date]: data })));
   }
 
+  // Force a fresh fetch for a date whose content just changed (edit/complete),
+  // regardless of whether it was already cached.
+  function refetchDate(date: string) {
+    requested.current.add(date);
+    fetch(`/api/today-schedule?date=${date}`)
+      .then((r) => r.json())
+      .then((data: Schedule) => setCache((c) => ({ ...c, [date]: data })));
+  }
+
   function removeItem(date: string, key: SectionKey, id: string) {
     setCache((c) => {
       const sched = c[date];
@@ -89,7 +99,7 @@ function useScheduleCache() {
     });
   }
 
-  return { cache, ensureDate, removeItem };
+  return { cache, ensureDate, refetchDate, removeItem };
 }
 
 function DateNav({ date, onShift, onToday }: { date: string; onShift: (delta: number) => void; onToday: () => void }) {
@@ -196,13 +206,141 @@ function SchedulePopup({
   );
 }
 
+type EditTarget = { kind: SectionKey; item: AlarmItem | FirstDayItem | TodoItem; date: string };
+
+function ScheduleEditModal({
+  target,
+  onClose,
+  onSaved,
+}: {
+  target: EditTarget;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const isAlarm = target.kind === "alarms";
+  const isFirstDay = target.kind === "firstDays";
+  const isTodo = !isAlarm && !isFirstDay;
+
+  const alarmItem = target.item as AlarmItem;
+  const todoItem = target.item as TodoItem;
+
+  const [content, setContent] = useState(isAlarm ? alarmItem.content : "");
+  const [counselor, setCounselor] = useState(isAlarm ? alarmItem.counselor : "");
+  const [alarmDate, setAlarmDate] = useState(target.date);
+  const [enrolledAt, setEnrolledAt] = useState(target.date);
+  const [time, setTime] = useState(isTodo ? todoItem.time : "");
+  const [owner, setOwner] = useState(isTodo && todoItem.owner !== "-" ? todoItem.owner : "");
+  const [todoDate, setTodoDate] = useState(target.date);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSave() {
+    if (!window.confirm("수정하시겠습니까?")) return;
+    setError(null);
+    setSaving(true);
+    try {
+      let res: Response;
+      if (isAlarm) {
+        res = await fetch("/api/student-info", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            studentId: target.item.id,
+            action: content,
+            actionOwner: counselor,
+            actionAlarmDate: alarmDate,
+          }),
+        });
+      } else if (isFirstDay) {
+        res = await fetch("/api/student-info", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ studentId: target.item.id, enrolledAt }),
+        });
+      } else {
+        res = await fetch(`/api/schedule-entry/${target.item.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ date: todoDate, time, ownerName: owner }),
+        });
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "저장에 실패했습니다.");
+        return;
+      }
+      onSaved();
+      onClose();
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const name = "studentName" in target.item ? target.item.studentName : "";
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>{name} 수정</h2>
+          <button type="button" className="secondary" onClick={onClose}>닫기</button>
+        </div>
+
+        {isAlarm && (
+          <>
+            <label htmlFor="editAlarmContent">조치사항</label>
+            <textarea id="editAlarmContent" value={content} onChange={(e) => setContent(e.target.value)} />
+            <StaffPicker value={counselor} onChange={setCounselor} label="담당자" />
+            <label htmlFor="editAlarmDate">알람일</label>
+            <input id="editAlarmDate" type="date" value={alarmDate} onChange={(e) => setAlarmDate(e.target.value)} />
+          </>
+        )}
+
+        {isFirstDay && (
+          <>
+            <label htmlFor="editEnrolledAt">등원일</label>
+            <input id="editEnrolledAt" type="date" value={enrolledAt} onChange={(e) => setEnrolledAt(e.target.value)} />
+          </>
+        )}
+
+        {isTodo && (
+          <>
+            <label htmlFor="editTodoDate">예정일</label>
+            <input id="editTodoDate" type="date" value={todoDate} onChange={(e) => setTodoDate(e.target.value)} />
+            <label htmlFor="editTodoTime">시간</label>
+            <input
+              id="editTodoTime"
+              type="text"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              placeholder="예: 16:00"
+            />
+            <StaffPicker value={owner} onChange={setOwner} label="담당자" />
+          </>
+        )}
+
+        {error && <p className="error-text">{error}</p>}
+
+        <div style={{ marginTop: 16 }}>
+          <button type="button" disabled={saving} onClick={handleSave}>
+            {saving ? "저장 중..." : "저장"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function TodayScheduleCard() {
-  const { cache, ensureDate, removeItem } = useScheduleCache();
+  const { cache, ensureDate, refetchDate, removeItem } = useScheduleCache();
   const [dates, setDates] = useState<Record<SectionKey, string>>(() => {
     const t = todayKST();
     return { alarms: t, newStudentEvents: t, firstDays: t, makeupClasses: t, retests: t };
   });
   const [popup, setPopup] = useState<{ key: SectionKey; date: string } | null>(null);
+  const [editing, setEditing] = useState<EditTarget | null>(null);
 
   useEffect(() => {
     Object.values(dates).forEach(ensureDate);
@@ -229,51 +367,79 @@ export default function TodayScheduleCard() {
   }
 
   function renderItem(key: SectionKey, date: string): (item: any) => React.ReactNode {
+    const editBtn = (item: any) => (
+      <button
+        type="button"
+        className="secondary schedule-edit-btn"
+        onClick={(e) => {
+          e.stopPropagation();
+          setEditing({ kind: key, item, date });
+        }}
+      >
+        수정
+      </button>
+    );
+
     switch (key) {
       case "alarms":
         return (a: AlarmItem) => (
-          <>
-            <strong>{a.studentName}</strong> <span className="muted">{a.school}</span> — {a.content || "내용 미기재"}{" "}
-            <span className="muted">(상담자: {a.counselor || "-"})</span>
-          </>
+          <div className="schedule-item-row">
+            <div>
+              <strong>{a.studentName}</strong> <span className="muted">{a.school}</span> — {a.content || "내용 미기재"}{" "}
+              <span className="muted">(상담자: {a.counselor || "-"})</span>
+            </div>
+            {editBtn(a)}
+          </div>
         );
       case "newStudentEvents":
         return (t: TodoItem) => (
-          <label style={{ display: "flex", alignItems: "center", gap: 6, margin: 0, cursor: "pointer" }}>
-            <input type="checkbox" checked={false} onChange={() => completeItem("newStudentEvents", date, t.id)} />
-            <strong>{t.studentName}</strong>
-            <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
-            <span className="muted">{t.time || "시간 미정"}</span>
-          </label>
+          <div className="schedule-item-row">
+            <label style={{ display: "flex", alignItems: "center", gap: 6, margin: 0, cursor: "pointer" }}>
+              <input type="checkbox" checked={false} onChange={() => completeItem("newStudentEvents", date, t.id)} />
+              <strong>{t.studentName}</strong>
+              <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
+              <span className="muted">{t.time || "시간 미정"}</span>
+            </label>
+            {editBtn(t)}
+          </div>
         );
       case "firstDays":
         return (f: FirstDayItem) => (
-          <>
-            <strong>{f.studentName}</strong> <span className="muted">{schoolGrade(f.school, f.gradeNum)}</span>
-            {", "}
-            <span className="muted">
-              {f.classDays.length > 0 ? f.classDays.join("·") : "요일 미정"} {f.classTime || ""}
-            </span>
-          </>
+          <div className="schedule-item-row">
+            <div>
+              <strong>{f.studentName}</strong> <span className="muted">{schoolGrade(f.school, f.gradeNum)}</span>
+              {", "}
+              <span className="muted">
+                {f.classDays.length > 0 ? f.classDays.join("·") : "요일 미정"} {f.classTime || ""}
+              </span>
+            </div>
+            {editBtn(f)}
+          </div>
         );
       case "makeupClasses":
         return (t: TodoItem) => (
-          <label style={{ display: "flex", alignItems: "center", gap: 6, margin: 0, cursor: "pointer" }}>
-            <input type="checkbox" checked={false} onChange={() => completeItem("makeupClasses", date, t.id)} />
-            <strong>{t.studentName}</strong>
-            <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
-            <span className="muted">{t.time || "시간 미정"}</span>
-            <span className="muted">· 보강자: {t.owner}</span>
-          </label>
+          <div className="schedule-item-row">
+            <label style={{ display: "flex", alignItems: "center", gap: 6, margin: 0, cursor: "pointer" }}>
+              <input type="checkbox" checked={false} onChange={() => completeItem("makeupClasses", date, t.id)} />
+              <strong>{t.studentName}</strong>
+              <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
+              <span className="muted">{t.time || "시간 미정"}</span>
+              <span className="muted">· 보강자: {t.owner}</span>
+            </label>
+            {editBtn(t)}
+          </div>
         );
       case "retests":
       default:
         return (t: TodoItem) => (
-          <>
-            <strong>{t.studentName}</strong> <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
-            {", "}
-            <span className="muted">{t.time || "시간 미정"}</span>
-          </>
+          <div className="schedule-item-row">
+            <div>
+              <strong>{t.studentName}</strong> <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
+              {", "}
+              <span className="muted">{t.time || "시간 미정"}</span>
+            </div>
+            {editBtn(t)}
+          </div>
         );
     }
   }
@@ -319,6 +485,14 @@ export default function TodayScheduleCard() {
             />
           );
         })()}
+
+      {editing && (
+        <ScheduleEditModal
+          target={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => refetchDate(editing.date)}
+        />
+      )}
     </>
   );
 }

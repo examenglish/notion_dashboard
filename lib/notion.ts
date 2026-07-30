@@ -899,6 +899,20 @@ export async function completeScheduleEntry(id: string) {
   });
 }
 
+export async function updateScheduleEntry(
+  id: string,
+  input: { date?: string; time?: string; ownerName?: string }
+) {
+  const properties: any = {};
+  if (input.date) properties["예정일"] = { date: { start: input.date } };
+  if (input.time !== undefined) properties["시간"] = { rich_text: [{ text: { content: input.time } }] };
+  if (input.ownerName !== undefined) {
+    const ownerId = input.ownerName ? await findStaffIdByName(input.ownerName) : null;
+    properties["담당자"] = { relation: ownerId ? [{ id: ownerId }] : [] };
+  }
+  await notion.pages.update({ page_id: id, properties });
+}
+
 export async function createCounselingEntry(input: {
   studentId: string;
   counselor: string;
