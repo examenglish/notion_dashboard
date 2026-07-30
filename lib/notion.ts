@@ -256,6 +256,81 @@ export async function getStudentDailyRecords(studentId: string) {
   }));
 }
 
+// Full cumulative record for one student — 진도/과제 text (joined from the
+// class-level DB③ progress page each daily record points back to), 보강
+// history, and 상담 history — for the "전체기록 보기" print-friendly popup.
+export async function getStudentFullHistory(studentId: string) {
+  const dailyRes = await notion.dataSources.query({
+    data_source_id: DB.DAILY_RECORD,
+    filter: { property: "학생", relation: { contains: studentId } },
+    sorts: [{ property: "날짜", direction: "ascending" }],
+    page_size: 100,
+  });
+  const dailyRecords = dailyRes.results.map((p: any) => ({
+    date: getDate(p, "날짜"),
+    progress: getRichText(p, "진도내용"),
+    attendance: getSelect(p, "출결"),
+    homeworkDone: getCheckbox(p, "과제여부"),
+    progressPageId: getRelationIds(p, "반별진도원본")[0] ?? null,
+  }));
+
+  const progressIds = Array.from(
+    new Set(dailyRecords.map((r) => r.progressPageId).filter((id): id is string => !!id))
+  );
+  const progressPages = await Promise.all(
+    progressIds.map((id) => notion.pages.retrieve({ page_id: id }))
+  );
+  const homeworkByProgressId = new Map(progressPages.map((p: any) => [p.id, getRichText(p, "과제내용")]));
+
+  const progress = dailyRecords.map((r) => ({
+    date: r.date,
+    progress: r.progress,
+    homework: r.progressPageId ? homeworkByProgressId.get(r.progressPageId) ?? "" : "",
+    attendance: r.attendance,
+    homeworkDone: r.homeworkDone,
+  }));
+
+  const [makeupTodos, counselingEntries, staffMap] = await Promise.all([
+    queryAllPages({
+      data_source_id: DB.TODO,
+      filter: {
+        and: [
+          { property: "유형", select: { equals: "보강" } },
+          { property: "관련학생", relation: { contains: studentId } },
+        ],
+      },
+    }),
+    queryAllPages({
+      data_source_id: DB.COUNSELING,
+      filter: { property: "학생", relation: { contains: studentId } },
+    }),
+    staffNameMap(),
+  ]);
+
+  const makeup = makeupTodos
+    .map((p: any) => {
+      const ownerId = getRelationIds(p, "담당자")[0];
+      return {
+        date: getDate(p, "예정일"),
+        time: getRichText(p, "시간"),
+        owner: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
+        done: getCheckbox(p, "완료여부"),
+      };
+    })
+    .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+
+  const counseling = counselingEntries
+    .map((p: any) => ({
+      date: getDate(p, "날짜"),
+      counselor: getRichText(p, "상담자"),
+      content: getRichText(p, "상담내용"),
+      followUp: getRichText(p, "후속조치"),
+    }))
+    .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+
+  return { progress, makeup, counseling };
+}
+
 export async function getStudentExamScores(studentId: string) {
   const res = await notion.dataSources.query({
     data_source_id: DB.EXAM_SCORE,
@@ -411,20 +486,6 @@ export async function getMonthlyStudentMetrics() {
 
 // Donut-chart data: this (KST) month's 출결/단어테스트결과 breakdown across
 // every DB④ record, for the dashboard's "이번달 현황" pies.
-// "초2"/"중1"/"고3" -> "초등"/"중등"/"고등" bucket for a clean donut.
-function gradeBucket(grade: string | null): string {
-  if (!grade) return "기타";
-  if (grade.startsWith("초")) return "초등";
-  if (grade.startsWith("중")) return "중등";
-  if (grade.startsWith("고")) return "고등";
-  return "기타";
-}
-
-async function studentGradeMap(): Promise<Map<string, string | null>> {
-  const results = await queryAllPages({ data_source_id: DB.STUDENT });
-  return new Map(results.map((p: any) => [p.id, getSelect(p, "학년")]));
-}
-
 export async function getMonthlyOutcomeBreakdown(month?: string) {
   const [y, m] = (month ?? todayKST().slice(0, 7)).split("-").map(Number);
   const monthStart = `${y}-${String(m).padStart(2, "0")}-01`;
@@ -438,10 +499,9 @@ export async function getMonthlyOutcomeBreakdown(month?: string) {
     ],
   };
 
-  const [records, counselingEntries, gradeMap] = await Promise.all([
+  const [records, counselingEntries] = await Promise.all([
     queryAllPages({ data_source_id: DB.DAILY_RECORD, filter: dateFilter }),
     queryAllPages({ data_source_id: DB.COUNSELING, filter: dateFilter }),
-    studentGradeMap(),
   ]);
 
   const attendance = { 출석: 0, 지각: 0, 결석: 0 };
@@ -456,17 +516,13 @@ export async function getMonthlyOutcomeBreakdown(month?: string) {
     else homework.미완료 += 1;
   }
 
-  const counselingByGrade: Record<string, number> = { 초등: 0, 중등: 0, 고등: 0, 기타: 0 };
   const counselingByCounselor: Record<string, number> = {};
   for (const entry of counselingEntries) {
-    const studentIds = getRelationIds(entry, "학생");
-    const bucket = gradeBucket(gradeMap.get(studentIds[0]) ?? null);
-    counselingByGrade[bucket] += 1;
     const counselor = getRichText(entry, "상담자") || "미지정";
     counselingByCounselor[counselor] = (counselingByCounselor[counselor] ?? 0) + 1;
   }
 
-  return { attendance, vocab, homework, counselingByGrade, counselingByCounselor };
+  return { attendance, vocab, homework, counselingByCounselor };
 }
 
 // "오늘의 일정": alarms + new-student events + makeup/retest sessions due today.
@@ -727,11 +783,26 @@ export async function getRecentCounseling() {
   return results.map((p: any) => ({
     id: p.id,
     date: getDate(p, "날짜"),
+    studentId: getRelationIds(p, "학생")[0] ?? null,
     studentName: firstRelationName(p, "학생", names),
     counselor: getRichText(p, "상담자"),
+    transcript: getRichText(p, "전사내용"),
     content: getRichText(p, "상담내용"),
     followUp: getRichText(p, "후속조치"),
   }));
+}
+
+export async function updateCounselingEntry(
+  id: string,
+  input: { counselor?: string; date?: string; transcript?: string; summary?: string; followUp?: string }
+) {
+  const properties: any = {};
+  if (input.counselor !== undefined) properties["상담자"] = { rich_text: [{ text: { content: input.counselor } }] };
+  if (input.date) properties["날짜"] = { date: { start: input.date } };
+  if (input.transcript !== undefined) properties["전사내용"] = { rich_text: [{ text: { content: input.transcript } }] };
+  if (input.summary !== undefined) properties["상담내용"] = { rich_text: [{ text: { content: input.summary } }] };
+  if (input.followUp !== undefined) properties["후속조치"] = { rich_text: [{ text: { content: input.followUp } }] };
+  await notion.pages.update({ page_id: id, properties });
 }
 
 export async function createAdminInboxEntry(input: {

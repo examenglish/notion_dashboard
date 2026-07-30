@@ -94,10 +94,10 @@ function useScheduleCache() {
 
 function DateNav({ date, onShift, onToday }: { date: string; onShift: (delta: number) => void; onToday: () => void }) {
   return (
-    <div className="date-nav" style={{ margin: "6px 0" }}>
-      <button type="button" className="secondary" onClick={() => onShift(-1)}>◀</button>
-      <strong style={{ fontSize: 13 }}>{formatLabel(date)}</strong>
-      <button type="button" className="secondary" onClick={() => onShift(1)}>▶</button>
+    <div className="date-nav" style={{ margin: "6px 0", fontSize: 13 }}>
+      <button type="button" className="secondary date-nav-arrow" onClick={() => onShift(-1)}>◀</button>
+      <strong>{formatLabel(date)}</strong>
+      <button type="button" className="secondary date-nav-arrow" onClick={() => onShift(1)}>▶</button>
       {date !== todayKST() && (
         <button type="button" className="secondary" onClick={onToday}>오늘</button>
       )}
@@ -143,7 +143,7 @@ function ScheduleSectionCard({
         </ul>
       )}
       {!loading && (
-        <button type="button" className="secondary" style={{ marginTop: 8 }} onClick={onMore}>
+        <button type="button" className="secondary schedule-more-btn" onClick={onMore}>
           더보기
         </button>
       )}

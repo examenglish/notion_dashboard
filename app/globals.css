@@ -410,6 +410,17 @@ th, td {
 
 .schedule-cards-grid .card {
   margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.schedule-more-btn {
+  align-self: flex-start;
+  margin-top: auto;
+  padding: 3px 6px;
+  font-size: 12px;
+  line-height: 1.2;
+  border-radius: 4px;
 }
 
 .schedule-grid {
@@ -454,11 +465,13 @@ th, td {
   margin-bottom: 14px;
 }
 
-.date-nav button {
+.date-nav-arrow {
   flex-shrink: 0;
-  min-width: 32px;
-  min-height: 32px;
-  padding: 6px 10px;
+  font-size: 0.8em;
+  line-height: 1;
+  padding: 4px 8px;
+  min-width: 0;
+  min-height: 0;
 }
 
 .sortable-table {
@@ -581,4 +594,38 @@ th, td {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--primary-dark);
+}
+
+.history-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.history-log li {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+  .no-print {
+    display: none !important;
+  }
 }

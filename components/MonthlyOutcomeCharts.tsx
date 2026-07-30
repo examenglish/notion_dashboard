@@ -8,14 +8,12 @@ type Breakdown = {
   attendance: { 출석: number; 지각: number; 결석: number };
   vocab: { 통과: number; 재시험: number; 미응시: number };
   homework: { 완료: number; 미완료: number };
-  counselingByGrade: Record<string, number>;
   counselingByCounselor: Record<string, number>;
 };
 
 const ATTENDANCE_COLORS: Record<string, string> = { 출석: "#22c55e", 지각: "#f59e0b", 결석: "#e5484d" };
 const VOCAB_COLORS: Record<string, string> = { 통과: "#22c55e", 재시험: "#f59e0b", 미응시: "#94a3b8" };
 const HOMEWORK_COLORS: Record<string, string> = { 완료: "#2f6fed", 미완료: "#e5484d" };
-const GRADE_COLORS: Record<string, string> = { 초등: "#0ea5e9", 중등: "#2f6fed", 고등: "#8b5cf6", 기타: "#94a3b8" };
 
 function monthLabel(month: string) {
   const [y, m] = month.split("-").map(Number);
@@ -76,9 +74,9 @@ export default function MonthlyOutcomeCharts() {
   return (
     <div className="card">
       <div className="date-nav">
-        <button type="button" className="secondary" onClick={() => setMonth((m) => shiftMonth(m, -1))}>◀</button>
+        <button type="button" className="secondary date-nav-arrow" onClick={() => setMonth((m) => shiftMonth(m, -1))}>◀</button>
         <strong>{monthLabel(month)} 현황</strong>
-        <button type="button" className="secondary" onClick={() => setMonth((m) => shiftMonth(m, 1))}>▶</button>
+        <button type="button" className="secondary date-nav-arrow" onClick={() => setMonth((m) => shiftMonth(m, 1))}>▶</button>
         {month !== currentMonth() && (
           <button type="button" className="secondary" onClick={() => setMonth(currentMonth())}>이번달</button>
         )}
@@ -91,7 +89,6 @@ export default function MonthlyOutcomeCharts() {
           <Donut title="출결상태 분포" data={data?.attendance ?? { 출석: 0, 지각: 0, 결석: 0 }} colors={ATTENDANCE_COLORS} />
           <Donut title="단어테스트 결과분포" data={data?.vocab ?? { 통과: 0, 재시험: 0, 미응시: 0 }} colors={VOCAB_COLORS} />
           <Donut title="과제완료율" data={data?.homework ?? { 완료: 0, 미완료: 0 }} colors={HOMEWORK_COLORS} />
-          <Donut title="학년별 상담비율" data={data?.counselingByGrade ?? { 초등: 0, 중등: 0, 고등: 0, 기타: 0 }} colors={GRADE_COLORS} />
           <Donut title="상담자별 상담비율" data={data?.counselingByCounselor ?? {}} colors={{}} />
         </div>
       )}

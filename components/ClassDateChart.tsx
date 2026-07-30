@@ -106,11 +106,11 @@ export default function ClassDateChart() {
     <div className="card">
       <h2>반별 출석률 / 과제제출률 / 상담률</h2>
       <div className="date-nav">
-        <button type="button" className="secondary" onClick={() => setDate((d) => shiftDate(d, -1))}>
+        <button type="button" className="secondary date-nav-arrow" onClick={() => setDate((d) => shiftDate(d, -1))}>
           ◀
         </button>
         <strong>{formatLabel(date)}</strong>
-        <button type="button" className="secondary" onClick={() => setDate((d) => shiftDate(d, 1))}>
+        <button type="button" className="secondary date-nav-arrow" onClick={() => setDate((d) => shiftDate(d, 1))}>
           ▶
         </button>
         {date !== todayKST() && (

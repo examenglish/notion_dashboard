@@ -17,6 +17,8 @@ import TodayScheduleCard from "./TodayScheduleCard";
 import DateTimeHeader from "./DateTimeHeader";
 import MonthlyOutcomeCharts from "./MonthlyOutcomeCharts";
 import StudentTable, { StudentRow } from "./StudentTable";
+import CounselingEditModal, { CounselingRecord } from "./CounselingEditModal";
+import StudentHistoryModal from "./StudentHistoryModal";
 
 type AdminInboxItem = {
   id: string;
@@ -30,8 +32,10 @@ type AdminInboxItem = {
 type CounselingItem = {
   id: string;
   date: string | null;
+  studentId: string | null;
   studentName: string;
   counselor: string;
+  transcript: string;
   content: string;
   followUp: string;
 };
@@ -58,14 +62,20 @@ export default function DashboardClient() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [adminInbox, setAdminInbox] = useState<AdminInboxItem[]>([]);
   const [counseling, setCounseling] = useState<CounselingItem[]>([]);
+  const [editingCounseling, setEditingCounseling] = useState<CounselingItem | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+
+  function reloadCounseling() {
+    fetch("/api/counseling")
+      .then((r) => r.json())
+      .then(setCounseling);
+  }
 
   useEffect(() => {
     fetch("/api/admin-inbox")
       .then((r) => r.json())
       .then(setAdminInbox);
-    fetch("/api/counseling")
-      .then((r) => r.json())
-      .then(setCounseling);
+    reloadCounseling();
   }, []);
 
   useEffect(() => {
@@ -125,10 +135,17 @@ export default function DashboardClient() {
           {!loadingDetail && !selected && <p className="muted">왼쪽에서 학생을 선택하세요.</p>}
           {!loadingDetail && selected && (
             <div>
-              <strong>{selected.student.name}</strong>{" "}
-              <span className="muted">
-                {selected.student.school} · {selected.student.grade}
-              </span>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <div>
+                  <strong>{selected.student.name}</strong>{" "}
+                  <span className="muted">
+                    {selected.student.school} · {selected.student.grade}
+                  </span>
+                </div>
+                <button type="button" className="secondary" onClick={() => setShowHistory(true)}>
+                  전체기록 보기
+                </button>
+              </div>
               <div style={{ display: "flex", gap: 16, margin: "10px 0" }}>
                 <span className="badge">누적출석률 {pct(selected.student.attendanceRate)}</span>
                 <span className="badge">과제제출률 {pct(selected.student.homeworkRate)}</span>
@@ -197,7 +214,15 @@ export default function DashboardClient() {
             <>
               <div className="recent-list-top">
                 <strong>{i.studentName}</strong>
-                <span className="badge">{i.counselor}</span>
+                <span className="badge">{i.counselor || "-"}</span>
+                <button
+                  type="button"
+                  className="secondary"
+                  style={{ marginLeft: "auto", padding: "2px 8px", fontSize: 12 }}
+                  onClick={() => setEditingCounseling(i)}
+                >
+                  수정
+                </button>
               </div>
               <div>{i.content}</div>
               <div className="recent-list-meta">{i.date ?? "-"}</div>
@@ -205,6 +230,24 @@ export default function DashboardClient() {
           )}
         />
       </div>
+
+      {editingCounseling && (
+        <CounselingEditModal
+          item={editingCounseling as CounselingRecord}
+          onClose={() => setEditingCounseling(null)}
+          onSaved={reloadCounseling}
+        />
+      )}
+
+      {showHistory && selected && (
+        <StudentHistoryModal
+          studentId={selected.student.id}
+          student={{ name: selected.student.name, school: selected.student.school, grade: selected.student.grade }}
+          trendData={trendData}
+          scoreData={scoreData}
+          onClose={() => setShowHistory(false)}
+        />
+      )}
     </div>
   );
 }
