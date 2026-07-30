@@ -508,7 +508,7 @@ export default function InputClient({ role }: { role: string | null }) {
   return (
     <div className="page">
       <div className="grid-2">
-        <ClassRecordForm />
+        {role !== "행정" && <ClassRecordForm />}
         <ScheduleEntryForm />
         <CounselingForm />
         <AdminInputForm />
