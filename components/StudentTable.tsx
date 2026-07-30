@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { classColor, stripClassSuffix } from "@/lib/format";
+import MonthlyBottomModal from "./MonthlyBottomModal";
 
 export type StudentRow = {
   id: string;
@@ -17,45 +18,81 @@ export type StudentRow = {
   latestExam: { date: string; score: number | null; subject: string | null; examName: string } | null;
 };
 
-type BottomRow = {
+export type MetricKey = "attendanceRate" | "vocabRetryRate" | "homeworkIncompleteRate";
+
+export type MonthlyMetricRow = {
   studentId: string;
   studentName: string;
   className: string;
-  attendanceRate: number | null;
   recordCount: number;
+  attendanceRate: number | null;
+  vocabRetryRate: number | null;
+  homeworkIncompleteRate: number | null;
 };
 
 type SortKey = "attendanceRate" | "homeworkRate" | "vocabPassRate" | "tuitionDay";
 
 const pct = (v: number | null) => (v === null ? "-" : `${Math.round(v * 100)}%`);
 
-function BottomAttendanceList({ onSelect }: { onSelect: (id: string) => void }) {
-  const [rows, setRows] = useState<BottomRow[]>([]);
+const METRIC_TABS: { key: MetricKey; label: string }[] = [
+  { key: "attendanceRate", label: "출석률" },
+  { key: "vocabRetryRate", label: "단어재시율" },
+  { key: "homeworkIncompleteRate", label: "과제미이행률" },
+];
+
+function BottomMetricsList({ onSelect }: { onSelect: (id: string) => void }) {
+  const [rows, setRows] = useState<MonthlyMetricRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expanded, setExpanded] = useState(false);
+  const [metric, setMetric] = useState<MetricKey>("attendanceRate");
+  const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
-    fetch("/api/students/monthly-bottom?limit=7")
+    fetch("/api/students/monthly-bottom")
       .then((r) => r.json())
       .then(setRows)
       .finally(() => setLoading(false));
   }, []);
 
-  const visible = expanded ? rows : rows.slice(0, 5);
+  // attendanceRate: lower is worse (ascending). The other two: higher is worse (descending).
+  const sorted = useMemo(() => {
+    return [...rows]
+      .filter((r) => r[metric] !== null)
+      .sort((a, b) => {
+        const av = a[metric] as number;
+        const bv = b[metric] as number;
+        return metric === "attendanceRate" ? av - bv : bv - av;
+      });
+  }, [rows, metric]);
+
+  const visible = sorted.slice(0, 5);
 
   return (
     <div style={{ marginTop: 12 }}>
-      <p className="muted">이번 달 출석률 하위 {visible.length}명</p>
+      <div style={{ display: "flex", gap: 6 }}>
+        {METRIC_TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            className={metric === t.key ? "" : "secondary"}
+            onClick={() => setMetric(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <p className="muted" style={{ marginTop: 8 }}>
+        이번 달 {METRIC_TABS.find((t) => t.key === metric)?.label} 하위 {visible.length}명
+      </p>
       {loading && <p className="muted">불러오는 중...</p>}
-      {!loading && rows.length === 0 && <p className="muted">이번 달 출결 기록이 없습니다.</p>}
-      {!loading && rows.length > 0 && (
+      {!loading && sorted.length === 0 && <p className="muted">이번 달 기록이 없습니다.</p>}
+      {!loading && sorted.length > 0 && (
         <div className="table-scroll">
           <table className="sortable-table">
             <thead>
               <tr>
                 <th>이름</th>
                 <th>반</th>
-                <th>출석률</th>
+                <th>{METRIC_TABS.find((t) => t.key === metric)?.label}</th>
               </tr>
             </thead>
             <tbody>
@@ -69,17 +106,20 @@ function BottomAttendanceList({ onSelect }: { onSelect: (id: string) => void }) 
                       {stripClassSuffix(r.className)}
                     </span>
                   </td>
-                  <td>{pct(r.attendanceRate)}</td>
+                  <td>{pct(r[metric])}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      {rows.length > 5 && (
-        <button type="button" className="secondary" style={{ marginTop: 10 }} onClick={() => setExpanded((v) => !v)}>
-          {expanded ? "접기" : `더보기 (${Math.min(rows.length, 7)}명까지)`}
+      {sorted.length > 5 && (
+        <button type="button" className="secondary" style={{ marginTop: 10 }} onClick={() => setShowAll(true)}>
+          더보기 (하위 30명까지)
         </button>
+      )}
+      {showAll && (
+        <MonthlyBottomModal metric={metric} rows={rows} onClose={() => setShowAll(false)} onSelect={onSelect} />
       )}
     </div>
   );
@@ -133,7 +173,7 @@ export default function StudentTable({
       />
 
       {query === "" ? (
-        <BottomAttendanceList onSelect={onSelect} />
+        <BottomMetricsList onSelect={onSelect} />
       ) : (
         <div className="table-scroll" style={{ marginTop: 12 }}>
           <table className="sortable-table">

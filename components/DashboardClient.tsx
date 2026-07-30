@@ -109,9 +109,10 @@ export default function DashboardClient() {
     <div className="page">
       <TodayScheduleCard />
 
-      <MonthlyOutcomeCharts />
-
-      <ClassDateChart />
+      <div className="grid-2">
+        <ClassDateChart />
+        <MonthlyOutcomeCharts />
+      </div>
 
       <div className="grid-2">
         <StudentTable students={students} query={query} onQueryChange={setQuery} onSelect={selectStudent} />
@@ -173,7 +174,7 @@ export default function DashboardClient() {
             <>
               <div className="recent-list-top">
                 <strong>{i.studentName}</strong>
-                <span className="badge">{i.type ?? "-"}</span>
+                <span className={i.type !== "기타" ? "badge badge-urgent" : "badge"}>{i.type ?? "-"}</span>
               </div>
               <div>{i.content}</div>
               <div className="recent-list-meta">

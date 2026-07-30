@@ -261,6 +261,12 @@ th, td {
   color: var(--muted);
 }
 
+.badge-urgent {
+  background: #ffe3e3;
+  color: #c92a2a;
+  font-weight: 700;
+}
+
 .recent-list {
   display: flex;
   flex-direction: column;
@@ -395,6 +401,17 @@ th, td {
   color: var(--muted);
 }
 
+.schedule-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.schedule-cards-grid .card {
+  margin-bottom: 0;
+}
+
 .schedule-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -402,7 +419,8 @@ th, td {
 }
 
 @media (max-width: 960px) {
-  .schedule-grid {
+  .schedule-grid,
+  .schedule-cards-grid {
     grid-template-columns: 1fr 1fr;
   }
 }
@@ -421,6 +439,12 @@ th, td {
   flex-direction: column;
   gap: 6px;
   font-size: 13px;
+}
+
+.donut-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
 }
 
 .date-nav {

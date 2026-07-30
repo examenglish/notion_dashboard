@@ -333,7 +333,10 @@ export async function getClassSummaryByDate(date: string) {
 
 // Students with the worst attendance rate so far this (KST) calendar month —
 // drives the dashboard's default "학생검색" view before anything is typed.
-export async function getMonthlyAttendanceBottom(limit: number) {
+// Per-student rates for this (KST) month — the dashboard sorts/slices this
+// three different ways (출석률/단어재시율/과제미이행률 tabs) rather than
+// making three separate round trips.
+export async function getMonthlyStudentMetrics() {
   const [y, m] = todayKST().split("-").map(Number);
   const monthStart = `${y}-${String(m).padStart(2, "0")}-01`;
 
@@ -347,50 +350,83 @@ export async function getMonthlyAttendanceBottom(limit: number) {
   ]);
   const classNameById = new Map(classes.map((c) => [c.id, c.name]));
 
-  const byStudent = new Map<string, { present: number; total: number; classId: string | null }>();
+  type Agg = {
+    attTotal: number;
+    attPresent: number;
+    vocabTotal: number;
+    vocabRetry: number;
+    hwTotal: number;
+    hwIncomplete: number;
+    classId: string | null;
+  };
+  const byStudent = new Map<string, Agg>();
   for (const r of records) {
     const studentId = getRelationIds(r, "학생")[0];
     if (!studentId) continue;
-    const cur = byStudent.get(studentId) ?? { present: 0, total: 0, classId: getRelationIds(r, "반")[0] ?? null };
-    cur.total += 1;
-    if (getSelect(r, "출결") !== "결석") cur.present += 1;
+    const cur: Agg = byStudent.get(studentId) ?? {
+      attTotal: 0,
+      attPresent: 0,
+      vocabTotal: 0,
+      vocabRetry: 0,
+      hwTotal: 0,
+      hwIncomplete: 0,
+      classId: getRelationIds(r, "반")[0] ?? null,
+    };
+    cur.attTotal += 1;
+    if (getSelect(r, "출결") !== "결석") cur.attPresent += 1;
+    const voc = getSelect(r, "단어테스트결과");
+    if (voc && voc !== "미응시") {
+      cur.vocabTotal += 1;
+      if (voc === "재시험") cur.vocabRetry += 1;
+    }
+    cur.hwTotal += 1;
+    if (!getCheckbox(r, "과제여부")) cur.hwIncomplete += 1;
     byStudent.set(studentId, cur);
   }
 
-  return Array.from(byStudent.entries())
-    .map(([studentId, v]) => ({
-      studentId,
-      studentName: names.get(studentId) ?? "-",
-      className: v.classId ? classNameById.get(v.classId) ?? "-" : "-",
-      attendanceRate: v.total > 0 ? v.present / v.total : null,
-      recordCount: v.total,
-    }))
-    .filter((r) => r.attendanceRate !== null)
-    .sort((a, b) => (a.attendanceRate as number) - (b.attendanceRate as number))
-    .slice(0, limit);
+  return Array.from(byStudent.entries()).map(([studentId, v]) => ({
+    studentId,
+    studentName: names.get(studentId) ?? "-",
+    className: v.classId ? classNameById.get(v.classId) ?? "-" : "-",
+    recordCount: v.attTotal,
+    attendanceRate: v.attTotal > 0 ? v.attPresent / v.attTotal : null,
+    vocabRetryRate: v.vocabTotal > 0 ? v.vocabRetry / v.vocabTotal : null,
+    homeworkIncompleteRate: v.hwTotal > 0 ? v.hwIncomplete / v.hwTotal : null,
+  }));
 }
 
 // Donut-chart data: this (KST) month's 출결/단어테스트결과 breakdown across
 // every DB④ record, for the dashboard's "이번달 현황" pies.
-export async function getMonthlyOutcomeBreakdown() {
-  const [y, m] = todayKST().split("-").map(Number);
+export async function getMonthlyOutcomeBreakdown(month?: string) {
+  const [y, m] = (month ?? todayKST().slice(0, 7)).split("-").map(Number);
   const monthStart = `${y}-${String(m).padStart(2, "0")}-01`;
+  const nextY = m === 12 ? y + 1 : y;
+  const nextM = m === 12 ? 1 : m + 1;
+  const nextMonthStart = `${nextY}-${String(nextM).padStart(2, "0")}-01`;
 
   const records = await queryAllPages({
     data_source_id: DB.DAILY_RECORD,
-    filter: { property: "날짜", date: { on_or_after: monthStart } },
+    filter: {
+      and: [
+        { property: "날짜", date: { on_or_after: monthStart } },
+        { property: "날짜", date: { before: nextMonthStart } },
+      ],
+    },
   });
 
   const attendance = { 출석: 0, 지각: 0, 결석: 0 };
   const vocab = { 통과: 0, 재시험: 0, 미응시: 0 };
+  const homework = { 완료: 0, 미완료: 0 };
   for (const r of records) {
     const att = getSelect(r, "출결") as keyof typeof attendance | null;
     if (att && att in attendance) attendance[att] += 1;
     const voc = getSelect(r, "단어테스트결과") as keyof typeof vocab | null;
     if (voc && voc in vocab) vocab[voc] += 1;
+    if (getCheckbox(r, "과제여부")) homework.완료 += 1;
+    else homework.미완료 += 1;
   }
 
-  return { attendance, vocab };
+  return { attendance, vocab, homework };
 }
 
 // "오늘의 일정": alarms + new-student events + makeup/retest sessions due today.
@@ -502,10 +538,15 @@ export async function createClassProgress(input: {
   notice: string;
   perStudent: Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean }>;
   briefingTexts?: Record<string, string>;
+  // Students called up from a different class for a one-off individual
+  // record (e.g. a makeup or guest attendee), in addition to the class's
+  // own roster.
+  extraStudentIds?: string[];
 }) {
   const classPage: any = await notion.pages.retrieve({ page_id: input.classId });
   const className = getTitle(classPage, "반이름");
-  const studentIds = getRelationIds(classPage, "소속학생");
+  const classRosterIds = getRelationIds(classPage, "소속학생");
+  const studentIds = Array.from(new Set([...classRosterIds, ...(input.extraStudentIds ?? [])]));
 
   const progressPage = await notion.pages.create({
     parent: { data_source_id: DB.CLASS_PROGRESS } as any,

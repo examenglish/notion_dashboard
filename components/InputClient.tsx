@@ -26,6 +26,8 @@ function ClassRecordForm() {
   const [nextAssignment, setNextAssignment] = useState("");
   const [notice, setNotice] = useState("");
   const [roster, setRoster] = useState<RosterStudent[]>([]);
+  const [extraStudents, setExtraStudents] = useState<RosterStudent[]>([]);
+  const [extraPickerId, setExtraPickerId] = useState("");
   const [loadingRoster, setLoadingRoster] = useState(false);
   const [perStudent, setPerStudent] = useState<
     Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean }>
@@ -51,6 +53,7 @@ function ClassRecordForm() {
       .then((r) => r.json())
       .then((list: RosterStudent[]) => {
         setRoster(list);
+        setExtraStudents([]); // switching class clears any manually-called-up guests
         setPerStudent(
           Object.fromEntries(
             list.map((s) => [s.id, { vocabFail: false, homeworkIncomplete: false, absent: false }])
@@ -59,6 +62,31 @@ function ClassRecordForm() {
       })
       .finally(() => setLoadingRoster(false));
   }, [classId]);
+
+  const fullRoster = [...roster, ...extraStudents];
+
+  function addExtraStudent(id: string) {
+    if (!id || fullRoster.some((s) => s.id === id)) {
+      setExtraPickerId("");
+      return;
+    }
+    fetch(`/api/students/${id}`)
+      .then((r) => r.json())
+      .then((data: { student: { id: string; name: string } }) => {
+        setExtraStudents((cur) => [...cur, { id: data.student.id, name: data.student.name }]);
+        setPerStudent((cur) => ({ ...cur, [id]: { vocabFail: false, homeworkIncomplete: false, absent: false } }));
+      });
+    setExtraPickerId("");
+  }
+
+  function removeExtraStudent(id: string) {
+    setExtraStudents((cur) => cur.filter((s) => s.id !== id));
+    setPerStudent((cur) => {
+      const next = { ...cur };
+      delete next[id];
+      return next;
+    });
+  }
 
   function toggleSubject(name: string) {
     setSubjects((cur) => (cur.includes(name) ? cur.filter((s) => s !== name) : [...cur, name]));
@@ -92,6 +120,7 @@ function ClassRecordForm() {
           notice,
           perStudent,
           briefingTexts,
+          extraStudentIds: extraStudents.map((s) => s.id),
         }),
       });
       const data = await res.json();
@@ -102,6 +131,7 @@ function ClassRecordForm() {
       setNextAssignment("");
       setNotice("");
       setSubjects([]);
+      setExtraStudents([]);
       return { ok: true };
     } catch {
       return { ok: false, error: "네트워크 오류가 발생했습니다." };
@@ -177,14 +207,14 @@ function ClassRecordForm() {
                 type="button"
                 className="secondary"
                 onClick={handleOpenPreview}
-                disabled={!classId || roster.length === 0}
+                disabled={!classId || fullRoster.length === 0}
               >
                 미리보기
               </button>
               <button
                 type="button"
                 onClick={handleDirectSave}
-                disabled={!classId || roster.length === 0 || saving}
+                disabled={!classId || fullRoster.length === 0 || saving}
               >
                 {saving ? "저장 중..." : "저장"}
               </button>
@@ -194,39 +224,56 @@ function ClassRecordForm() {
           <div>
             <label>학생별 체크 ({selectedClassName || "반 선택"})</label>
             {loadingRoster && <p className="muted">명단 불러오는 중...</p>}
-            {!loadingRoster && roster.length === 0 && <p className="muted">이 반에 등록된 학생이 없습니다.</p>}
+            {!loadingRoster && roster.length === 0 && extraStudents.length === 0 && (
+              <p className="muted">이 반에 등록된 학생이 없습니다.</p>
+            )}
             {!loadingRoster &&
-              roster.map((s) => (
-                <div key={s.id} className="roster-check-row">
-                  <span>{s.name}</span>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={perStudent[s.id]?.absent ?? false}
-                        onChange={() => toggleFlag(s.id, "absent")}
-                      />
-                      결석
-                    </label>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={perStudent[s.id]?.vocabFail ?? false}
-                        onChange={() => toggleFlag(s.id, "vocabFail")}
-                      />
-                      단어미통과
-                    </label>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={perStudent[s.id]?.homeworkIncomplete ?? false}
-                        onChange={() => toggleFlag(s.id, "homeworkIncomplete")}
-                      />
-                      과제미완료
-                    </label>
+              fullRoster.map((s) => {
+                const isExtra = extraStudents.some((e) => e.id === s.id);
+                return (
+                  <div key={s.id} className="roster-check-row">
+                    <span>
+                      {s.name}
+                      {isExtra && <span className="badge" style={{ marginLeft: 6 }}>다른반</span>}
+                    </span>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={perStudent[s.id]?.absent ?? false}
+                          onChange={() => toggleFlag(s.id, "absent")}
+                        />
+                        결석
+                      </label>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={perStudent[s.id]?.vocabFail ?? false}
+                          onChange={() => toggleFlag(s.id, "vocabFail")}
+                        />
+                        단어미통과
+                      </label>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={perStudent[s.id]?.homeworkIncomplete ?? false}
+                          onChange={() => toggleFlag(s.id, "homeworkIncomplete")}
+                        />
+                        과제미완료
+                      </label>
+                      {isExtra && (
+                        <button type="button" className="secondary" onClick={() => removeExtraStudent(s.id)}>
+                          제거
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
+
+            <div style={{ marginTop: 12 }}>
+              <StudentPicker studentId={extraPickerId} onChange={addExtraStudent} label="다른 반 학생 호출 (개별 기록 추가)" allowEmpty />
+            </div>
           </div>
         </div>
       </form>
@@ -241,7 +288,7 @@ function ClassRecordForm() {
             homework,
             nextAssignment,
             notice,
-            roster,
+            roster: fullRoster,
             perStudent,
           }}
           classes={classes}
