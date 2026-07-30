@@ -302,7 +302,7 @@ function ClassRecordForm() {
 }
 
 function AdminInputForm() {
-  const [type, setType] = useState("결석신고");
+  const [type, setType] = useState("사전결석변경");
   const [studentId, setStudentId] = useState("");
   const [startDate, setStartDate] = useState(todayStr());
   const [endDate, setEndDate] = useState("");
@@ -311,7 +311,7 @@ function AdminInputForm() {
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isAbsence = type === "결석신고";
+  const isAbsence = type === "사전결석변경";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -348,11 +348,11 @@ function AdminInputForm() {
 
   return (
     <form className="card" onSubmit={handleSubmit}>
-      <h2>결석 / 긴급상담요청</h2>
+      <h2>사전결석변경 / 긴급상담요청</h2>
 
       <label htmlFor="type">유형</label>
       <select id="type" value={type} onChange={(e) => setType(e.target.value)}>
-        <option value="결석신고">결석신고</option>
+        <option value="사전결석변경">사전결석변경</option>
         <option value="긴급상담요청">긴급상담요청</option>
       </select>
 

@@ -584,7 +584,7 @@ export async function getTodaySchedule(today: string) {
 
   const byTypes = (types: string[]) =>
     todoResults
-      .filter((p: any) => types.includes(getSelect(p, "유형") ?? "") && !getCheckbox(p, "완료여부"))
+      .filter((p: any) => types.includes(getSelect(p, "유형") ?? ""))
       .map((p: any) => {
         const studentId = getRelationIds(p, "관련학생")[0];
         const ownerId = getRelationIds(p, "담당자")[0];
@@ -622,6 +622,13 @@ export async function getTodaySchedule(today: string) {
 async function studentBriefMap(): Promise<Map<string, { school: string; gradeNum: string }>> {
   const students = await searchStudents("");
   return new Map(students.map((s) => [s.id, { school: s.school, gradeNum: gradeDigits(s.grade) }]));
+}
+
+// Full (not digit-only) school/grade, for the "이름 학교(학년) 내용" single-line
+// list rows on 행정실/상담일지.
+async function studentSchoolGradeMap(): Promise<Map<string, { school: string; grade: string | null }>> {
+  const students = await searchStudents("");
+  return new Map(students.map((s) => [s.id, { school: s.school, grade: s.grade }]));
 }
 
 export async function createClassProgress(input: {
@@ -736,22 +743,31 @@ function firstRelationName(page: Page, prop: string, names: Map<string, string>)
 }
 
 export async function getRecentAdminInbox() {
-  const [results, names] = await Promise.all([
+  const [results, names, briefs] = await Promise.all([
     queryAllPages({
       data_source_id: DB.ADMIN_INBOX,
-      sorts: [{ property: "날짜", direction: "descending" }],
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
     }),
     studentNameMap(),
+    studentSchoolGradeMap(),
   ]);
-  return results.map((p: any) => ({
-    id: p.id,
-    date: getDate(p, "날짜"),
-    endDate: getDate(p, "종료일"),
-    type: getSelect(p, "입력유형"),
-    studentName: firstRelationName(p, "대상학생", names),
-    content: getRichText(p, "내용"),
-    done: getCheckbox(p, "처리완료"),
-  }));
+  return results.map((p: any) => {
+    const studentId = getRelationIds(p, "대상학생")[0] ?? null;
+    const brief = studentId ? briefs.get(studentId) : undefined;
+    return {
+      id: p.id,
+      date: getDate(p, "날짜"),
+      endDate: getDate(p, "종료일"),
+      type: getSelect(p, "입력유형"),
+      studentId,
+      studentName: firstRelationName(p, "대상학생", names),
+      studentSchool: brief?.school ?? "",
+      studentGrade: brief?.grade ?? null,
+      content: getRichText(p, "내용"),
+      done: getCheckbox(p, "처리완료"),
+      enteredBy: getRichText(p, "입력자"),
+    };
+  });
 }
 
 export async function getRecentBriefings() {
@@ -773,23 +789,31 @@ export async function getRecentBriefings() {
 }
 
 export async function getRecentCounseling() {
-  const [results, names] = await Promise.all([
+  const [results, names, briefs] = await Promise.all([
     queryAllPages({
       data_source_id: DB.COUNSELING,
-      sorts: [{ property: "날짜", direction: "descending" }],
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
     }),
     studentNameMap(),
+    studentSchoolGradeMap(),
   ]);
-  return results.map((p: any) => ({
-    id: p.id,
-    date: getDate(p, "날짜"),
-    studentId: getRelationIds(p, "학생")[0] ?? null,
-    studentName: firstRelationName(p, "학생", names),
-    counselor: getRichText(p, "상담자"),
-    transcript: getRichText(p, "전사내용"),
-    content: getRichText(p, "상담내용"),
-    followUp: getRichText(p, "후속조치"),
-  }));
+  return results.map((p: any) => {
+    const studentId = getRelationIds(p, "학생")[0] ?? null;
+    const brief = studentId ? briefs.get(studentId) : undefined;
+    return {
+      id: p.id,
+      date: getDate(p, "날짜"),
+      studentId,
+      studentName: firstRelationName(p, "학생", names),
+      studentSchool: brief?.school ?? "",
+      studentGrade: brief?.grade ?? null,
+      counselor: getRichText(p, "상담자"),
+      transcript: getRichText(p, "전사내용"),
+      content: getRichText(p, "상담내용"),
+      followUp: getRichText(p, "후속조치"),
+      enteredBy: getRichText(p, "입력자"),
+    };
+  });
 }
 
 export async function updateCounselingEntry(
@@ -805,12 +829,27 @@ export async function updateCounselingEntry(
   await notion.pages.update({ page_id: id, properties });
 }
 
+export async function updateAdminInboxEntry(
+  id: string,
+  input: { type?: string; content?: string; startDate?: string; endDate?: string }
+) {
+  const properties: any = {};
+  if (input.type) properties["입력유형"] = { select: { name: input.type } };
+  if (input.content !== undefined) properties["내용"] = { rich_text: [{ text: { content: input.content } }] };
+  if (input.startDate) properties["날짜"] = { date: { start: input.startDate } };
+  if (input.endDate !== undefined) {
+    properties["종료일"] = input.endDate ? { date: { start: input.endDate } } : { date: null };
+  }
+  await notion.pages.update({ page_id: id, properties });
+}
+
 export async function createAdminInboxEntry(input: {
   type: string;
   studentId: string | null;
   content: string;
   startDate?: string;
   endDate?: string;
+  enteredBy?: string;
 }) {
   const studentName = input.studentId
     ? getTitle(await notion.pages.retrieve({ page_id: input.studentId }) as any, "이름")
@@ -828,6 +867,7 @@ export async function createAdminInboxEntry(input: {
       ...(input.endDate ? { 종료일: { date: { start: input.endDate } } } : {}),
       내용: { rich_text: [{ text: { content: input.content } }] },
       처리완료: { checkbox: false },
+      ...(input.enteredBy ? { 입력자: { rich_text: [{ text: { content: input.enteredBy } }] } } : {}),
     } as any,
   });
 }
@@ -858,15 +898,18 @@ export async function updateStudentInfo(input: {
 
 // Minimal DB② student record, created on the fly when a 자연어 입력 mentions
 // a name that isn't in the roster and staff confirm it should be a new
-// student rather than a typo. Everything else (학교/학년/연락처 등) is left
-// for staff to fill in later via the 학생정보수정 form.
-export async function createMinimalStudent(name: string): Promise<string> {
+// student rather than a typo. Everything else (학년/연락처 등) is left for
+// staff to fill in later via the 학생정보수정 form — 학교 is filled in when
+// the input text happened to mention it, otherwise left blank rather than
+// guessed at.
+export async function createMinimalStudent(name: string, school?: string): Promise<string> {
   const page = await notion.pages.create({
     parent: { data_source_id: DB.STUDENT } as any,
     properties: {
       이름: { title: [{ text: { content: name } }] },
       상태: { select: { name: "재원" } },
       등원일: { date: { start: todayKST() } },
+      ...(school ? { 학교: { rich_text: [{ text: { content: school } }] } } : {}),
     } as any,
   });
   return page.id;
@@ -936,6 +979,7 @@ export async function createCounselingEntry(input: {
   transcript: string;
   summary: string;
   followUp: string;
+  enteredBy?: string;
 }) {
   const studentName = getTitle(
     (await notion.pages.retrieve({ page_id: input.studentId })) as any,
@@ -951,6 +995,7 @@ export async function createCounselingEntry(input: {
       전사내용: { rich_text: [{ text: { content: input.transcript } }] },
       상담내용: { rich_text: [{ text: { content: input.summary } }] },
       후속조치: { rich_text: [{ text: { content: input.followUp } }] },
+      ...(input.enteredBy ? { 입력자: { rich_text: [{ text: { content: input.enteredBy } }] } } : {}),
     } as any,
   });
 }

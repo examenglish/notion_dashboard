@@ -64,15 +64,16 @@ export function resolveRelativeDate(text: string, todayStr: string): string | nu
 const NL_TOOLS: Anthropic.Tool[] = [
   {
     name: "log_admin_inbox",
-    description: "결석신고, 긴급상담요청, 신규생문의, 기타 전달사항을 행정입력함에 등록한다.",
+    description: "사전결석변경, 긴급상담요청, 신규생문의, 기타 전달사항을 행정실에 등록한다.",
     input_schema: {
       type: "object",
       properties: {
-        type: { type: "string", enum: ["결석신고", "긴급상담요청", "신규생문의", "기타"] },
+        type: { type: "string", enum: ["사전결석변경", "긴급상담요청", "신규생문의", "기타"] },
         studentName: { type: "string", description: "학생 이름. 해당 없으면 빈 문자열." },
+        studentSchool: { type: "string", description: "학생 학교 이름(예: 여명중). 문장에 언급되어 있으면 채우고, 없으면 빈 문자열." },
         content: { type: "string", description: "전달할 내용 요약" },
-        startDate: { type: "string", description: "YYYY-MM-DD. 결석신고의 시작일 또는 사건 날짜." },
-        endDate: { type: "string", description: "YYYY-MM-DD. 기간이 있는 결석신고에만 사용, 없으면 빈 문자열." },
+        startDate: { type: "string", description: "YYYY-MM-DD. 사전결석변경의 시작일 또는 사건 날짜." },
+        endDate: { type: "string", description: "YYYY-MM-DD. 기간이 있는 사전결석변경에만 사용, 없으면 빈 문자열." },
       },
       required: ["type", "content", "startDate"],
     },
@@ -85,6 +86,7 @@ const NL_TOOLS: Anthropic.Tool[] = [
       properties: {
         type: { type: "string", enum: ["보강", "재시", "신입생상담", "레벨체크"] },
         studentName: { type: "string" },
+        studentSchool: { type: "string", description: "학생 학교 이름(예: 여명중). 문장에 언급되어 있으면 채우고, 없으면 빈 문자열." },
         date: { type: "string", description: "YYYY-MM-DD" },
         time: { type: "string", description: "예: 16:00. 모르면 빈 문자열." },
         ownerName: { type: "string", description: "담당 직원 이름. 모르면 빈 문자열." },
@@ -100,6 +102,7 @@ const NL_TOOLS: Anthropic.Tool[] = [
       type: "object",
       properties: {
         studentName: { type: "string" },
+        studentSchool: { type: "string", description: "학생 학교 이름(예: 여명중). 문장에 언급되어 있으면 채우고, 없으면 빈 문자열." },
         counselor: { type: "string", description: "상담자 이름. 모르면 빈 문자열." },
         date: { type: "string", description: "YYYY-MM-DD" },
         summary: { type: "string", description: "상담 내용 요약" },
@@ -115,6 +118,7 @@ const NL_TOOLS: Anthropic.Tool[] = [
       type: "object",
       properties: {
         studentName: { type: "string" },
+        studentSchool: { type: "string", description: "학생 학교 이름(예: 여명중). 문장에 언급되어 있으면 채우고, 없으면 빈 문자열." },
         action: { type: "string", description: "조치 내용" },
         actionOwner: { type: "string", description: "담당자 이름. 모르면 빈 문자열." },
         actionAlarmDate: { type: "string", description: "YYYY-MM-DD. 알림이 필요한 날짜, 모르면 오늘." },
@@ -176,10 +180,11 @@ ${buildDateTable(ref.today)}
 이름 추출 규칙:
 - 문장에 학생 이름이 등장하면, content/summary/action 같은 서술형 필드 안에만 적어두지 말고 반드시 studentName 필드에도 별도로 채워 넣는다.
 - 학생 이름은 아래 재원생 명단에 있는 이름과 최대한 정확히 일치시킨다. 명단에 없는 이름이어도 절대 clarify를 사용하지 말고, 문장에 적힌 이름 그대로 studentName에 넣어 해당 도구를 정상적으로 호출한다. (신입생일 수도 있으므로, 명단에 없다는 이유만으로 멈추지 않는다 — 이후 처리는 시스템이 담당한다.)
+- 문장에 학교 이름(예: "여명중", "이그잼고")이 언급되어 있으면 studentSchool에도 채운다. 특히 명단에 없는 이름(신입생 가능성)일 때 학교가 언급되어 있으면 반드시 채운다 — 신입생 등록 시 학교 정보로 쓰인다.
 - 담당자/상담자 이름도 마찬가지로 서술형 필드뿐 아니라 ownerName/counselor/actionOwner 필드에 별도로 채운다. 아래 직원 명단과 최대한 일치시킨다.
 
 분류 규칙 (log_admin_inbox의 type):
-- 학생이 결석/지각/조퇴한다는 내용 → 반드시 "결석신고"
+- 학생이 결석/지각/조퇴한다는 내용 → 반드시 "사전결석변경"
 - 시급하게 상담이 필요하다는 내용(성적 하락, 문제 행동, 퇴원 의사 등) → "긴급상담요청"
 - 아직 등록하지 않은 신규 학생/학부모의 문의 → "신규생문의"
 - 위 세 가지 중 어디에도 해당하지 않는 전달사항 → "기타" (마지막 수단으로만 사용)

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createCounselingEntry, getRecentCounseling } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
+import { readStaffName } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,7 @@ export async function POST(req: NextRequest) {
     transcript: transcript ?? "",
     summary,
     followUp: followUp ?? "",
+    enteredBy: readStaffName(req) || undefined,
   });
   return NextResponse.json({ ok: true });
 }

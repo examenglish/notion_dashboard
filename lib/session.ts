@@ -11,6 +11,15 @@ export type SessionData = {
   issuedAt: number;
 };
 
+// middleware.ts forwards the verified staff name as an x-staff-name header
+// (percent-encoded, since header values must be ByteStrings) so API routes
+// can stamp 입력자 / check "본인만 수정가능" without re-verifying the
+// session cookie themselves.
+export function readStaffName(req: { headers: Headers }): string {
+  const raw = req.headers.get("x-staff-name");
+  return raw ? decodeURIComponent(raw) : "";
+}
+
 function getSecret(): string {
   const secret = process.env.SESSION_SECRET;
   if (!secret) throw new Error("SESSION_SECRET is not set");

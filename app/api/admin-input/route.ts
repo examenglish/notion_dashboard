@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminInboxEntry } from "@/lib/notion";
+import { readStaffName } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,7 @@ export async function POST(req: NextRequest) {
     content,
     startDate: startDate || undefined,
     endDate: endDate || undefined,
+    enteredBy: readStaffName(req) || undefined,
   });
 
   return NextResponse.json({ ok: true });

@@ -1,38 +1,37 @@
 "use client";
 
 import { useState } from "react";
-import StaffPicker from "./StaffPicker";
 
-export type CounselingRecord = {
+const TYPE_OPTIONS = ["사전결석변경", "긴급상담요청", "신규생문의", "기타"];
+
+export type AdminInboxRecord = {
   id: string;
   date: string | null;
-  studentId: string | null;
+  endDate: string | null;
+  type: string | null;
   studentName: string;
   studentSchool?: string;
   studentGrade?: string | null;
-  counselor: string;
-  transcript: string;
   content: string;
-  followUp: string;
+  done: boolean;
   enteredBy?: string;
 };
 
-export default function CounselingEditModal({
+export default function AdminInboxDetailModal({
   item,
   canEdit,
   onClose,
   onSaved,
 }: {
-  item: CounselingRecord;
+  item: AdminInboxRecord;
   canEdit: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [counselor, setCounselor] = useState(item.counselor);
-  const [date, setDate] = useState(item.date ?? "");
-  const [transcript, setTranscript] = useState(item.transcript);
-  const [summary, setSummary] = useState(item.content);
-  const [followUp, setFollowUp] = useState(item.followUp);
+  const [type, setType] = useState(item.type ?? "기타");
+  const [startDate, setStartDate] = useState(item.date ?? "");
+  const [endDate, setEndDate] = useState(item.endDate ?? "");
+  const [content, setContent] = useState(item.content);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,10 +40,10 @@ export default function CounselingEditModal({
     setError(null);
     setSaving(true);
     try {
-      const res = await fetch(`/api/counseling/${item.id}`, {
+      const res = await fetch(`/api/admin-inbox/${item.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ counselor, date, transcript, summary, followUp }),
+        body: JSON.stringify({ type, content, startDate, endDate }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -65,7 +64,7 @@ export default function CounselingEditModal({
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>
-            상담일지 {canEdit ? "수정" : "상세"} — {item.studentName}
+            행정실 {canEdit ? "수정" : "상세"} — {item.studentName}
             {item.studentSchool && (
               <span className="muted"> {item.studentSchool}{item.studentGrade ? `(${item.studentGrade})` : ""}</span>
             )}
@@ -79,41 +78,46 @@ export default function CounselingEditModal({
           </p>
         )}
 
+        <label htmlFor="editAdminType">유형</label>
+        <select id="editAdminType" value={type} onChange={(e) => setType(e.target.value)} disabled={!canEdit}>
+          {TYPE_OPTIONS.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+
         <div className="field-row">
-          {canEdit ? (
-            <StaffPicker value={counselor} onChange={setCounselor} label="상담자" />
-          ) : (
-            <div>
-              <label>상담자</label>
-              <input type="text" value={counselor} readOnly disabled />
-            </div>
-          )}
           <div>
-            <label htmlFor="editCounselingDate">날짜</label>
+            <label htmlFor="editAdminStart">날짜</label>
             <input
-              id="editCounselingDate"
+              id="editAdminStart"
               type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              disabled={!canEdit}
+            />
+          </div>
+          <div>
+            <label htmlFor="editAdminEnd">종료일</label>
+            <input
+              id="editAdminEnd"
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
               disabled={!canEdit}
             />
           </div>
         </div>
 
-        <label htmlFor="editTranscript">전사내용 (원본)</label>
+        <label htmlFor="editAdminContent">내용</label>
         <textarea
-          id="editTranscript"
-          value={transcript}
-          onChange={(e) => setTranscript(e.target.value)}
-          style={{ minHeight: 120 }}
+          id="editAdminContent"
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          style={{ minHeight: 100 }}
           disabled={!canEdit}
         />
 
-        <label htmlFor="editSummary">상담내용 (요약)</label>
-        <textarea id="editSummary" value={summary} onChange={(e) => setSummary(e.target.value)} disabled={!canEdit} />
-
-        <label htmlFor="editFollowUp">후속조치</label>
-        <textarea id="editFollowUp" value={followUp} onChange={(e) => setFollowUp(e.target.value)} disabled={!canEdit} />
+        <p className="muted" style={{ marginTop: 8 }}>{item.done ? "처리완료" : "미처리"}</p>
 
         {error && <p className="error-text">{error}</p>}
 

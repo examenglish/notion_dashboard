@@ -91,15 +91,24 @@ function useScheduleCache() {
       .then((data: Schedule) => setCache((c) => ({ ...c, [date]: data })));
   }
 
-  function removeItem(date: string, key: SectionKey, id: string) {
+  // Marks an item done in place instead of removing it — checking the box
+  // no longer drops the item out of "오늘의 일정" (reverted per request; it
+  // stays visible, shown as completed).
+  function markDone(date: string, key: SectionKey, id: string) {
     setCache((c) => {
       const sched = c[date];
       if (!sched) return c;
-      return { ...c, [date]: { ...sched, [key]: (sched[key] as any[]).filter((it) => it.id !== id) } };
+      return {
+        ...c,
+        [date]: {
+          ...sched,
+          [key]: (sched[key] as any[]).map((it) => (it.id === id ? { ...it, done: true } : it)),
+        },
+      };
     });
   }
 
-  return { cache, ensureDate, refetchDate, removeItem };
+  return { cache, ensureDate, refetchDate, markDone };
 }
 
 function DateNav({ date, onShift, onToday }: { date: string; onShift: (delta: number) => void; onToday: () => void }) {
@@ -334,7 +343,7 @@ function ScheduleEditModal({
 }
 
 export default function TodayScheduleCard() {
-  const { cache, ensureDate, refetchDate, removeItem } = useScheduleCache();
+  const { cache, ensureDate, refetchDate, markDone } = useScheduleCache();
   const [dates, setDates] = useState<Record<SectionKey, string>>(() => {
     const t = todayKST();
     return { alarms: t, newStudentEvents: t, firstDays: t, makeupClasses: t, retests: t };
@@ -361,8 +370,7 @@ export default function TodayScheduleCard() {
   }
 
   async function completeItem(key: "newStudentEvents" | "makeupClasses", date: string, id: string) {
-    // Optimistic removal — completed items drop off "오늘의 일정" immediately.
-    removeItem(date, key, id);
+    markDone(date, key, id);
     await fetch(`/api/schedule-entry/${id}`, { method: "PATCH" });
   }
 
@@ -394,8 +402,23 @@ export default function TodayScheduleCard() {
       case "newStudentEvents":
         return (t: TodoItem) => (
           <div className="schedule-item-row">
-            <label style={{ display: "flex", alignItems: "center", gap: 6, margin: 0, cursor: "pointer" }}>
-              <input type="checkbox" checked={false} onChange={() => completeItem("newStudentEvents", date, t.id)} />
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                margin: 0,
+                cursor: t.done ? "default" : "pointer",
+                textDecoration: t.done ? "line-through" : "none",
+                opacity: t.done ? 0.6 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={t.done}
+                disabled={t.done}
+                onChange={() => completeItem("newStudentEvents", date, t.id)}
+              />
               <strong>{t.studentName}</strong>
               <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
               <span className="muted">{t.time || "시간 미정"}</span>
@@ -419,8 +442,23 @@ export default function TodayScheduleCard() {
       case "makeupClasses":
         return (t: TodoItem) => (
           <div className="schedule-item-row">
-            <label style={{ display: "flex", alignItems: "center", gap: 6, margin: 0, cursor: "pointer" }}>
-              <input type="checkbox" checked={false} onChange={() => completeItem("makeupClasses", date, t.id)} />
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                margin: 0,
+                cursor: t.done ? "default" : "pointer",
+                textDecoration: t.done ? "line-through" : "none",
+                opacity: t.done ? 0.6 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={t.done}
+                disabled={t.done}
+                onChange={() => completeItem("makeupClasses", date, t.id)}
+              />
               <strong>{t.studentName}</strong>
               <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
               <span className="muted">{t.time || "시간 미정"}</span>

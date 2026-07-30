@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { notion, getRichText, updateCounselingEntry } from "@/lib/notion";
+import { notion, getRichText, updateAdminInboxEntry } from "@/lib/notion";
 import { readStaffName } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +17,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: "본인이 입력한 항목만 수정할 수 있습니다." }, { status: 403 });
   }
 
-  const { counselor, date, transcript, summary, followUp } = body;
-  await updateCounselingEntry(params.id, { counselor, date, transcript, summary, followUp });
+  const { type, content, startDate, endDate } = body;
+  await updateAdminInboxEntry(params.id, { type, content, startDate, endDate });
   return NextResponse.json({ ok: true });
 }

@@ -94,7 +94,7 @@ export default function NaturalLanguageInput({ onSaved }: { onSaved?: () => void
 
   return (
     <div className="card">
-      <h2>자연어 입력</h2>
+      <h2>이그잼 AI</h2>
       <p className="muted">
         예: &ldquo;김민준 학생 내일 감기몸살로 결석해요, 학부모가 전화주셨어요&rdquo; / &ldquo;황지환 8/5 보강, 이강사 담당&rdquo;
       </p>
@@ -116,7 +116,7 @@ export default function NaturalLanguageInput({ onSaved }: { onSaved?: () => void
         </button>
       </form>
       {result && (
-        <p className={result.ok ? "success-box" : "error-text"} style={{ marginTop: 10 }}>
+        <p className={result.ok ? "success-box" : "error-text"} style={{ marginTop: 10, fontSize: "0.8em" }}>
           {result.ok ? "✅ " : "⚠️ "}
           {result.message}
         </p>

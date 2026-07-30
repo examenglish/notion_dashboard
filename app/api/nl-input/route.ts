@@ -12,6 +12,7 @@ import {
 } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
+import { readStaffName } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -67,13 +68,13 @@ async function resolveStudentForIntent(
   name: string | undefined,
   students: StudentInfo[],
   classNameById: Map<string, string>,
-  opts: { selectedStudentId?: string; confirmNewStudent?: boolean; forceNewStudent?: boolean }
+  opts: { selectedStudentId?: string; confirmNewStudent?: boolean; forceNewStudent?: boolean; school?: string }
 ): Promise<StudentResolution> {
   if (opts.selectedStudentId) return { kind: "resolved", studentId: opts.selectedStudentId };
 
   if (opts.forceNewStudent) {
     if (!name) return { kind: "no_name" };
-    const studentId = await createMinimalStudent(name);
+    const studentId = await createMinimalStudent(name, opts.school);
     return { kind: "resolved", studentId };
   }
 
@@ -91,7 +92,7 @@ async function resolveStudentForIntent(
   if (candidates.length === 0) {
     if (!name) return { kind: "no_name" };
     if (opts.confirmNewStudent) {
-      const studentId = await createMinimalStudent(name);
+      const studentId = await createMinimalStudent(name, opts.school);
       return { kind: "resolved", studentId };
     }
     return { kind: "not_found", name };
@@ -112,7 +113,7 @@ async function resolveOrRespond(
   name: string | undefined,
   students: StudentInfo[],
   classNameById: Map<string, string>,
-  opts: { selectedStudentId?: string; confirmNewStudent?: boolean; forceNewStudent?: boolean }
+  opts: { selectedStudentId?: string; confirmNewStudent?: boolean; forceNewStudent?: boolean; school?: string }
 ): Promise<{ studentId: string | null } | NextResponse> {
   const resolution = await resolveStudentForIntent(text, name, students, classNameById, opts);
   if (resolution.kind === "resolved") return { studentId: resolution.studentId };
@@ -143,6 +144,7 @@ export async function POST(req: NextRequest) {
   }
 
   const today = todayKST();
+  const staffName = readStaffName(req) || undefined;
 
   if (NEW_STUDENT_KEYWORDS.some((k) => text.includes(k))) {
     await createAdminInboxEntry({
@@ -150,8 +152,9 @@ export async function POST(req: NextRequest) {
       studentId: null,
       content: text,
       startDate: today,
+      enteredBy: staffName,
     });
-    return NextResponse.json({ ok: true, message: "행정입력함에 저장했습니다: 신규생문의" });
+    return NextResponse.json({ ok: true, message: "행정실에 저장했습니다: 신규생문의" });
   }
 
   const [allStudents, classes, staff] = await Promise.all([searchStudents(""), listClasses(), listStaff()]);
@@ -184,7 +187,12 @@ export async function POST(req: NextRequest) {
   // over whatever date the model returned.
   const regexDate = resolveRelativeDate(text, today);
   const nameById = new Map(activeStudents.map((s) => [s.id, s.name]));
-  const resolveOpts = { selectedStudentId, confirmNewStudent, forceNewStudent };
+  const resolveOpts = {
+    selectedStudentId,
+    confirmNewStudent,
+    forceNewStudent,
+    school: input.studentSchool || undefined,
+  };
 
   try {
     if (parsed.kind === "log_admin_inbox") {
@@ -198,10 +206,11 @@ export async function POST(req: NextRequest) {
         content: input.content,
         startDate: regexDate ?? input.startDate ?? today,
         endDate: input.endDate || undefined,
+        enteredBy: staffName,
       });
       return NextResponse.json({
         ok: true,
-        message: `행정입력함에 저장했습니다: ${input.type}${studentName ? " · " + studentName : ""}`,
+        message: `행정실에 저장했습니다: ${input.type}${studentName ? " · " + studentName : ""}`,
       });
     }
 
@@ -242,6 +251,7 @@ export async function POST(req: NextRequest) {
         transcript: "",
         summary: input.summary,
         followUp: input.followUp || "",
+        enteredBy: staffName,
       });
       return NextResponse.json({
         ok: true,

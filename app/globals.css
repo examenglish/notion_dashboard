@@ -414,6 +414,16 @@ th, td {
   flex-direction: column;
 }
 
+.schedule-cards-grid .date-nav {
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+
+.schedule-cards-grid .date-nav-today {
+  font-size: 0.75em;
+  padding: 2px 4px;
+}
+
 .schedule-more-btn {
   align-self: flex-start;
   margin-top: auto;
@@ -578,6 +588,17 @@ th, td {
 .recent-list-meta {
   color: var(--muted);
   font-size: 12px;
+}
+
+.recent-list-row.clickable {
+  cursor: pointer;
+}
+
+.compact-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
 }
 
 .grid-3 {

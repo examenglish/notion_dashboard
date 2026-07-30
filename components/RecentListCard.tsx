@@ -7,6 +7,7 @@ export default function RecentListCard<T>({
   items,
   renderItem,
   keyOf,
+  onItemClick,
   pageSize = 10,
   emptyText = "표시할 항목이 없습니다.",
 }: {
@@ -14,6 +15,7 @@ export default function RecentListCard<T>({
   items: T[];
   renderItem: (item: T) => React.ReactNode;
   keyOf: (item: T) => string;
+  onItemClick?: (item: T) => void;
   pageSize?: number;
   emptyText?: string;
 }) {
@@ -40,7 +42,11 @@ export default function RecentListCard<T>({
       ) : (
         <div className="recent-list">
           {visible.map((item) => (
-            <div key={keyOf(item)} className="recent-list-row">
+            <div
+              key={keyOf(item)}
+              className={onItemClick ? "recent-list-row clickable" : "recent-list-row"}
+              onClick={onItemClick ? () => onItemClick(item) : undefined}
+            >
               {renderItem(item)}
             </div>
           ))}

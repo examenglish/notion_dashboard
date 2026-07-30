@@ -18,16 +18,21 @@ import DateTimeHeader from "./DateTimeHeader";
 import MonthlyOutcomeCharts from "./MonthlyOutcomeCharts";
 import StudentTable, { StudentRow } from "./StudentTable";
 import CounselingEditModal, { CounselingRecord } from "./CounselingEditModal";
+import AdminInboxDetailModal, { AdminInboxRecord } from "./AdminInboxDetailModal";
 import NaturalLanguageInput from "./NaturalLanguageInput";
 import StudentHistoryModal from "./StudentHistoryModal";
 
 type AdminInboxItem = {
   id: string;
   date: string | null;
+  endDate: string | null;
   type: string | null;
   studentName: string;
+  studentSchool?: string;
+  studentGrade?: string | null;
   content: string;
   done: boolean;
+  enteredBy?: string;
 };
 
 type CounselingItem = {
@@ -35,10 +40,13 @@ type CounselingItem = {
   date: string | null;
   studentId: string | null;
   studentName: string;
+  studentSchool?: string;
+  studentGrade?: string | null;
   counselor: string;
   transcript: string;
   content: string;
   followUp: string;
+  enteredBy?: string;
 };
 
 type StudentListItem = StudentRow;
@@ -56,7 +64,13 @@ type StudentDetail = {
 
 const pct = (v: number | null) => (v === null ? "-" : `${Math.round(v * 100)}%`);
 
-export default function DashboardClient() {
+function compactLine(name: string, school: string | undefined, grade: string | null | undefined, content: string) {
+  const hasStudent = !!name && name !== "-";
+  const prefix = hasStudent ? `${name} ${school || "학교미상"}${grade ? `(${grade})` : ""} ` : "";
+  return `${prefix}${content}`;
+}
+
+export default function DashboardClient({ staffName }: { staffName: string | null }) {
   const [query, setQuery] = useState("");
   const [students, setStudents] = useState<StudentListItem[]>([]);
   const [selected, setSelected] = useState<StudentDetail | null>(null);
@@ -64,7 +78,12 @@ export default function DashboardClient() {
   const [adminInbox, setAdminInbox] = useState<AdminInboxItem[]>([]);
   const [counseling, setCounseling] = useState<CounselingItem[]>([]);
   const [editingCounseling, setEditingCounseling] = useState<CounselingItem | null>(null);
+  const [viewingAdminInbox, setViewingAdminInbox] = useState<AdminInboxItem | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+
+  function canEdit(enteredBy?: string) {
+    return !enteredBy || enteredBy === staffName;
+  }
 
   function reloadCounseling() {
     fetch("/api/counseling")
@@ -193,22 +212,22 @@ export default function DashboardClient() {
 
       <div className="grid-2">
         <RecentListCard
-          title="행정입력함"
+          title="행정실"
           items={adminInbox}
           keyOf={(i) => i.id}
+          onItemClick={(i) => setViewingAdminInbox(i)}
           renderItem={(i) => (
             <>
-              <div className="recent-list-top">
-                <strong>{i.studentName}</strong>
+              <div className="recent-list-meta">
+                {i.date ?? "-"}
+                {i.endDate ? ` ~ ${i.endDate}` : ""} ·{" "}
                 <span className={i.type === "긴급상담요청" ? "badge badge-urgent" : "badge"}>
                   {i.type === "긴급상담요청" && "🚨 "}
                   {i.type ?? "-"}
-                </span>
+                </span>{" "}
+                · {i.done ? "처리완료" : "미처리"}
               </div>
-              <div>{i.content}</div>
-              <div className="recent-list-meta">
-                {i.date ?? "-"} · {i.done ? "처리완료" : "미처리"}
-              </div>
+              <div className="compact-line">{compactLine(i.studentName, i.studentSchool, i.studentGrade, i.content)}</div>
             </>
           )}
         />
@@ -217,22 +236,13 @@ export default function DashboardClient() {
           title="상담일지"
           items={counseling}
           keyOf={(i) => i.id}
+          onItemClick={(i) => setEditingCounseling(i)}
           renderItem={(i) => (
             <>
-              <div className="recent-list-top">
-                <strong>{i.studentName}</strong>
-                <span className="badge">{i.counselor || "-"}</span>
-                <button
-                  type="button"
-                  className="secondary"
-                  style={{ marginLeft: "auto", padding: "2px 8px", fontSize: 12 }}
-                  onClick={() => setEditingCounseling(i)}
-                >
-                  수정
-                </button>
+              <div className="recent-list-meta">
+                {i.date ?? "-"} · <span className="badge">{i.counselor || "-"}</span>
               </div>
-              <div>{i.content}</div>
-              <div className="recent-list-meta">{i.date ?? "-"}</div>
+              <div className="compact-line">{compactLine(i.studentName, i.studentSchool, i.studentGrade, i.content)}</div>
             </>
           )}
         />
@@ -241,8 +251,18 @@ export default function DashboardClient() {
       {editingCounseling && (
         <CounselingEditModal
           item={editingCounseling as CounselingRecord}
+          canEdit={canEdit(editingCounseling.enteredBy)}
           onClose={() => setEditingCounseling(null)}
           onSaved={reloadCounseling}
+        />
+      )}
+
+      {viewingAdminInbox && (
+        <AdminInboxDetailModal
+          item={viewingAdminInbox as AdminInboxRecord}
+          canEdit={canEdit(viewingAdminInbox.enteredBy)}
+          onClose={() => setViewingAdminInbox(null)}
+          onSaved={reloadAdminInbox}
         />
       )}
 
