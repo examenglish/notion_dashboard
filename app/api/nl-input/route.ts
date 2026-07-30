@@ -8,6 +8,7 @@ import {
   createScheduleEntry,
   createCounselingEntry,
   updateStudentInfo,
+  createMinimalStudent,
 } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
@@ -45,17 +46,52 @@ function resolveStudent(text: string, name: string | undefined, students: Studen
   return findStudentIdFromText(text, students) ?? (name ? findStudentId(name, students) : null);
 }
 
+// These sentences are inherently about someone not yet in DB②, so student
+// matching is skipped entirely and the raw text is logged as-is — trying to
+// fuzzy-match a name out of a 신입생 inquiry risks silently attaching it to
+// an unrelated existing student.
+const NEW_STUDENT_KEYWORDS = ["신입생", "신규생", "첫등원"];
+
+// When a named student can't be resolved, the caller re-submits with this
+// flag set (after the staff member confirms "신입생으로 등록할까요?") so we
+// create the DB② record instead of erroring out a second time.
+async function resolveOrOfferToCreate(
+  text: string,
+  name: string | undefined,
+  students: StudentLite[],
+  confirmNewStudent: boolean
+): Promise<{ studentId: string | null; needsConfirmName?: string }> {
+  const found = resolveStudent(text, name, students);
+  if (found) return { studentId: found };
+  if (!name) return { studentId: null };
+  if (!confirmNewStudent) return { studentId: null, needsConfirmName: name };
+  const studentId = await createMinimalStudent(name);
+  return { studentId };
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   const text = (body?.text ?? "").trim();
+  const confirmNewStudent = !!body?.confirmNewStudent;
   if (!text) {
     return NextResponse.json({ ok: false, message: "입력 내용이 없습니다." }, { status: 400 });
+  }
+
+  const today = todayKST();
+
+  if (NEW_STUDENT_KEYWORDS.some((k) => text.includes(k))) {
+    await createAdminInboxEntry({
+      type: "신규생문의",
+      studentId: null,
+      content: text,
+      startDate: today,
+    });
+    return NextResponse.json({ ok: true, message: "행정입력함에 저장했습니다: 신규생문의" });
   }
 
   const [allStudents, classes, staff] = await Promise.all([searchStudents(""), listClasses(), listStaff()]);
   const activeStudents = allStudents.filter((s) => s.status === "재원" || !s.status);
 
-  const today = todayKST();
   const weekday = WEEKDAYS[new Date(`${today}T00:00:00Z`).getUTCDay()];
 
   let parsed;
@@ -85,11 +121,16 @@ export async function POST(req: NextRequest) {
 
   try {
     if (parsed.kind === "log_admin_inbox") {
-      const studentId = resolveStudent(text, input.studentName, activeStudents);
-      if (input.studentName && !studentId) {
-        return NextResponse.json({ ok: false, message: `"${input.studentName}" 학생을 찾을 수 없습니다. 이름을 정확히 입력해 주세요.` });
+      const resolved = await resolveOrOfferToCreate(text, input.studentName, activeStudents, confirmNewStudent);
+      if (resolved.needsConfirmName) {
+        return NextResponse.json({
+          ok: false,
+          needsConfirm: true,
+          message: `"${resolved.needsConfirmName}" 학생을 찾을 수 없는데, 신입생으로 새로 등록할까요?`,
+        });
       }
-      const studentName = studentId ? nameById.get(studentId) : undefined;
+      const studentId = resolved.studentId;
+      const studentName = studentId ? nameById.get(studentId) ?? input.studentName : undefined;
       await createAdminInboxEntry({
         type: input.type,
         studentId,
@@ -104,9 +145,17 @@ export async function POST(req: NextRequest) {
     }
 
     if (parsed.kind === "log_schedule_entry") {
-      const studentId = resolveStudent(text, input.studentName, activeStudents);
+      const resolved = await resolveOrOfferToCreate(text, input.studentName, activeStudents, confirmNewStudent);
+      if (resolved.needsConfirmName) {
+        return NextResponse.json({
+          ok: false,
+          needsConfirm: true,
+          message: `"${resolved.needsConfirmName}" 학생을 찾을 수 없는데, 신입생으로 새로 등록할까요?`,
+        });
+      }
+      const studentId = resolved.studentId;
       if (!studentId) {
-        return NextResponse.json({ ok: false, message: `"${input.studentName}" 학생을 찾을 수 없습니다. 이름을 정확히 입력해 주세요.` });
+        return NextResponse.json({ ok: false, message: "학생 이름을 확인할 수 없습니다. 이름을 포함해서 다시 입력해 주세요." });
       }
       const date = regexDate ?? input.date ?? today;
       await createScheduleEntry({
@@ -119,14 +168,22 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({
         ok: true,
-        message: `${input.type} 일정으로 저장했습니다: ${nameById.get(studentId)} (${date})`,
+        message: `${input.type} 일정으로 저장했습니다: ${nameById.get(studentId) ?? input.studentName} (${date})`,
       });
     }
 
     if (parsed.kind === "log_counseling") {
-      const studentId = resolveStudent(text, input.studentName, activeStudents);
+      const resolved = await resolveOrOfferToCreate(text, input.studentName, activeStudents, confirmNewStudent);
+      if (resolved.needsConfirmName) {
+        return NextResponse.json({
+          ok: false,
+          needsConfirm: true,
+          message: `"${resolved.needsConfirmName}" 학생을 찾을 수 없는데, 신입생으로 새로 등록할까요?`,
+        });
+      }
+      const studentId = resolved.studentId;
       if (!studentId) {
-        return NextResponse.json({ ok: false, message: `"${input.studentName}" 학생을 찾을 수 없습니다. 이름을 정확히 입력해 주세요.` });
+        return NextResponse.json({ ok: false, message: "학생 이름을 확인할 수 없습니다. 이름을 포함해서 다시 입력해 주세요." });
       }
       const date = regexDate ?? input.date ?? today;
       await createCounselingEntry({
@@ -139,14 +196,22 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({
         ok: true,
-        message: `상담일지에 저장했습니다: ${nameById.get(studentId)} (${date})`,
+        message: `상담일지에 저장했습니다: ${nameById.get(studentId) ?? input.studentName} (${date})`,
       });
     }
 
     if (parsed.kind === "log_student_action") {
-      const studentId = resolveStudent(text, input.studentName, activeStudents);
+      const resolved = await resolveOrOfferToCreate(text, input.studentName, activeStudents, confirmNewStudent);
+      if (resolved.needsConfirmName) {
+        return NextResponse.json({
+          ok: false,
+          needsConfirm: true,
+          message: `"${resolved.needsConfirmName}" 학생을 찾을 수 없는데, 신입생으로 새로 등록할까요?`,
+        });
+      }
+      const studentId = resolved.studentId;
       if (!studentId) {
-        return NextResponse.json({ ok: false, message: `"${input.studentName}" 학생을 찾을 수 없습니다. 이름을 정확히 입력해 주세요.` });
+        return NextResponse.json({ ok: false, message: "학생 이름을 확인할 수 없습니다. 이름을 포함해서 다시 입력해 주세요." });
       }
       await updateStudentInfo({
         studentId,
@@ -154,7 +219,10 @@ export async function POST(req: NextRequest) {
         actionOwner: input.actionOwner || undefined,
         actionAlarmDate: regexDate ?? input.actionAlarmDate ?? today,
       });
-      return NextResponse.json({ ok: true, message: `학생 조치사항을 저장했습니다: ${nameById.get(studentId)}` });
+      return NextResponse.json({
+        ok: true,
+        message: `학생 조치사항을 저장했습니다: ${nameById.get(studentId) ?? input.studentName}`,
+      });
     }
 
     return NextResponse.json({ ok: false, message: "요청을 이해하지 못했습니다. 다시 입력해 주세요." });

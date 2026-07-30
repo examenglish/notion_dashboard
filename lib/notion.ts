@@ -856,6 +856,22 @@ export async function updateStudentInfo(input: {
   await notion.pages.update({ page_id: input.studentId, properties });
 }
 
+// Minimal DB② student record, created on the fly when a 자연어 입력 mentions
+// a name that isn't in the roster and staff confirm it should be a new
+// student rather than a typo. Everything else (학교/학년/연락처 등) is left
+// for staff to fill in later via the 학생정보수정 form.
+export async function createMinimalStudent(name: string): Promise<string> {
+  const page = await notion.pages.create({
+    parent: { data_source_id: DB.STUDENT } as any,
+    properties: {
+      이름: { title: [{ text: { content: name } }] },
+      상태: { select: { name: "재원" } },
+      등원일: { date: { start: todayKST() } },
+    } as any,
+  });
+  return page.id;
+}
+
 async function findStaffIdByName(name: string): Promise<string | null> {
   const res = await notion.dataSources.query({
     data_source_id: DB.STAFF,

@@ -7,18 +7,26 @@ export default function NaturalLanguageInput({ onSaved }: { onSaved?: () => void
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
 
+  async function submit(currentText: string, confirmNewStudent: boolean) {
+    const res = await fetch("/api/nl-input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: currentText, confirmNewStudent }),
+    });
+    return res.json();
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!text.trim() || saving) return;
+    const currentText = text;
     setSaving(true);
     setResult(null);
     try {
-      const res = await fetch("/api/nl-input", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      const data = await res.json();
+      let data = await submit(currentText, false);
+      if (!data.ok && data.needsConfirm && window.confirm(data.message)) {
+        data = await submit(currentText, true);
+      }
       setResult({ ok: !!data.ok, message: data.message ?? "처리 중 오류가 발생했습니다." });
       if (data.ok) {
         setText("");
