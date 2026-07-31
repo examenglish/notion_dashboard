@@ -756,6 +756,9 @@ function StudentInfoForm() {
 
 function StudentRegisterForm() {
   const [classes, setClasses] = useState<ClassOption[]>([]);
+  const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
+  const [searchPickerId, setSearchPickerId] = useState("");
+  const [loadingStudent, setLoadingStudent] = useState(false);
   const [name, setName] = useState("");
   const [school, setSchool] = useState("");
   const [grade, setGrade] = useState("");
@@ -782,6 +785,57 @@ function StudentRegisterForm() {
     setClassIds((cur) => (cur.includes(id) ? cur.filter((c) => c !== id) : [...cur, id]));
   }
 
+  function resetForm() {
+    setEditingStudentId(null);
+    setSearchPickerId("");
+    setName("");
+    setSchool("");
+    setGrade("");
+    setStatus("재원");
+    setPhone("");
+    setParentPhone("");
+    setRegisteredAt(todayStr());
+    setEnrolledAt("");
+    setTuitionDay("");
+    setLearningLevel("");
+    setClassIds([]);
+    setMemo("");
+    setError(null);
+  }
+
+  // 검색창을 다시 입력하는 동안 계속 onChange("")가 날아오는 StudentPicker의
+  // 특성상, 여기서는 실제 선택(id가 있을 때)에만 반응한다 — 그래야 검색어를
+  // 고치는 동안 이미 불러온 폼 내용이 매 타이핑마다 날아가지 않는다.
+  async function handlePickExisting(id: string) {
+    setSearchPickerId(id);
+    if (!id) return;
+    setLoadingStudent(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/students/${id}`);
+      const data = await res.json();
+      const s = data.student;
+      setEditingStudentId(s.id);
+      setName(s.name ?? "");
+      setSchool(s.school ?? "");
+      setGrade(s.grade ?? "");
+      setStatus(s.status ?? "재원");
+      setPhone(s.phone ?? "");
+      setParentPhone(s.parentPhone ?? "");
+      setRegisteredAt(s.registeredAt ?? "");
+      setEnrolledAt(s.enrolledAt ?? "");
+      setTuitionDay(s.tuitionDay !== null && s.tuitionDay !== undefined ? String(s.tuitionDay) : "");
+      setLearningLevel(s.learningLevel ?? "");
+      setClassIds(s.classIds ?? []);
+      setMemo(s.memo ?? "");
+      setDone(false);
+    } catch {
+      setError("학생 정보를 불러오지 못했습니다.");
+    } finally {
+      setLoadingStudent(false);
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!confirmSave()) return;
@@ -789,8 +843,9 @@ function StudentRegisterForm() {
     setSaving(true);
     setDone(false);
     try {
-      const res = await fetch("/api/students", {
-        method: "POST",
+      const isEdit = !!editingStudentId;
+      const res = await fetch(isEdit ? `/api/students/${editingStudentId}` : "/api/students", {
+        method: isEdit ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
@@ -812,18 +867,12 @@ function StudentRegisterForm() {
         setError(data.error ?? "저장에 실패했습니다.");
         return;
       }
-      setDone(true);
-      setName("");
-      setSchool("");
-      setGrade("");
-      setStatus("재원");
-      setPhone("");
-      setParentPhone("");
-      setEnrolledAt("");
-      setTuitionDay("");
-      setLearningLevel("");
-      setClassIds([]);
-      setMemo("");
+      if (isEdit) {
+        setDone(true);
+      } else {
+        resetForm();
+        setDone(true);
+      }
     } catch {
       setError("네트워크 오류가 발생했습니다.");
     } finally {
@@ -834,7 +883,20 @@ function StudentRegisterForm() {
   return (
     <form className="card" onSubmit={handleSubmit}>
       <h2>학생 등록</h2>
-      <p className="muted">신규/재원/대기생/휴원/퇴원 학생의 전체 정보를 등록·관리합니다.</p>
+      <p className="muted">이름으로 검색하면 기존 학생 정보를 불러와 수정할 수 있고, 검색 결과가 없으면 새로 등록됩니다.</p>
+
+      <StudentPicker studentId={searchPickerId} onChange={handlePickExisting} label="학생 검색 (있으면 불러오기, 없으면 새로 등록)" />
+      {loadingStudent && <p className="muted">불러오는 중...</p>}
+      {editingStudentId && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 12px" }}>
+          <p className="muted" style={{ margin: 0 }}>
+            기존 학생 정보를 불러왔습니다 — 수정 후 저장하면 해당 학생 정보가 업데이트됩니다.
+          </p>
+          <button type="button" className="secondary" onClick={resetForm}>
+            새 학생 등록으로 초기화
+          </button>
+        </div>
+      )}
 
       <div className="field-row">
         <div>
@@ -925,7 +987,7 @@ function StudentRegisterForm() {
 
       <div style={{ marginTop: 16 }}>
         <button type="submit" disabled={saving || !name.trim()}>
-          {saving ? "저장 중..." : "저장"}
+          {saving ? "저장 중..." : editingStudentId ? "수정 저장" : "저장"}
         </button>
       </div>
     </form>

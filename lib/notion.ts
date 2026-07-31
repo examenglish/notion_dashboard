@@ -256,10 +256,12 @@ function mapStudentPage(p: any, examMap: Map<string, any>, classNameById: Map<st
     attendanceRate: getRollupNumber(p, "누적출석률"),
     homeworkRate: getRollupNumber(p, "누적숙제제출률"),
     vocabPassRate: getRollupNumber(p, "누적단어테스트통과율"),
+    registeredAt: getDate(p, "등록일"),
     enrolledAt,
     isNew: isWithinDays(enrolledAt, 30),
     tuitionDay: getNumber(p, "회비일"),
     learningLevel: getRichText(p, "학습레벨"),
+    memo: getRichText(p, "메모"),
     action: getRichText(p, "조치"),
     actionOwner: getRichText(p, "조치담당자"),
     actionAlarmDate: getDate(p, "조치알람일"),
@@ -1216,6 +1218,48 @@ export async function createStudent(input: {
     } as any,
   });
   return page.id;
+}
+
+// Full-record edit for an existing student (학생등록 화면에서 검색으로 불러온
+// 뒤 수정하는 경로) — createStudent와 달리 각 필드는 명시적으로 넘어온
+// 것만 갱신하고, 빈 문자열/빈 배열도 "지운다"는 의미로 그대로 반영한다.
+export async function updateStudentFull(
+  studentId: string,
+  input: {
+    name?: string;
+    school?: string;
+    grade?: string;
+    status?: string;
+    phone?: string;
+    parentPhone?: string;
+    registeredAt?: string;
+    enrolledAt?: string;
+    tuitionDay?: number;
+    learningLevel?: string;
+    classIds?: string[];
+    memo?: string;
+  }
+) {
+  const properties: any = {};
+  if (input.name) properties["이름"] = { title: [{ text: { content: input.name } }] };
+  if (input.school !== undefined) properties["학교"] = { rich_text: [{ text: { content: input.school } }] };
+  if (input.grade !== undefined) properties["학년"] = input.grade ? { select: { name: input.grade } } : { select: null };
+  if (input.status) properties["상태"] = { select: { name: input.status } };
+  if (input.phone !== undefined) properties["연락처"] = { phone_number: input.phone || null };
+  if (input.parentPhone !== undefined) properties["학부모연락처"] = { phone_number: input.parentPhone || null };
+  if (input.registeredAt !== undefined) {
+    properties["등록일"] = input.registeredAt ? { date: { start: input.registeredAt } } : { date: null };
+  }
+  if (input.enrolledAt !== undefined) {
+    properties["등원일"] = input.enrolledAt ? { date: { start: input.enrolledAt } } : { date: null };
+  }
+  if (input.tuitionDay !== undefined) properties["회비일"] = { number: input.tuitionDay };
+  if (input.learningLevel !== undefined) {
+    properties["학습레벨"] = { rich_text: [{ text: { content: input.learningLevel } }] };
+  }
+  if (input.classIds !== undefined) properties["소속반"] = { relation: input.classIds.map((id) => ({ id })) };
+  if (input.memo !== undefined) properties["메모"] = { rich_text: [{ text: { content: input.memo } }] };
+  await notion.pages.update({ page_id: studentId, properties });
 }
 
 async function findStaffIdByName(name: string): Promise<string | null> {
