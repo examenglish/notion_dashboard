@@ -11,6 +11,8 @@ type ClassOption = { id: string; name: string };
 type RosterStudent = { id: string; name: string };
 
 const SUBJECT_OPTIONS = ["문법", "독해", "서술형", "구문", "듣기", "모의고사", "어법", "내신대비"];
+const GRADE_OPTIONS = ["초1", "초2", "초3", "초4", "초5", "초6", "중1", "중2", "중3", "고1", "고2", "고3"];
+const STATUS_OPTIONS = ["재원", "대기생", "휴원", "퇴원"];
 
 function confirmSave() {
   return window.confirm("저장하시겠습니까?");
@@ -684,9 +686,188 @@ function StudentInfoForm() {
   );
 }
 
+function StudentRegisterForm() {
+  const [classes, setClasses] = useState<ClassOption[]>([]);
+  const [name, setName] = useState("");
+  const [school, setSchool] = useState("");
+  const [grade, setGrade] = useState("");
+  const [status, setStatus] = useState("재원");
+  const [phone, setPhone] = useState("");
+  const [parentPhone, setParentPhone] = useState("");
+  const [registeredAt, setRegisteredAt] = useState(todayStr());
+  const [enrolledAt, setEnrolledAt] = useState("");
+  const [tuitionDay, setTuitionDay] = useState("");
+  const [learningLevel, setLearningLevel] = useState("");
+  const [classIds, setClassIds] = useState<string[]>([]);
+  const [memo, setMemo] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/classes")
+      .then((r) => r.json())
+      .then(setClasses);
+  }, []);
+
+  function toggleClass(id: string) {
+    setClassIds((cur) => (cur.includes(id) ? cur.filter((c) => c !== id) : [...cur, id]));
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!confirmSave()) return;
+    setError(null);
+    setSaving(true);
+    setDone(false);
+    try {
+      const res = await fetch("/api/students", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          school,
+          grade,
+          status,
+          phone,
+          parentPhone,
+          registeredAt,
+          enrolledAt,
+          tuitionDay: tuitionDay || undefined,
+          learningLevel,
+          classIds,
+          memo,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "저장에 실패했습니다.");
+        return;
+      }
+      setDone(true);
+      setName("");
+      setSchool("");
+      setGrade("");
+      setStatus("재원");
+      setPhone("");
+      setParentPhone("");
+      setEnrolledAt("");
+      setTuitionDay("");
+      setLearningLevel("");
+      setClassIds([]);
+      setMemo("");
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="card" onSubmit={handleSubmit}>
+      <h2>학생 등록</h2>
+      <p className="muted">신규/재원/대기생/휴원/퇴원 학생의 전체 정보를 등록·관리합니다.</p>
+
+      <div className="field-row">
+        <div>
+          <label htmlFor="regName">이름</label>
+          <input id="regName" type="text" value={name} onChange={(e) => setName(e.target.value)} required />
+        </div>
+        <div>
+          <label htmlFor="regStatus">상태</label>
+          <select id="regStatus" value={status} onChange={(e) => setStatus(e.target.value)}>
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="field-row">
+        <div>
+          <label htmlFor="regSchool">학교</label>
+          <input id="regSchool" type="text" value={school} onChange={(e) => setSchool(e.target.value)} />
+        </div>
+        <div>
+          <label htmlFor="regGrade">학년</label>
+          <select id="regGrade" value={grade} onChange={(e) => setGrade(e.target.value)}>
+            <option value="">선택 안 함</option>
+            {GRADE_OPTIONS.map((g) => (
+              <option key={g} value={g}>{g}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="field-row">
+        <div>
+          <label htmlFor="regPhone">학생 연락처</label>
+          <input id="regPhone" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="010-0000-0000" />
+        </div>
+        <div>
+          <label htmlFor="regParentPhone">학부모 연락처</label>
+          <input id="regParentPhone" type="tel" value={parentPhone} onChange={(e) => setParentPhone(e.target.value)} placeholder="010-0000-0000" />
+        </div>
+      </div>
+
+      <div className="field-row">
+        <div>
+          <label htmlFor="regRegisteredAt">등록일</label>
+          <input id="regRegisteredAt" type="date" value={registeredAt} onChange={(e) => setRegisteredAt(e.target.value)} />
+        </div>
+        <div>
+          <label htmlFor="regEnrolledAt">등원일 (첫 등원일)</label>
+          <input id="regEnrolledAt" type="date" value={enrolledAt} onChange={(e) => setEnrolledAt(e.target.value)} />
+        </div>
+      </div>
+
+      <div className="field-row">
+        <div>
+          <label htmlFor="regTuitionDay">회비일 (매월 며칠)</label>
+          <input
+            id="regTuitionDay"
+            type="text"
+            inputMode="numeric"
+            placeholder="예: 15"
+            value={tuitionDay}
+            onChange={(e) => setTuitionDay(e.target.value.replace(/\D/g, ""))}
+          />
+        </div>
+        <div>
+          <label htmlFor="regLearningLevel">학습레벨</label>
+          <input id="regLearningLevel" type="text" value={learningLevel} onChange={(e) => setLearningLevel(e.target.value)} />
+        </div>
+      </div>
+
+      <label>소속반 (복수 선택 가능)</label>
+      <div className="class-checkbox-grid">
+        {classes.map((c) => (
+          <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, margin: 0 }}>
+            <input type="checkbox" checked={classIds.includes(c.id)} onChange={() => toggleClass(c.id)} />
+            {stripClassSuffix(c.name)}
+          </label>
+        ))}
+      </div>
+
+      <label htmlFor="regMemo">메모 (추천인/특이사항 등)</label>
+      <textarea id="regMemo" value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="예: 백서연 친구 소개" />
+
+      {error && <p className="error-text">{error}</p>}
+      {done && <p className="success-box" style={{ marginTop: 12 }}>저장됐습니다.</p>}
+
+      <div style={{ marginTop: 16 }}>
+        <button type="submit" disabled={saving || !name.trim()}>
+          {saving ? "저장 중..." : "저장"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export default function InputClient({ role }: { role: string | null }) {
   return (
     <div className="page">
+      {role === "행정" && <StudentRegisterForm />}
       {role !== "행정" && <ClassRecordForm />}
       <div className="grid-3">
         <ScheduleEntryForm />

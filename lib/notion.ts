@@ -993,6 +993,45 @@ export async function createMinimalStudent(name: string, school?: string): Promi
   return page.id;
 }
 
+// Full 학생등록 form (행정) — unlike createMinimalStudent (auto-created from
+// an AI 신규생문의 log with just a name), this captures everything staff
+// enter up front: contact info, status, class assignment, tuition day, etc.
+export async function createStudent(input: {
+  name: string;
+  school?: string;
+  grade?: string;
+  status: string;
+  phone?: string;
+  parentPhone?: string;
+  registeredAt?: string;
+  enrolledAt?: string;
+  tuitionDay?: number;
+  learningLevel?: string;
+  classIds?: string[];
+  memo?: string;
+}): Promise<string> {
+  const page = await notion.pages.create({
+    parent: { data_source_id: DB.STUDENT } as any,
+    properties: {
+      이름: { title: [{ text: { content: input.name } }] },
+      상태: { select: { name: input.status } },
+      ...(input.school ? { 학교: { rich_text: [{ text: { content: input.school } }] } } : {}),
+      ...(input.grade ? { 학년: { select: { name: input.grade } } } : {}),
+      ...(input.phone ? { 연락처: { phone_number: input.phone } } : {}),
+      ...(input.parentPhone ? { 학부모연락처: { phone_number: input.parentPhone } } : {}),
+      ...(input.registeredAt ? { 등록일: { date: { start: input.registeredAt } } } : {}),
+      ...(input.enrolledAt ? { 등원일: { date: { start: input.enrolledAt } } } : {}),
+      ...(input.tuitionDay !== undefined ? { 회비일: { number: input.tuitionDay } } : {}),
+      ...(input.learningLevel ? { 학습레벨: { rich_text: [{ text: { content: input.learningLevel } }] } } : {}),
+      ...(input.classIds && input.classIds.length > 0
+        ? { 소속반: { relation: input.classIds.map((id) => ({ id })) } }
+        : {}),
+      ...(input.memo ? { 메모: { rich_text: [{ text: { content: input.memo } }] } } : {}),
+    } as any,
+  });
+  return page.id;
+}
+
 async function findStaffIdByName(name: string): Promise<string | null> {
   const res = await notion.dataSources.query({
     data_source_id: DB.STAFF,
