@@ -173,7 +173,7 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
   return (
     <div className="page">
       <DateTimeHeader />
-      <TodayScheduleCard />
+      <TodayScheduleCard staffName={staffName} />
 
       <NaturalLanguageInput onSaved={() => { reloadAdminInbox(); reloadCounseling(); }} />
 

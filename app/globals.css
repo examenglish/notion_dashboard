@@ -422,7 +422,7 @@ th, td {
 
 .schedule-cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
   gap: 16px;
   margin-bottom: 20px;
 }
@@ -472,6 +472,12 @@ th, td {
   }
 }
 
+@media (max-width: 520px) {
+  .schedule-cards-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .schedule-section-title {
   display: flex;
   justify-content: space-between;
@@ -504,6 +510,10 @@ th, td {
   justify-content: space-between;
   align-items: center;
   gap: 6px;
+}
+
+.schedule-item-clickable {
+  cursor: pointer;
 }
 
 .schedule-edit-btn {
@@ -692,7 +702,7 @@ th, td {
 .ticker-track {
   display: inline-flex;
   animation: tickerScroll linear infinite;
-  animation-duration: 40s;
+  animation-duration: 26.7s;
 }
 
 .ticker-item {

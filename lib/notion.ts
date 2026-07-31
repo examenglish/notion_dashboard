@@ -778,32 +778,43 @@ export async function getTodaySchedule(today: string) {
     });
 
   const counseling = counselingResults.map((p: any) => {
-    const studentId = getRelationIds(p, "학생")[0];
+    const studentId = getRelationIds(p, "학생")[0] ?? null;
     const brief = studentId ? studentBrief.get(studentId) : undefined;
     return {
       id: p.id,
+      date: getDate(p, "날짜"),
+      studentId,
       studentName: studentId ? names.get(studentId) ?? "-" : "-",
       school: brief?.school ?? "",
+      grade: brief?.grade ?? null,
       gradeNum: brief?.gradeNum ?? "",
       counselor: getRichText(p, "상담자"),
+      transcript: getRichText(p, "전사내용"),
       content: getRichText(p, "상담내용"),
+      followUp: getRichText(p, "후속조치"),
+      enteredBy: getRichText(p, "입력자"),
       status: brief?.status ?? null,
     };
   });
 
   const inquiryMap = new Map<string, any>();
   for (const p of [...inquiriesByDate, ...inquiriesByRange] as any[]) {
-    const studentId = getRelationIds(p, "대상학생")[0];
+    const studentId = getRelationIds(p, "대상학생")[0] ?? null;
     const brief = studentId ? studentBrief.get(studentId) : undefined;
     inquiryMap.set(p.id, {
       id: p.id,
+      date: getDate(p, "날짜"),
+      endDate: getDate(p, "종료일"),
+      studentId,
       studentName: studentId ? names.get(studentId) ?? "-" : "전체",
       school: brief?.school ?? "",
+      grade: brief?.grade ?? null,
       gradeNum: brief?.gradeNum ?? "",
       type: getSelect(p, "입력유형"),
       content: getRichText(p, "내용"),
       done: getCheckbox(p, "처리완료"),
       owner: getRichText(p, "담당자"),
+      enteredBy: getRichText(p, "입력자"),
       status: brief?.status ?? null,
     });
   }
@@ -820,9 +831,13 @@ export async function getTodaySchedule(today: string) {
   };
 }
 
-async function studentBriefMap(): Promise<Map<string, { school: string; gradeNum: string; status: string | null }>> {
+async function studentBriefMap(): Promise<
+  Map<string, { school: string; grade: string | null; gradeNum: string; status: string | null }>
+> {
   const students = await searchStudents("");
-  return new Map(students.map((s) => [s.id, { school: s.school, gradeNum: gradeDigits(s.grade), status: s.status }]));
+  return new Map(
+    students.map((s) => [s.id, { school: s.school, grade: s.grade, gradeNum: gradeDigits(s.grade), status: s.status }])
+  );
 }
 
 // Full (not digit-only) school/grade, for the "이름 학교(학년) 내용" single-line

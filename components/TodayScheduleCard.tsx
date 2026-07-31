@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { todayKST } from "@/lib/date";
 import StaffPicker from "./StaffPicker";
 import StudentPicker from "./StudentPicker";
+import CounselingEditModal, { CounselingRecord } from "./CounselingEditModal";
+import AdminInboxDetailModal, { AdminInboxRecord } from "./AdminInboxDetailModal";
 
 type AlarmItem = { id: string; studentName: string; school: string; content: string; counselor: string };
 type FirstDayItem = {
@@ -25,16 +27,34 @@ type TodoItem = {
   owner: string;
   done: boolean;
 };
-type CounselingBrief = { id: string; studentName: string; school: string; gradeNum: string; counselor: string; content: string };
-type InquiryBrief = {
+type CounselingBrief = {
   id: string;
+  date: string | null;
+  studentId: string | null;
   studentName: string;
   school: string;
+  grade: string | null;
+  gradeNum: string;
+  counselor: string;
+  transcript: string;
+  content: string;
+  followUp: string;
+  enteredBy?: string;
+};
+type InquiryBrief = {
+  id: string;
+  date: string | null;
+  endDate: string | null;
+  studentId: string | null;
+  studentName: string;
+  school: string;
+  grade: string | null;
   gradeNum: string;
   type: string | null;
   content: string;
   done: boolean;
   owner: string;
+  enteredBy?: string;
 };
 
 type Schedule = {
@@ -52,8 +72,10 @@ type SectionKey = keyof Schedule;
 
 // 조교 클리닉/보강/재시/신입생상담은 DB⑱할일관리 기반이라 공용 수정·빠른등록
 // 모달(ScheduleEditModal/ScheduleQuickAddModal)을 그대로 재사용한다. 상담일지와
-// 행정실 문의는 이미 대시보드의 "상담일지"/"행정실" 카드에서 수정 가능하므로
-// 여기서는 훑어보기 전용으로만 보여준다(수정/빠른등록 버튼 없음).
+// 행정실 문의는 새 항목을 만드는 전용 폼(상담일지 등록/결석예정 등)이 따로
+// 있으므로 여기서는 "빠른등록"만 숨기고, 클릭하면 대시보드와 동일한 상세
+// 모달(CounselingEditModal/AdminInboxDetailModal)이 열려 수정권한이 있는
+// 사람은 바로 내용을 고칠 수 있다.
 const SECTION_META: { key: SectionKey; title: string; readOnly?: boolean }[] = [
   { key: "alarms", title: "학습레벨/조치사항" },
   { key: "newStudentEvents", title: "신입생 상담 및 레벨테스트" },
@@ -537,8 +559,14 @@ function ScheduleQuickAddModal({
   );
 }
 
-export default function TodayScheduleCard() {
+export default function TodayScheduleCard({ staffName }: { staffName: string | null }) {
   const { cache, ensureDate, refetchDate, markDone } = useScheduleCache();
+  const [viewingCounseling, setViewingCounseling] = useState<{ item: CounselingBrief; date: string } | null>(null);
+  const [viewingInquiry, setViewingInquiry] = useState<{ item: InquiryBrief; date: string } | null>(null);
+
+  function canEdit(enteredBy?: string) {
+    return !enteredBy || enteredBy === staffName;
+  }
   const [dates, setDates] = useState<Record<SectionKey, string>>(() => {
     const t = todayKST();
     return {
@@ -703,7 +731,7 @@ export default function TodayScheduleCard() {
         );
       case "counseling":
         return (c: CounselingBrief) => (
-          <div className="schedule-item-row">
+          <div className="schedule-item-row schedule-item-clickable" onClick={() => setViewingCounseling({ item: c, date })}>
             <div>
               <strong>{c.studentName}</strong> <span className="muted">{schoolGrade(c.school, c.gradeNum)}</span>
               {", "}
@@ -715,7 +743,7 @@ export default function TodayScheduleCard() {
         );
       case "inquiries":
         return (q: InquiryBrief) => (
-          <div className="schedule-item-row">
+          <div className="schedule-item-row schedule-item-clickable" onClick={() => setViewingInquiry({ item: q, date })}>
             <div>
               <strong>{q.studentName}</strong> <span className="muted">{schoolGrade(q.school, q.gradeNum)}</span>
               {" · "}
@@ -801,6 +829,58 @@ export default function TodayScheduleCard() {
           onSaved={(savedDate) => refetchDate(savedDate)}
         />
       )}
+
+      {viewingCounseling &&
+        (() => {
+          const c = viewingCounseling.item;
+          const record: CounselingRecord = {
+            id: c.id,
+            date: c.date,
+            studentId: c.studentId,
+            studentName: c.studentName,
+            studentSchool: c.school,
+            studentGrade: c.grade,
+            counselor: c.counselor,
+            transcript: c.transcript,
+            content: c.content,
+            followUp: c.followUp,
+            enteredBy: c.enteredBy,
+          };
+          return (
+            <CounselingEditModal
+              item={record}
+              canEdit={canEdit(c.enteredBy)}
+              onClose={() => setViewingCounseling(null)}
+              onSaved={() => refetchDate(viewingCounseling.date)}
+            />
+          );
+        })()}
+
+      {viewingInquiry &&
+        (() => {
+          const q = viewingInquiry.item;
+          const record: AdminInboxRecord = {
+            id: q.id,
+            date: q.date,
+            endDate: q.endDate,
+            type: q.type,
+            studentName: q.studentName,
+            studentSchool: q.school,
+            studentGrade: q.grade,
+            content: q.content,
+            done: q.done,
+            enteredBy: q.enteredBy,
+            owner: q.owner,
+          };
+          return (
+            <AdminInboxDetailModal
+              item={record}
+              canEdit={canEdit(q.enteredBy)}
+              onClose={() => setViewingInquiry(null)}
+              onSaved={() => refetchDate(viewingInquiry.date)}
+            />
+          );
+        })()}
     </>
   );
 }
