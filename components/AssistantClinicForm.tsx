@@ -16,8 +16,9 @@ type TodayTask = {
 };
 type PrepItem = { studentName: string; date: string | null; content: string };
 type ClinicHistoryItem = { id: string; date: string | null; studentNames: string[]; content: string; nextPrep: string };
+type MyClass = { id: string; name: string; students: { id: string; name: string }[] };
 
-type Brief = { todayTasks: TodayTask[]; upcomingPrep: PrepItem[]; recentClinic: ClinicHistoryItem[] };
+type Brief = { todayTasks: TodayTask[]; upcomingPrep: PrepItem[]; myClasses: MyClass[]; recentClinic: ClinicHistoryItem[] };
 
 function confirmSave() {
   return window.confirm("저장하시겠습니까?");
@@ -68,6 +69,17 @@ export default function AssistantClinicForm() {
 
   function removeStudent(id: string) {
     setStudentIds((cur) => cur.filter((s) => s !== id));
+  }
+
+  // 반별로 배정받은 담당반의 학생 전체를 한 번에 담당 학생 목록에 추가 —
+  // 매번 한 명씩 검색해서 고르지 않아도 되도록.
+  function addClassRoster(cls: MyClass) {
+    setStudentIds((cur) => Array.from(new Set([...cur, ...cls.students.map((s) => s.id)])));
+    setStudentNames((cur) => {
+      const next = { ...cur };
+      for (const s of cls.students) next[s.id] = s.name;
+      return next;
+    });
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -160,6 +172,24 @@ export default function AssistantClinicForm() {
       <form className="card" onSubmit={handleSubmit}>
         <h2>클리닉 기록 작성</h2>
         <p className="muted">이번 클리닉 시간에 지도한 학생, 진행 내용, 다음 준비사항을 남겨주세요.</p>
+
+        {brief && brief.myClasses.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <label>내 담당반 (클릭하면 명단 전체 추가)</label>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {brief.myClasses.map((cls) => (
+                <button
+                  key={cls.id}
+                  type="button"
+                  className="secondary"
+                  onClick={() => addClassRoster(cls)}
+                >
+                  {cls.name} ({cls.students.length}명)
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <label>담당 학생 (여러 명 선택 가능)</label>
         <StudentPicker studentId={studentPickerId} onChange={addStudent} label="" />

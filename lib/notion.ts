@@ -164,7 +164,18 @@ export async function listClasses() {
     time: getRichText(p, "시간"),
     level: getSelect(p, "레벨"),
     studentIds: getRelationIds(p, "소속학생"),
+    assistantIds: getRelationIds(p, "담당조교"),
   }));
+}
+
+// 반 단위로 조교를 배정 — 개별 학생을 매번 검색해서 고르는 대신, 원장/행정이
+// "이 조교는 이 반을 담당한다"를 미리 설정해두면 조교 쪽에서 그 반 명단을
+// 한 번에 불러올 수 있다.
+export async function assignClassAssistants(classId: string, assistantIds: string[]) {
+  await notion.pages.update({
+    page_id: classId,
+    properties: { 담당조교: { relation: assistantIds.map((id) => ({ id })) } } as any,
+  });
 }
 
 // Used when a staff member types a class name directly instead of picking
@@ -1313,7 +1324,7 @@ export async function updateClinicRecord(id: string, input: { checked?: boolean 
 // "다음 준비사항" — 본인이 직전 클리닉 기록에 남긴 다음준비사항을 학생별로
 // 최신 것만 모아서 보여준다(같은 학생을 여러 번 봤으면 가장 최근 메모만 유효).
 export async function getAssistantBrief(assistantId: string, date: string) {
-  const [todayTodos, recentClinicRecords, names] = await Promise.all([
+  const [todayTodos, recentClinicRecords, names, classes] = await Promise.all([
     queryAllPages({
       data_source_id: DB.TODO,
       filter: {
@@ -1329,7 +1340,16 @@ export async function getAssistantBrief(assistantId: string, date: string) {
       sorts: [{ timestamp: "created_time", direction: "descending" }],
     }),
     studentNameMap(),
+    listClasses(),
   ]);
+
+  const myClasses = classes
+    .filter((c) => c.assistantIds.includes(assistantId))
+    .map((c) => ({
+      id: c.id,
+      name: stripClassSuffix(c.name),
+      students: c.studentIds.map((id) => ({ id, name: names.get(id) ?? "-" })),
+    }));
 
   const todayTasks = todayTodos
     .map((p: any) => ({
@@ -1357,6 +1377,7 @@ export async function getAssistantBrief(assistantId: string, date: string) {
   return {
     todayTasks,
     upcomingPrep: Array.from(prepByStudent.values()),
+    myClasses,
     recentClinic: recentClinicRecords.slice(0, 5).map((p: any) => ({
       id: p.id,
       date: getDate(p, "날짜"),

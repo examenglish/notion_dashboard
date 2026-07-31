@@ -5,5 +5,5 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const classes = await listClasses();
-  return NextResponse.json(classes.map((c) => ({ id: c.id, name: c.name })));
+  return NextResponse.json(classes);
 }
