@@ -6,6 +6,8 @@ import StaffPicker from "./StaffPicker";
 import DailyBriefingPreviewModal from "./DailyBriefingPreviewModal";
 import AssistantClinicForm from "./AssistantClinicForm";
 import ClassAssistantAssignForm from "./ClassAssistantAssignForm";
+import ClassManageForm from "./ClassManageForm";
+import AssignClinicTaskForm from "./AssignClinicTaskForm";
 import { todayKST as todayStr } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
 
@@ -1004,7 +1006,9 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
   return (
     <div className="page">
       {isAdminLike && <StudentRegisterForm />}
+      {isAdminLike && <ClassManageForm />}
       {isAdminLike && <ClassAssistantAssignForm />}
+      {!isAssistant && <AssignClinicTaskForm />}
       {(isAssistant || isAdminLike) && <AssistantClinicForm />}
       {!isAssistant && <ClassRecordForm />}
       <div className="grid-3">

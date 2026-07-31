@@ -178,6 +178,42 @@ export async function assignClassAssistants(classId: string, assistantIds: strin
   });
 }
 
+export async function createClass(input: {
+  name: string;
+  teacher?: string;
+  days?: string[];
+  time?: string;
+  level?: string;
+}): Promise<string> {
+  const page = await notion.pages.create({
+    parent: { data_source_id: DB.CLASS } as any,
+    properties: {
+      반이름: { title: [{ text: { content: input.name } }] },
+      ...(input.teacher ? { 담당교사: { rich_text: [{ text: { content: input.teacher } }] } } : {}),
+      ...(input.days && input.days.length > 0 ? { 요일: { multi_select: input.days.map((d) => ({ name: d })) } } : {}),
+      ...(input.time ? { 시간: { rich_text: [{ text: { content: input.time } }] } } : {}),
+      ...(input.level ? { 레벨: { select: { name: input.level } } } : {}),
+    } as any,
+  });
+  return page.id;
+}
+
+// 반명 변경을 포함한 반 정보 수정 — 반이름(title) 수정은 기존에 이 반을
+// 참조하는 다른 레코드들(학생 소속반 relation 등)에 영향을 주지 않는다.
+// Notion relation은 페이지 id로 연결되므로 제목만 바뀌어도 관계는 그대로 유지됨.
+export async function updateClass(
+  classId: string,
+  input: { name?: string; teacher?: string; days?: string[]; time?: string; level?: string }
+) {
+  const properties: any = {};
+  if (input.name) properties["반이름"] = { title: [{ text: { content: input.name } }] };
+  if (input.teacher !== undefined) properties["담당교사"] = { rich_text: [{ text: { content: input.teacher } }] };
+  if (input.days !== undefined) properties["요일"] = { multi_select: input.days.map((d) => ({ name: d })) };
+  if (input.time !== undefined) properties["시간"] = { rich_text: [{ text: { content: input.time } }] };
+  if (input.level !== undefined) properties["레벨"] = input.level ? { select: { name: input.level } } : { select: null };
+  await notion.pages.update({ page_id: classId, properties });
+}
+
 // Used when a staff member types a class name directly instead of picking
 // from the dropdown (e.g. a brand-new class not yet set up in DB①). Matches
 // an existing class by exact name first (ignoring the "(숫자)" seed-data
