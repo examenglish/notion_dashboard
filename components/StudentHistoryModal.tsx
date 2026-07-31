@@ -16,8 +16,15 @@ type ProgressEntry = { date: string | null; progress: string; homework: string; 
 type MakeupEntry = { date: string | null; time: string; owner: string; done: boolean };
 type ActionEntry = { date: string | null; content: string; owner: string };
 type CounselingEntry = { date: string | null; counselor: string; content: string; followUp: string };
+type InquiryEntry = { date: string | null; type: string | null; content: string; done: boolean };
 
-type History = { progress: ProgressEntry[]; makeup: MakeupEntry[]; actions: ActionEntry[]; counseling: CounselingEntry[] };
+type History = {
+  progress: ProgressEntry[];
+  makeup: MakeupEntry[];
+  actions: ActionEntry[];
+  counseling: CounselingEntry[];
+  inquiries: InquiryEntry[];
+};
 
 type StudentBasic = { name: string; school: string; grade: string | null };
 
@@ -158,6 +165,25 @@ export default function StudentHistoryModal({
                       <br />
                       {c.content || "-"}
                       {c.followUp && <div className="muted">후속조치: {c.followUp}</div>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <h3 style={{ marginTop: 20 }}>문의/행정 처리 이력</h3>
+              {history.inquiries.length === 0 ? (
+                <p className="muted">문의/행정 처리 이력이 없습니다.</p>
+              ) : (
+                <ul className="history-log">
+                  {history.inquiries.map((q, i) => (
+                    <li key={i}>
+                      <strong>{q.date ?? "-"}</strong>
+                      {" · "}
+                      {q.type ?? "-"}
+                      {" · "}
+                      {q.done ? "처리완료" : "미처리"}
+                      <br />
+                      {q.content || "-"}
                     </li>
                   ))}
                 </ul>

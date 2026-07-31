@@ -39,6 +39,7 @@ function ClassRecordForm() {
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [existingProgressId, setExistingProgressId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/classes")
@@ -64,6 +65,58 @@ function ClassRecordForm() {
       })
       .finally(() => setLoadingRoster(false));
   }, [classId]);
+
+  // If this class+date already has a saved 수업 기록, load it back in so
+  // re-opening the same class/day edits the existing record instead of
+  // silently creating a duplicate. Runs after the roster-reset effect above
+  // (declared later => applied later), so it overwrites the blank flags.
+  useEffect(() => {
+    if (!classId || !date) {
+      setExistingProgressId(null);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([
+      fetch(`/api/class-record?classId=${classId}&date=${date}`).then((r) => r.json()),
+      fetch(`/api/students?classId=${classId}`).then((r) => r.json()),
+    ]).then(([rec, rosterList]: [any, RosterStudent[]]) => {
+      if (cancelled) return;
+      if (!rec) {
+        setExistingProgressId(null);
+        return;
+      }
+      setExistingProgressId(rec.progressId);
+      setSubjects(rec.subjects ?? []);
+      setProgress(rec.progress ?? "");
+      setHomework(rec.homework ?? "");
+      setNextAssignment(rec.nextAssignment ?? "");
+      setNotice(rec.notice ?? "");
+      const rosterIds = new Set(rosterList.map((s) => s.id));
+      const extraIds: string[] = (rec.studentIds ?? []).filter((id: string) => !rosterIds.has(id));
+      setPerStudent((cur) => {
+        const next = { ...cur };
+        for (const sid of rec.studentIds ?? []) {
+          next[sid] = rec.perStudent[sid] ?? { vocabFail: false, homeworkIncomplete: false, absent: false };
+        }
+        return next;
+      });
+      if (extraIds.length > 0) {
+        Promise.all(extraIds.map((id) => fetch(`/api/students/${id}`).then((r) => r.json()))).then((results) => {
+          if (cancelled) return;
+          setExtraStudents((cur) => {
+            const have = new Set(cur.map((s) => s.id));
+            const added = results
+              .map((d: any) => ({ id: d.student.id, name: d.student.name }))
+              .filter((s) => !have.has(s.id));
+            return [...cur, ...added];
+          });
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [classId, date]);
 
   const fullRoster = [...roster, ...extraStudents];
 
@@ -108,11 +161,13 @@ function ClassRecordForm() {
   }
 
   async function actuallySave(briefingTexts?: Record<string, string>): Promise<{ ok: boolean; error?: string }> {
+    const isEdit = !!existingProgressId;
     try {
       const res = await fetch("/api/class-record", {
-        method: "POST",
+        method: isEdit ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          ...(isEdit ? { progressId: existingProgressId } : {}),
           classId: classId || undefined,
           manualClassName: classId ? undefined : manualClassName.trim() || undefined,
           date,
@@ -122,19 +177,21 @@ function ClassRecordForm() {
           nextAssignment,
           notice,
           perStudent,
-          briefingTexts,
+          ...(isEdit ? {} : { briefingTexts }),
           extraStudentIds: extraStudents.map((s) => s.id),
         }),
       });
       const data = await res.json();
       if (!res.ok) return { ok: false, error: data.error ?? "저장에 실패했습니다." };
       setDone(true);
-      setProgress("");
-      setHomework("");
-      setNextAssignment("");
-      setNotice("");
-      setSubjects([]);
-      setExtraStudents([]);
+      if (!isEdit) {
+        setProgress("");
+        setHomework("");
+        setNextAssignment("");
+        setNotice("");
+        setSubjects([]);
+        setExtraStudents([]);
+      }
       return { ok: true };
     } catch {
       return { ok: false, error: "네트워크 오류가 발생했습니다." };
@@ -159,6 +216,11 @@ function ClassRecordForm() {
     <>
       <form className="card" onSubmit={(e) => e.preventDefault()}>
         <h2>오늘 수업 기록</h2>
+        {existingProgressId && (
+          <p className="muted" style={{ marginTop: -4 }}>
+            이미 저장된 기록을 불러왔습니다 — 수정 후 저장하면 기존 기록이 업데이트됩니다.
+          </p>
+        )}
 
         <div className="class-record-layout">
           <div>
@@ -241,7 +303,7 @@ function ClassRecordForm() {
                 onClick={handleDirectSave}
                 disabled={!canSave}
               >
-                {saving ? "저장 중..." : "저장"}
+                {saving ? "저장 중..." : existingProgressId ? "수정 저장" : "저장"}
               </button>
             </div>
           </div>
@@ -865,15 +927,18 @@ function StudentRegisterForm() {
 }
 
 export default function InputClient({ role }: { role: string | null }) {
+  // 원장/행정은 강사·조교·행정 입력폼을 모두 볼 수 있어야 하므로, "행정 전용"
+  // 폼들도 원장에게 함께 열어준다 (강사/조교는 그대로 자기 폼만 봄).
+  const isAdminLike = role === "행정" || role === "원장";
   return (
     <div className="page">
-      {role === "행정" && <StudentRegisterForm />}
-      {role !== "행정" && <ClassRecordForm />}
+      {isAdminLike && <StudentRegisterForm />}
+      <ClassRecordForm />
       <div className="grid-3">
         <ScheduleEntryForm />
         <CounselingForm />
         <AdminInputForm />
-        {role === "행정" && <StudentInfoForm />}
+        {isAdminLike && <StudentInfoForm />}
       </div>
     </div>
   );
