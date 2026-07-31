@@ -139,6 +139,7 @@ export async function POST(req: NextRequest) {
   const confirmNewStudent = !!body?.confirmNewStudent;
   const forceNewStudent = !!body?.forceNewStudent;
   const selectedStudentId = typeof body?.selectedStudentId === "string" ? body.selectedStudentId : undefined;
+  const transcript = typeof body?.transcript === "string" ? body.transcript : "";
   if (!text) {
     return NextResponse.json({ ok: false, message: "입력 내용이 없습니다." }, { status: 400 });
   }
@@ -248,7 +249,7 @@ export async function POST(req: NextRequest) {
         studentId,
         counselor: input.counselor || "",
         date,
-        transcript: "",
+        transcript,
         summary: input.summary,
         followUp: input.followUp || "",
         enteredBy: staffName,
