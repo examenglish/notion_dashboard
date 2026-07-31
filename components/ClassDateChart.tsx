@@ -94,16 +94,15 @@ export default function ClassDateChart() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeClasses.length, date]);
 
-  function goTo(delta: number) {
-    if (activeClasses.length === 0) return;
-    setIndex((i) => (i + delta + activeClasses.length) % activeClasses.length);
+  function selectIndex(i: number) {
+    setIndex(i);
     startTimer(activeClasses.length);
   }
 
   const current = activeClasses[index];
 
   return (
-    <div className="card">
+    <div className="card class-summary-card">
       <h2>반별 현황</h2>
       <div className="date-nav">
         <button type="button" className="secondary date-nav-arrow" onClick={() => setDate((d) => shiftDate(d, -1))}>
@@ -125,26 +124,27 @@ export default function ClassDateChart() {
         <p className="muted">이 날짜에 등록된 기록이 없습니다.</p>
       )}
       {!loading && current && (
-        <>
-          <div className="class-summary-rotator">
-            <button type="button" className="secondary date-nav-arrow" onClick={() => goTo(-1)}>◀</button>
-            <div key={current.classId} className="class-summary-fade">
-              <h3 style={{ textAlign: "center", fontSize: 20, margin: "0 0 16px" }}>
-                {stripClassSuffix(current.className)}
-              </h3>
-              <MetricBar label="출석률" value={current.attendanceRate} color={CHART_COLORS.slateBlue} />
-              <MetricBar label="과제 제출률" value={current.homeworkRate} color={CHART_COLORS.sageGreen} />
-              <MetricBar label="상담률" value={current.counselingRate} color={CHART_COLORS.mutedAmber} />
-              <MetricBar label="단어 통과율" value={current.vocabPassRate} color={CHART_COLORS.mutedTeal} />
-            </div>
-            <button type="button" className="secondary date-nav-arrow" onClick={() => goTo(1)}>▶</button>
-          </div>
-          {activeClasses.length > 1 && (
-            <p className="muted" style={{ textAlign: "center", marginTop: 4 }}>
-              {index + 1} / {activeClasses.length}
-            </p>
-          )}
-        </>
+        <div key={current.classId} className="class-summary-fade class-summary-body">
+          <MetricBar label="출석률" value={current.attendanceRate} color={CHART_COLORS.slateBlue} />
+          <MetricBar label="과제 제출률" value={current.homeworkRate} color={CHART_COLORS.sageGreen} />
+          <MetricBar label="상담률" value={current.counselingRate} color={CHART_COLORS.mutedAmber} />
+          <MetricBar label="단어 통과율" value={current.vocabPassRate} color={CHART_COLORS.mutedTeal} />
+        </div>
+      )}
+
+      {!loading && activeClasses.length > 0 && (
+        <div className="class-chip-row">
+          {activeClasses.map((c, i) => (
+            <button
+              key={c.classId}
+              type="button"
+              className={`secondary class-chip${i === index ? " active" : ""}`}
+              onClick={() => selectIndex(i)}
+            >
+              {stripClassSuffix(c.className)}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );

@@ -672,16 +672,13 @@ th, td {
   }
 }
 
-.class-summary-rotator {
+.class-summary-card {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 12px;
+  flex-direction: column;
 }
 
-.class-summary-rotator > div.class-summary-fade {
-  flex: 1;
-  min-width: 0;
+.class-summary-body {
+  margin-top: 12px;
 }
 
 .class-summary-fade {
@@ -695,4 +692,25 @@ th, td {
   to {
     opacity: 1;
   }
+}
+
+.class-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 14px;
+}
+
+.class-chip {
+  padding: 3px 8px;
+  font-size: 12px;
+  line-height: 1.2;
+  border-radius: 4px;
+}
+
+.class-chip.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
 }
