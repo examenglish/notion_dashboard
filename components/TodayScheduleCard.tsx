@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { todayKST } from "@/lib/date";
 import StaffPicker from "./StaffPicker";
+import StudentPicker from "./StudentPicker";
 
 type AlarmItem = { id: string; studentName: string; school: string; content: string; counselor: string };
 type FirstDayItem = {
@@ -132,6 +133,7 @@ function ScheduleSectionCard({
   onShift,
   onToday,
   onMore,
+  onQuickAdd,
   render,
 }: {
   meta: { key: SectionKey; title: string };
@@ -141,13 +143,19 @@ function ScheduleSectionCard({
   onShift: (delta: number) => void;
   onToday: () => void;
   onMore: () => void;
+  onQuickAdd: () => void;
   render: (item: any) => React.ReactNode;
 }) {
   const visible = items.slice(0, 5);
   return (
     <div className="card">
       <div className="schedule-section-title">
-        {meta.title} <span className="muted">({items.length})</span>
+        <span>
+          {meta.title} <span className="muted">({items.length})</span>
+        </span>
+        <button type="button" className="secondary schedule-quickadd-btn" onClick={onQuickAdd}>
+          ✏️ 글쓰기
+        </button>
       </div>
       <DateNav date={date} onShift={onShift} onToday={onToday} />
       {loading ? (
@@ -178,6 +186,7 @@ function SchedulePopup({
   onShift,
   onToday,
   onClose,
+  onQuickAdd,
   render,
 }: {
   meta: { key: SectionKey; title: string };
@@ -187,6 +196,7 @@ function SchedulePopup({
   onShift: (delta: number) => void;
   onToday: () => void;
   onClose: () => void;
+  onQuickAdd: () => void;
   render: (item: any) => React.ReactNode;
 }) {
   return (
@@ -196,7 +206,10 @@ function SchedulePopup({
           <h2>
             {meta.title} <span className="muted">({items.length})</span>
           </h2>
-          <button type="button" className="secondary" onClick={onClose}>닫기</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" className="secondary" onClick={onQuickAdd}>✏️ 글쓰기</button>
+            <button type="button" className="secondary" onClick={onClose}>닫기</button>
+          </div>
         </div>
         <DateNav date={date} onShift={onShift} onToday={onToday} />
         {loading ? (
@@ -342,6 +355,156 @@ function ScheduleEditModal({
   );
 }
 
+type QuickAddTarget = { kind: SectionKey; date: string };
+
+// Lets staff add a new 오늘의 일정 item without leaving the dashboard for
+// the /input page — mirrors ScheduleEditModal's field layout per section
+// kind, but POSTs a new record instead of PATCHing an existing one.
+function ScheduleQuickAddModal({
+  target,
+  onClose,
+  onSaved,
+}: {
+  target: QuickAddTarget;
+  onClose: () => void;
+  onSaved: (date: string) => void;
+}) {
+  const isAlarm = target.kind === "alarms";
+  const isFirstDay = target.kind === "firstDays";
+  const isNewStudentEvent = target.kind === "newStudentEvents";
+  const isTodo = !isAlarm && !isFirstDay;
+
+  const [studentId, setStudentId] = useState("");
+  const [subType, setSubType] = useState("신입생상담");
+  const [content, setContent] = useState("");
+  const [counselor, setCounselor] = useState("");
+  const [alarmDate, setAlarmDate] = useState(target.date);
+  const [enrolledAt, setEnrolledAt] = useState(target.date);
+  const [todoDate, setTodoDate] = useState(target.date);
+  const [time, setTime] = useState("");
+  const [owner, setOwner] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const todoType = isNewStudentEvent ? subType : target.kind === "makeupClasses" ? "보강" : "재시";
+
+  async function handleSave() {
+    if ((isAlarm || isFirstDay) && !studentId) {
+      setError("학생을 선택해 주세요.");
+      return;
+    }
+    if (!window.confirm("등록하시겠습니까?")) return;
+    setError(null);
+    setSaving(true);
+    try {
+      let res: Response;
+      let savedDate = target.date;
+      if (isAlarm) {
+        savedDate = alarmDate;
+        res = await fetch("/api/student-info", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ studentId, action: content, actionOwner: counselor, actionAlarmDate: alarmDate }),
+        });
+      } else if (isFirstDay) {
+        savedDate = enrolledAt;
+        res = await fetch("/api/student-info", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ studentId, enrolledAt }),
+        });
+      } else {
+        savedDate = todoDate;
+        res = await fetch("/api/schedule-entry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: todoType, studentId: studentId || null, date: todoDate, time, note, ownerName: owner }),
+        });
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "저장에 실패했습니다.");
+        return;
+      }
+      onSaved(savedDate);
+      onClose();
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const title = SECTION_META.find((m) => m.key === target.kind)?.title ?? "";
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>{title} 빠른 등록</h2>
+          <button type="button" className="secondary" onClick={onClose}>닫기</button>
+        </div>
+
+        <StudentPicker studentId={studentId} onChange={setStudentId} allowEmpty={isTodo} />
+
+        {isNewStudentEvent && (
+          <>
+            <label htmlFor="quickSubType">유형</label>
+            <select id="quickSubType" value={subType} onChange={(e) => setSubType(e.target.value)}>
+              <option value="신입생상담">신입생상담</option>
+              <option value="레벨체크">레벨체크</option>
+            </select>
+          </>
+        )}
+
+        {isAlarm && (
+          <>
+            <label htmlFor="quickAlarmContent">조치사항</label>
+            <textarea id="quickAlarmContent" value={content} onChange={(e) => setContent(e.target.value)} />
+            <StaffPicker value={counselor} onChange={setCounselor} label="담당자" />
+            <label htmlFor="quickAlarmDate">알람일</label>
+            <input id="quickAlarmDate" type="date" value={alarmDate} onChange={(e) => setAlarmDate(e.target.value)} />
+          </>
+        )}
+
+        {isFirstDay && (
+          <>
+            <label htmlFor="quickEnrolledAt">등원일</label>
+            <input id="quickEnrolledAt" type="date" value={enrolledAt} onChange={(e) => setEnrolledAt(e.target.value)} />
+          </>
+        )}
+
+        {isTodo && (
+          <>
+            <label htmlFor="quickTodoDate">예정일</label>
+            <input id="quickTodoDate" type="date" value={todoDate} onChange={(e) => setTodoDate(e.target.value)} />
+            <label htmlFor="quickTodoTime">시간</label>
+            <input
+              id="quickTodoTime"
+              type="text"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              placeholder="예: 16:00"
+            />
+            <StaffPicker value={owner} onChange={setOwner} label="담당자" />
+            <label htmlFor="quickTodoNote">메모</label>
+            <textarea id="quickTodoNote" value={note} onChange={(e) => setNote(e.target.value)} />
+          </>
+        )}
+
+        {error && <p className="error-text">{error}</p>}
+
+        <div style={{ marginTop: 16 }}>
+          <button type="button" disabled={saving} onClick={handleSave}>
+            {saving ? "저장 중..." : "등록"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function TodayScheduleCard() {
   const { cache, ensureDate, refetchDate, markDone } = useScheduleCache();
   const [dates, setDates] = useState<Record<SectionKey, string>>(() => {
@@ -350,6 +513,7 @@ export default function TodayScheduleCard() {
   });
   const [popup, setPopup] = useState<{ key: SectionKey; date: string } | null>(null);
   const [editing, setEditing] = useState<EditTarget | null>(null);
+  const [quickAdd, setQuickAdd] = useState<QuickAddTarget | null>(null);
 
   useEffect(() => {
     Object.values(dates).forEach(ensureDate);
@@ -499,6 +663,7 @@ export default function TodayScheduleCard() {
               onShift={(d) => shiftSection(meta.key, d)}
               onToday={() => resetSection(meta.key)}
               onMore={() => setPopup({ key: meta.key, date })}
+              onQuickAdd={() => setQuickAdd({ kind: meta.key, date })}
               render={renderItem(meta.key, date)}
             />
           );
@@ -519,6 +684,7 @@ export default function TodayScheduleCard() {
               onShift={(d) => setPopup((p) => (p ? { ...p, date: shiftDate(p.date, d) } : p))}
               onToday={() => setPopup((p) => (p ? { ...p, date: todayKST() } : p))}
               onClose={() => setPopup(null)}
+              onQuickAdd={() => setQuickAdd({ kind: popup.key, date: popup.date })}
               render={renderItem(popup.key, popup.date)}
             />
           );
@@ -529,6 +695,14 @@ export default function TodayScheduleCard() {
           target={editing}
           onClose={() => setEditing(null)}
           onSaved={() => refetchDate(editing.date)}
+        />
+      )}
+
+      {quickAdd && (
+        <ScheduleQuickAddModal
+          target={quickAdd}
+          onClose={() => setQuickAdd(null)}
+          onSaved={(savedDate) => refetchDate(savedDate)}
         />
       )}
     </>
