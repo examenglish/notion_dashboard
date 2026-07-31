@@ -621,6 +621,7 @@ export async function getTodaySchedule(today: string) {
     school: getRichText(p, "학교"),
     content: getRichText(p, "조치"),
     counselor: getRichText(p, "조치담당자"),
+    status: getSelect(p, "상태"),
   }));
 
   const firstDays = firstDayStudents.map((p: any) => {
@@ -633,6 +634,7 @@ export async function getTodaySchedule(today: string) {
       gradeNum: gradeDigits(getSelect(p, "학년")),
       classDays: cls?.days ?? [],
       classTime: cls?.time ?? "",
+      status: getSelect(p, "상태"),
     };
   });
 
@@ -656,12 +658,12 @@ export async function getTodaySchedule(today: string) {
       });
 
   // byTypes only has the name from studentNameMap (id->name); pull
-  // school/grade for those rows from a second full-student pass.
+  // school/grade/status for those rows from a second full-student pass.
   const studentBrief = await studentBriefMap();
   const withStudentInfo = (items: ReturnType<typeof byTypes>) =>
     items.map(({ _studentId, ...rest }) => {
       const info = _studentId ? studentBrief.get(_studentId) : undefined;
-      return { ...rest, school: info?.school ?? "", gradeNum: info?.gradeNum ?? "" };
+      return { ...rest, school: info?.school ?? "", gradeNum: info?.gradeNum ?? "", status: info?.status ?? null };
     });
 
   return {
@@ -673,9 +675,9 @@ export async function getTodaySchedule(today: string) {
   };
 }
 
-async function studentBriefMap(): Promise<Map<string, { school: string; gradeNum: string }>> {
+async function studentBriefMap(): Promise<Map<string, { school: string; gradeNum: string; status: string | null }>> {
   const students = await searchStudents("");
-  return new Map(students.map((s) => [s.id, { school: s.school, gradeNum: gradeDigits(s.grade) }]));
+  return new Map(students.map((s) => [s.id, { school: s.school, gradeNum: gradeDigits(s.grade), status: s.status }]));
 }
 
 // Full (not digit-only) school/grade, for the "이름 학교(학년) 내용" single-line

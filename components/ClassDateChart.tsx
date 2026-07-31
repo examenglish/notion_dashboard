@@ -76,7 +76,14 @@ export default function ClassDateChart() {
       .finally(() => setLoading(false));
   }, [date]);
 
-  const activeClasses = useMemo(() => data.filter((c) => c.recordCount > 0), [data]);
+  // Show every registered class regardless of whether it has records for
+  // the selected day (MetricBar already renders "-" for null values), so
+  // staff can browse to any class — sorted so the chip row is predictable
+  // instead of whatever order the API happens to return.
+  const sortedClasses = useMemo(
+    () => [...data].sort((a, b) => a.className.localeCompare(b.className, "ko")),
+    [data]
+  );
 
   function startTimer(len: number) {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -87,19 +94,19 @@ export default function ClassDateChart() {
   }
 
   useEffect(() => {
-    startTimer(activeClasses.length);
+    startTimer(sortedClasses.length);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeClasses.length, date]);
+  }, [sortedClasses.length, date]);
 
   function selectIndex(i: number) {
     setIndex(i);
-    startTimer(activeClasses.length);
+    startTimer(sortedClasses.length);
   }
 
-  const current = activeClasses[index];
+  const current = sortedClasses[index];
 
   return (
     <div className="card class-summary-card">
@@ -120,8 +127,8 @@ export default function ClassDateChart() {
       </div>
 
       {loading && <p className="muted">불러오는 중...</p>}
-      {!loading && activeClasses.length === 0 && (
-        <p className="muted">이 날짜에 등록된 기록이 없습니다.</p>
+      {!loading && sortedClasses.length === 0 && (
+        <p className="muted">등록된 반이 없습니다.</p>
       )}
       {!loading && current && (
         <div key={current.classId} className="class-summary-fade class-summary-body">
@@ -132,9 +139,9 @@ export default function ClassDateChart() {
         </div>
       )}
 
-      {!loading && activeClasses.length > 0 && (
+      {!loading && sortedClasses.length > 0 && (
         <div className="class-chip-row">
-          {activeClasses.map((c, i) => (
+          {sortedClasses.map((c, i) => (
             <button
               key={c.classId}
               type="button"

@@ -20,6 +20,7 @@ import StudentTable, { StudentRow } from "./StudentTable";
 import CounselingEditModal, { CounselingRecord } from "./CounselingEditModal";
 import AdminInboxDetailModal, { AdminInboxRecord } from "./AdminInboxDetailModal";
 import NaturalLanguageInput from "./NaturalLanguageInput";
+import TodayTicker from "./TodayTicker";
 import StudentHistoryModal from "./StudentHistoryModal";
 
 type AdminInboxItem = {
@@ -146,6 +147,8 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
       <TodayScheduleCard />
 
       <NaturalLanguageInput onSaved={() => { reloadAdminInbox(); reloadCounseling(); }} />
+
+      <TodayTicker />
 
       <div className="grid-2">
         <ClassDateChart />

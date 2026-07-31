@@ -34,6 +34,22 @@ type SortKey = "attendanceRate" | "homeworkRate" | "vocabPassRate" | "tuitionDay
 
 const pct = (v: number | null) => (v === null ? "-" : `${Math.round(v * 100)}%`);
 
+const STATUS_COLORS: Record<string, string> = {
+  재원: "#22c55e",
+  대기생: "#2f6fed",
+  휴원: "#f59e0b",
+  퇴원: "#94a3b8",
+};
+
+function StatusBadge({ status }: { status: string | null }) {
+  if (!status || status === "재원") return null;
+  return (
+    <span className="badge" style={{ background: STATUS_COLORS[status] ?? "#94a3b8", color: "#fff", marginLeft: 6 }}>
+      {status}
+    </span>
+  );
+}
+
 const METRIC_TABS: { key: MetricKey; label: string }[] = [
   { key: "attendanceRate", label: "출석률" },
   { key: "vocabRetryRate", label: "단어재시율" },
@@ -210,6 +226,7 @@ export default function StudentTable({
                   <td>
                     <strong>{s.name}</strong>
                     {s.isNew && <span className="new-badge">신</span>}
+                    <StatusBadge status={s.status} />
                     <div className="muted">{s.school} {s.grade}</div>
                   </td>
                   <td>{pct(s.attendanceRate)}</td>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { classColor, CHART_COLORS } from "@/lib/format";
 
 type Breakdown = {
@@ -63,35 +63,44 @@ function Donut({
       {total === 0 ? (
         <p className="muted">이 달 기록이 없습니다.</p>
       ) : (
-        <div style={{ position: "relative" }}>
-          <ResponsiveContainer width="100%" height={200}>
-            <PieChart>
-              <Pie data={chartData} dataKey="value" nameKey="name" innerRadius={45} outerRadius={72} paddingAngle={2}>
-                {chartData.map((d) => (
-                  <Cell key={d.name} fill={colors[d.name] ?? classColor(d.name)} />
-                ))}
-              </Pie>
-              <Tooltip formatter={(value: number, name: string) => [`${value}건 (${Math.round((value / total) * 100)}%)`, name]} />
-              <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-            </PieChart>
-          </ResponsiveContainer>
-          {centerPercent !== undefined && centerPercent !== null && (
-            <div
-              style={{
-                position: "absolute",
-                top: "40%",
-                left: "50%",
-                transform: "translate(-50%, -50%)",
-                textAlign: "center",
-                pointerEvents: "none",
-                fontSize: 26,
-                fontWeight: 700,
-              }}
-            >
-              {centerPercent}%
-            </div>
-          )}
-        </div>
+        <>
+          <div style={{ position: "relative" }}>
+            <ResponsiveContainer width="100%" height={160}>
+              <PieChart>
+                <Pie data={chartData} dataKey="value" nameKey="name" innerRadius={45} outerRadius={72} paddingAngle={2}>
+                  {chartData.map((d) => (
+                    <Cell key={d.name} fill={colors[d.name] ?? classColor(d.name)} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(value: number, name: string) => [`${value}건 (${Math.round((value / total) * 100)}%)`, name]} />
+              </PieChart>
+            </ResponsiveContainer>
+            {centerPercent !== undefined && centerPercent !== null && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "50%",
+                  left: "50%",
+                  transform: "translate(-50%, -50%)",
+                  textAlign: "center",
+                  pointerEvents: "none",
+                  fontSize: 26,
+                  fontWeight: 700,
+                }}
+              >
+                {centerPercent}%
+              </div>
+            )}
+          </div>
+          <div className="donut-legend">
+            {chartData.map((d) => (
+              <span key={d.name} className="donut-legend-item">
+                <span className="donut-legend-dot" style={{ background: colors[d.name] ?? classColor(d.name) }} />
+                {d.name}
+              </span>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
