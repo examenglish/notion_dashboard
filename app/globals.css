@@ -280,6 +280,12 @@ th, td {
   font-weight: 700;
 }
 
+.badge-success {
+  background: #d3f9d8;
+  color: #1a7f3c;
+  font-weight: 700;
+}
+
 .recent-list {
   display: flex;
   flex-direction: column;

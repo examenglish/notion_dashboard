@@ -34,6 +34,7 @@ type AdminInboxItem = {
   content: string;
   done: boolean;
   enteredBy?: string;
+  owner?: string;
 };
 
 type CounselingItem = {
@@ -228,7 +229,8 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
                   {i.type === "긴급상담요청" && "🚨 "}
                   {i.type ?? "-"}
                 </span>{" "}
-                · {i.done ? "처리완료" : "미처리"}
+                · 담당: {i.owner || "미지정"} ·{" "}
+                <span className={i.done ? "badge badge-success" : "badge"}>{i.done ? "처리완료" : "미처리"}</span>
               </div>
               <div className="compact-line">{compactLine(i.studentName, i.studentSchool, i.studentGrade, i.content)}</div>
             </>

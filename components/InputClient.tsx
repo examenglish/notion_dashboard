@@ -393,6 +393,7 @@ function AdminInputForm() {
   const [startDate, setStartDate] = useState(todayStr());
   const [endDate, setEndDate] = useState("");
   const [content, setContent] = useState("");
+  const [owner, setOwner] = useState("");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -415,6 +416,7 @@ function AdminInputForm() {
           content,
           startDate,
           endDate: isAbsence ? endDate : undefined,
+          owner,
         }),
       });
       const data = await res.json();
@@ -443,6 +445,8 @@ function AdminInputForm() {
       </select>
 
       <StudentPicker studentId={studentId} onChange={setStudentId} label="대상학생" />
+
+      <StaffPicker value={owner} onChange={setOwner} label="담당자 (처리해야 할 사람, 선택)" />
 
       {isAbsence ? (
         <div className="field-row">

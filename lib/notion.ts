@@ -964,6 +964,7 @@ export async function getRecentAdminInbox() {
       content: getRichText(p, "내용"),
       done: getCheckbox(p, "처리완료"),
       enteredBy: getRichText(p, "입력자"),
+      owner: getRichText(p, "담당자"),
     };
   });
 }
@@ -1029,7 +1030,7 @@ export async function updateCounselingEntry(
 
 export async function updateAdminInboxEntry(
   id: string,
-  input: { type?: string; content?: string; startDate?: string; endDate?: string }
+  input: { type?: string; content?: string; startDate?: string; endDate?: string; owner?: string; done?: boolean }
 ) {
   const properties: any = {};
   if (input.type) properties["입력유형"] = { select: { name: input.type } };
@@ -1038,6 +1039,8 @@ export async function updateAdminInboxEntry(
   if (input.endDate !== undefined) {
     properties["종료일"] = input.endDate ? { date: { start: input.endDate } } : { date: null };
   }
+  if (input.owner !== undefined) properties["담당자"] = { rich_text: [{ text: { content: input.owner } }] };
+  if (input.done !== undefined) properties["처리완료"] = { checkbox: input.done };
   await notion.pages.update({ page_id: id, properties });
 }
 
@@ -1048,6 +1051,7 @@ export async function createAdminInboxEntry(input: {
   startDate?: string;
   endDate?: string;
   enteredBy?: string;
+  owner?: string;
 }) {
   const studentName = input.studentId
     ? getTitle(await notion.pages.retrieve({ page_id: input.studentId }) as any, "이름")
@@ -1066,6 +1070,7 @@ export async function createAdminInboxEntry(input: {
       내용: { rich_text: [{ text: { content: input.content } }] },
       처리완료: { checkbox: false },
       ...(input.enteredBy ? { 입력자: { rich_text: [{ text: { content: input.enteredBy } }] } } : {}),
+      ...(input.owner ? { 담당자: { rich_text: [{ text: { content: input.owner } }] } } : {}),
     } as any,
   });
 }

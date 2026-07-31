@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
-  const { type, studentId, content, startDate, endDate } = body ?? {};
+  const { type, studentId, content, startDate, endDate, owner } = body ?? {};
 
   if (!type || !content) {
     return NextResponse.json({ error: "유형과 내용은 필수입니다." }, { status: 400 });
@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
     startDate: startDate || undefined,
     endDate: endDate || undefined,
     enteredBy: readStaffName(req) || undefined,
+    owner: owner || undefined,
   });
 
   return NextResponse.json({ ok: true });

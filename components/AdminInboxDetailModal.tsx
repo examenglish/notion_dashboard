@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import StaffPicker from "./StaffPicker";
 
 const TYPE_OPTIONS = ["결석예정", "긴급상담요청", "신규생문의", "기타"];
 
@@ -15,6 +16,7 @@ export type AdminInboxRecord = {
   content: string;
   done: boolean;
   enteredBy?: string;
+  owner?: string;
 };
 
 export default function AdminInboxDetailModal({
@@ -32,7 +34,11 @@ export default function AdminInboxDetailModal({
   const [startDate, setStartDate] = useState(item.date ?? "");
   const [endDate, setEndDate] = useState(item.endDate ?? "");
   const [content, setContent] = useState(item.content);
+  const [owner, setOwner] = useState(item.owner ?? "");
+  const [done, setDone] = useState(item.done);
   const [saving, setSaving] = useState(false);
+  const [togglingDone, setTogglingDone] = useState(false);
+  const [savingOwner, setSavingOwner] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSave() {
@@ -56,6 +62,54 @@ export default function AdminInboxDetailModal({
       setError("네트워크 오류가 발생했습니다.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  // 담당자 지정과 처리완료 표시는 입력자 제한과 무관하게 누구나 할 수 있다 —
+  // 실제 내용 수정(handleSave)과는 별도 경로라 canEdit과 상관없이 항상 노출.
+  async function handleToggleDone() {
+    const next = !done;
+    setTogglingDone(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin-inbox/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ done: next }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "상태 변경에 실패했습니다.");
+        return;
+      }
+      setDone(next);
+      onSaved();
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setTogglingDone(false);
+    }
+  }
+
+  async function handleSaveOwner() {
+    setSavingOwner(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin-inbox/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "담당자 저장에 실패했습니다.");
+        return;
+      }
+      onSaved();
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setSavingOwner(false);
     }
   }
 
@@ -117,7 +171,22 @@ export default function AdminInboxDetailModal({
           disabled={!canEdit}
         />
 
-        <p className="muted" style={{ marginTop: 8 }}>{item.done ? "처리완료" : "미처리"}</p>
+        <label htmlFor="editAdminOwner">담당자 (처리해야 할 사람)</label>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+          <div style={{ flex: 1 }}>
+            <StaffPicker value={owner} onChange={setOwner} label="" />
+          </div>
+          <button type="button" className="secondary" disabled={savingOwner} onClick={handleSaveOwner}>
+            {savingOwner ? "저장 중..." : "담당자 저장"}
+          </button>
+        </div>
+
+        <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10 }}>
+          <span className={done ? "badge badge-success" : "badge"}>{done ? "처리완료" : "미처리"}</span>
+          <button type="button" className="secondary" disabled={togglingDone} onClick={handleToggleDone}>
+            {togglingDone ? "처리 중..." : done ? "미처리로 되돌리기" : "처리완료로 표시"}
+          </button>
+        </div>
 
         {error && <p className="error-text">{error}</p>}
 
