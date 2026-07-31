@@ -46,13 +46,11 @@ function Donut({
   data,
   colors,
   centerPercent,
-  centerLabel,
 }: {
   title: string;
   data: Record<string, number>;
   colors: Record<string, string>;
   centerPercent?: number | null;
-  centerLabel?: string;
 }) {
   const chartData = Object.entries(data)
     .filter(([, v]) => v > 0)
@@ -86,10 +84,11 @@ function Donut({
                 transform: "translate(-50%, -50%)",
                 textAlign: "center",
                 pointerEvents: "none",
+                fontSize: 26,
+                fontWeight: 700,
               }}
             >
-              <div style={{ fontSize: 26, fontWeight: 700 }}>{centerPercent}%</div>
-              {centerLabel && <div style={{ fontSize: 11 }} className="muted">{centerLabel}</div>}
+              {centerPercent}%
             </div>
           )}
         </div>
@@ -144,21 +143,18 @@ export default function MonthlyOutcomeCharts() {
             data={attendance}
             colors={ATTENDANCE_COLORS}
             centerPercent={pct(attendance.출석, attendanceTotal)}
-            centerLabel="출석률"
           />
           <Donut
             title="단어테스트 결과분포"
             data={vocab}
             colors={VOCAB_COLORS}
             centerPercent={pct(vocab.통과, vocabTotal)}
-            centerLabel="통과율"
           />
           <Donut
             title="과제완료율"
             data={homework}
             colors={HOMEWORK_COLORS}
             centerPercent={pct(homework.완료, homeworkTotal)}
-            centerLabel="완료율"
           />
           <Donut title="상담자별 상담비율" data={data?.counselingByCounselor ?? {}} colors={{}} />
         </div>

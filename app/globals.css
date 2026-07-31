@@ -56,6 +56,11 @@ a {
   align-items: center;
 }
 
+.topbar-logo {
+  display: flex;
+  align-items: center;
+}
+
 .topbar a.navlink {
   padding: 6px 10px;
   border-radius: 8px;

@@ -39,7 +39,7 @@ function LoginForm() {
         setError(data.error ?? "로그인에 실패했습니다.");
         return;
       }
-      router.push(params.get("next") ?? "/dashboard");
+      router.push(data.mustChangePin ? "/change-pin" : params.get("next") ?? "/dashboard");
       router.refresh();
     } catch {
       setError("네트워크 오류가 발생했습니다.");

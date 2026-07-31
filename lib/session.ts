@@ -9,6 +9,7 @@ export type SessionData = {
   name: string;
   role: string | null;
   issuedAt: number;
+  mustChangePin?: boolean;
 };
 
 // middleware.ts forwards the verified staff name as an x-staff-name header

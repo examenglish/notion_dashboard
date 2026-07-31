@@ -23,9 +23,10 @@ export async function POST(req: NextRequest) {
     name: staff.name,
     role: staff.role,
     issuedAt: Date.now(),
+    mustChangePin: staff.mustChangePin,
   });
 
-  const res = NextResponse.json({ ok: true, name: staff.name, role: staff.role });
+  const res = NextResponse.json({ ok: true, name: staff.name, role: staff.role, mustChangePin: staff.mustChangePin });
   res.cookies.set(SESSION_COOKIE, cookieValue, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",

@@ -21,6 +21,18 @@ export async function middleware(req: NextRequest) {
     loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);
   }
+
+  // Staff who haven't set their own PIN yet (still on the temporary 1111)
+  // are locked to /change-pin until they do — everything else redirects
+  // there first, except the change-pin flow itself and logout.
+  const isChangePinRoute = pathname === "/change-pin" || pathname === "/api/change-pin" || pathname === "/api/logout";
+  if (session.mustChangePin && !isChangePinRoute) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "비밀번호를 먼저 변경해주세요." }, { status: 403 });
+    }
+    return NextResponse.redirect(new URL("/change-pin", req.url));
+  }
+
   // Forward the verified identity to API routes (e.g. so they can stamp
   // 입력자 on new records, or check "본인만 수정가능" on edits) without
   // each route re-verifying the session cookie itself. Header values must
@@ -33,5 +45,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/input/:path*", "/api/:path*"],
+  matcher: ["/dashboard/:path*", "/input/:path*", "/api/:path*", "/change-pin"],
 };

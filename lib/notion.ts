@@ -139,7 +139,18 @@ export async function findStaffByNameAndPin(name: string, pin: string) {
     id: page.id,
     name: getTitle(page, "이름"),
     role: getSelect(page, "역할"),
+    mustChangePin: getCheckbox(page, "비번변경필요"),
   };
+}
+
+export async function updateStaffPin(staffId: string, newPin: string) {
+  await notion.pages.update({
+    page_id: staffId,
+    properties: {
+      PIN: { rich_text: [{ text: { content: newPin } }] },
+      비번변경필요: { checkbox: false },
+    } as any,
+  });
 }
 
 export async function listClasses() {
