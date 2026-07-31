@@ -17,6 +17,7 @@ type MakeupEntry = { date: string | null; time: string; owner: string; done: boo
 type ActionEntry = { date: string | null; content: string; owner: string };
 type CounselingEntry = { date: string | null; counselor: string; content: string; followUp: string };
 type InquiryEntry = { date: string | null; type: string | null; content: string; done: boolean };
+type ClinicEntry = { date: string | null; assistant: string; content: string; nextPrep: string };
 
 type History = {
   progress: ProgressEntry[];
@@ -24,6 +25,7 @@ type History = {
   actions: ActionEntry[];
   counseling: CounselingEntry[];
   inquiries: InquiryEntry[];
+  clinic: ClinicEntry[];
 };
 
 type StudentBasic = { name: string; school: string; grade: string | null };
@@ -184,6 +186,24 @@ export default function StudentHistoryModal({
                       {q.done ? "처리완료" : "미처리"}
                       <br />
                       {q.content || "-"}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <h3 style={{ marginTop: 20 }}>클리닉 기록</h3>
+              {history.clinic.length === 0 ? (
+                <p className="muted">클리닉 기록이 없습니다.</p>
+              ) : (
+                <ul className="history-log">
+                  {history.clinic.map((c, i) => (
+                    <li key={i}>
+                      <strong>{c.date ?? "-"}</strong>
+                      {" · "}
+                      담당 조교: {c.assistant || "-"}
+                      <br />
+                      {c.content || "-"}
+                      {c.nextPrep && <div className="muted">다음 준비사항: {c.nextPrep}</div>}
                     </li>
                   ))}
                 </ul>

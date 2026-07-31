@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import StudentPicker from "./StudentPicker";
 import StaffPicker from "./StaffPicker";
 import DailyBriefingPreviewModal from "./DailyBriefingPreviewModal";
+import AssistantClinicForm from "./AssistantClinicForm";
 import { todayKST as todayStr } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
 
@@ -930,14 +931,18 @@ function StudentRegisterForm() {
   );
 }
 
-export default function InputClient({ role }: { role: string | null }) {
+export default function InputClient({ role }: { role: string | null; staffId?: string | null }) {
   // 원장/행정은 강사·조교·행정 입력폼을 모두 볼 수 있어야 하므로, "행정 전용"
-  // 폼들도 원장에게 함께 열어준다 (강사/조교는 그대로 자기 폼만 봄).
+  // 폼들도 원장에게 함께 열어준다. 조교는 강사의 "오늘 수업 기록"이 아니라
+  // 클리닉(코칭) 전용 폼을 쓴다 — 정규수업 진도가 아니라 1:1~1:다수 코칭이
+  // 업무의 핵심이라 강사 폼을 그대로 재사용할 수 없다.
   const isAdminLike = role === "행정" || role === "원장";
+  const isAssistant = role === "조교";
   return (
     <div className="page">
       {isAdminLike && <StudentRegisterForm />}
-      <ClassRecordForm />
+      {(isAssistant || isAdminLike) && <AssistantClinicForm />}
+      {!isAssistant && <ClassRecordForm />}
       <div className="grid-3">
         <ScheduleEntryForm />
         <CounselingForm />

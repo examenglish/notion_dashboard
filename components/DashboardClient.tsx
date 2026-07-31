@@ -51,6 +51,17 @@ type CounselingItem = {
   enteredBy?: string;
 };
 
+type ClinicItem = {
+  id: string;
+  date: string | null;
+  assistantName: string;
+  teacherName: string;
+  studentNames: string[];
+  content: string;
+  nextPrep: string;
+  checked: boolean;
+};
+
 type StudentListItem = StudentRow;
 
 type StudentDetail = {
@@ -79,6 +90,7 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [adminInbox, setAdminInbox] = useState<AdminInboxItem[]>([]);
   const [counseling, setCounseling] = useState<CounselingItem[]>([]);
+  const [clinicRecords, setClinicRecords] = useState<ClinicItem[]>([]);
   const [editingCounseling, setEditingCounseling] = useState<CounselingItem | null>(null);
   const [viewingAdminInbox, setViewingAdminInbox] = useState<AdminInboxItem | null>(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -99,9 +111,25 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
       .then(setAdminInbox);
   }
 
+  function reloadClinicRecords() {
+    fetch("/api/clinic-records")
+      .then((r) => r.json())
+      .then(setClinicRecords);
+  }
+
+  async function toggleClinicChecked(item: ClinicItem) {
+    await fetch(`/api/clinic-records/${item.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checked: !item.checked }),
+    });
+    reloadClinicRecords();
+  }
+
   useEffect(() => {
     reloadAdminInbox();
     reloadCounseling();
+    reloadClinicRecords();
   }, []);
 
   useEffect(() => {
@@ -259,6 +287,33 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
           )}
         />
       </div>
+
+      <RecentListCard
+        title="조교 클리닉 기록"
+        items={clinicRecords}
+        keyOf={(i) => i.id}
+        emptyText="클리닉 기록이 없습니다."
+        renderItem={(i) => (
+          <>
+            <div className="recent-list-meta">
+              {i.date ?? "-"} · 조교: <span className="badge">{i.assistantName}</span>{" "}
+              {i.teacherName !== "-" && <>· 담당강사: <span className="badge">{i.teacherName}</span>{" "}</>}
+              ·{" "}
+              <label
+                onClick={(e) => e.stopPropagation()}
+                style={{ display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer" }}
+              >
+                <input type="checkbox" checked={i.checked} onChange={() => toggleClinicChecked(i)} />
+                <span className={i.checked ? "badge badge-success" : "badge"}>{i.checked ? "확인완료" : "미확인"}</span>
+              </label>
+            </div>
+            <div className="compact-line">
+              <strong>{i.studentNames.join(", ") || "-"}</strong> — {i.content || "-"}
+            </div>
+            {i.nextPrep && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>다음 준비사항: {i.nextPrep}</div>}
+          </>
+        )}
+      />
 
       {editingCounseling && (
         <CounselingEditModal

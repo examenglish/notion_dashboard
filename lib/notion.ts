@@ -21,6 +21,7 @@ export const DB = {
   ADMIN_INBOX: process.env.NOTION_DB_ADMIN_INBOX!,
   TODO: process.env.NOTION_DB_TODO!,
   STAFF: process.env.NOTION_DB_STAFF!,
+  CLINIC: process.env.NOTION_DB_CLINIC!,
 };
 
 // ---- Property value extraction helpers ----
@@ -333,7 +334,7 @@ export async function getStudentFullHistory(studentId: string) {
     homeworkDone: r.homeworkDone,
   }));
 
-  const [makeupTodos, actionTodos, counselingEntries, inboxEntries, staffMap] = await Promise.all([
+  const [makeupTodos, actionTodos, counselingEntries, inboxEntries, clinicEntries, staffMap] = await Promise.all([
     queryAllPages({
       data_source_id: DB.TODO,
       filter: {
@@ -359,6 +360,10 @@ export async function getStudentFullHistory(studentId: string) {
     queryAllPages({
       data_source_id: DB.ADMIN_INBOX,
       filter: { property: "대상학생", relation: { contains: studentId } },
+    }),
+    queryAllPages({
+      data_source_id: DB.CLINIC,
+      filter: { property: "담당학생", relation: { contains: studentId } },
     }),
     staffNameMap(),
   ]);
@@ -404,7 +409,19 @@ export async function getStudentFullHistory(studentId: string) {
     }))
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
 
-  return { progress, makeup, actions, counseling, inquiries };
+  const clinic = clinicEntries
+    .map((p: any) => {
+      const assistantId = getRelationIds(p, "조교")[0];
+      return {
+        date: getDate(p, "날짜"),
+        assistant: assistantId ? staffMap.get(assistantId) ?? "-" : "-",
+        content: getRichText(p, "진행내용"),
+        nextPrep: getRichText(p, "다음준비사항"),
+      };
+    })
+    .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+
+  return { progress, makeup, actions, counseling, inquiries, clinic };
 }
 
 export async function getStudentExamScores(studentId: string) {
@@ -1200,7 +1217,7 @@ async function findStaffIdByName(name: string): Promise<string | null> {
 }
 
 export async function createScheduleEntry(input: {
-  type: "보강" | "재시" | "신입생상담" | "레벨체크";
+  type: "보강" | "재시" | "신입생상담" | "레벨체크" | "클리닉";
   studentId: string | null;
   date: string;
   time: string;
@@ -1220,6 +1237,7 @@ export async function createScheduleEntry(input: {
       ...(ownerId ? { 담당자: { relation: [{ id: ownerId }] } } : {}),
       예정일: { date: { start: input.date } },
       시간: { rich_text: [{ text: { content: input.time } }] },
+      ...(input.note ? { 메모: { rich_text: [{ text: { content: input.note } }] } } : {}),
       완료여부: { checkbox: false },
       우선순위: { select: { name: "보통" } },
     } as any,
@@ -1245,6 +1263,130 @@ export async function updateScheduleEntry(
     properties["담당자"] = { relation: ownerId ? [{ id: ownerId }] : [] };
   }
   await notion.pages.update({ page_id: id, properties });
+}
+
+// ---- 조교 클리닉 (DB⑮) ----
+// 조교는 정규수업이 아니라 강사를 도와 학생을 1:1~1:다수로 코칭하는 "클리닉"
+// 시간을 운영한다. 이 섹션은 그 세션 기록(누구를, 무엇을, 다음엔 뭘 준비할지)과
+// 조교 개인의 "오늘 할 일 / 다음 준비사항" 브리핑, 담당강사의 점검 기능을 담당한다.
+
+export async function createClinicRecord(input: {
+  assistantId: string;
+  studentIds: string[];
+  teacherId?: string;
+  date: string;
+  content: string;
+  nextPrep: string;
+}) {
+  const [assistantPage, studentPages] = await Promise.all([
+    notion.pages.retrieve({ page_id: input.assistantId }),
+    Promise.all(input.studentIds.map((id) => notion.pages.retrieve({ page_id: id }))),
+  ]);
+  const assistantName = getTitle(assistantPage as any, "이름");
+  const studentNamesJoined = studentPages.map((p: any) => getTitle(p, "이름")).join(", ");
+  await notion.pages.create({
+    parent: { data_source_id: DB.CLINIC } as any,
+    properties: {
+      제목: {
+        title: [
+          { text: { content: `${assistantName} 클리닉 ${input.date}${studentNamesJoined ? " - " + studentNamesJoined : ""}` } },
+        ],
+      },
+      조교: { relation: [{ id: input.assistantId }] },
+      ...(input.studentIds.length > 0 ? { 담당학생: { relation: input.studentIds.map((id) => ({ id })) } } : {}),
+      ...(input.teacherId ? { 담당강사: { relation: [{ id: input.teacherId }] } } : {}),
+      날짜: { date: { start: input.date } },
+      진행내용: { rich_text: [{ text: { content: input.content } }] },
+      ...(input.nextPrep ? { 다음준비사항: { rich_text: [{ text: { content: input.nextPrep } }] } } : {}),
+      확인완료: { checkbox: false },
+    } as any,
+  });
+}
+
+export async function updateClinicRecord(id: string, input: { checked?: boolean }) {
+  const properties: any = {};
+  if (input.checked !== undefined) properties["확인완료"] = { checkbox: input.checked };
+  await notion.pages.update({ page_id: id, properties });
+}
+
+// "출근했을 때 오늘 뭘 해야 하는지" — 담당자(조교)로 지정된 오늘자 할일.
+// "다음 준비사항" — 본인이 직전 클리닉 기록에 남긴 다음준비사항을 학생별로
+// 최신 것만 모아서 보여준다(같은 학생을 여러 번 봤으면 가장 최근 메모만 유효).
+export async function getAssistantBrief(assistantId: string, date: string) {
+  const [todayTodos, recentClinicRecords, names] = await Promise.all([
+    queryAllPages({
+      data_source_id: DB.TODO,
+      filter: {
+        and: [
+          { property: "담당자", relation: { contains: assistantId } },
+          { property: "예정일", date: { equals: date } },
+        ],
+      },
+    }),
+    queryAllPages({
+      data_source_id: DB.CLINIC,
+      filter: { property: "조교", relation: { contains: assistantId } },
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
+    }),
+    studentNameMap(),
+  ]);
+
+  const todayTasks = todayTodos
+    .map((p: any) => ({
+      id: p.id,
+      title: getTitle(p, "제목"),
+      type: getSelect(p, "유형"),
+      time: getRichText(p, "시간"),
+      studentName: firstRelationName(p, "관련학생", names),
+      memo: getRichText(p, "메모"),
+      done: getCheckbox(p, "완료여부"),
+    }))
+    .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+
+  const prepByStudent = new Map<string, { studentName: string; date: string | null; content: string }>();
+  for (const p of recentClinicRecords as any[]) {
+    const nextPrep = getRichText(p, "다음준비사항");
+    if (!nextPrep) continue;
+    const recordDate = getDate(p, "날짜");
+    for (const sid of getRelationIds(p, "담당학생")) {
+      if (prepByStudent.has(sid)) continue; // sorted desc, so first hit per student is the latest
+      prepByStudent.set(sid, { studentName: names.get(sid) ?? "-", date: recordDate, content: nextPrep });
+    }
+  }
+
+  return {
+    todayTasks,
+    upcomingPrep: Array.from(prepByStudent.values()),
+    recentClinic: recentClinicRecords.slice(0, 5).map((p: any) => ({
+      id: p.id,
+      date: getDate(p, "날짜"),
+      studentNames: getRelationIds(p, "담당학생").map((id) => names.get(id) ?? "-"),
+      content: getRichText(p, "진행내용"),
+      nextPrep: getRichText(p, "다음준비사항"),
+    })),
+  };
+}
+
+// 담당강사/원장/행정이 조교들의 클리닉 활동 전체를 훑어보고 확인 체크하는 용도.
+export async function getRecentClinicRecords() {
+  const [results, staffMap, studentNames] = await Promise.all([
+    queryAllPages({
+      data_source_id: DB.CLINIC,
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
+    }),
+    staffNameMap(),
+    studentNameMap(),
+  ]);
+  return results.map((p: any) => ({
+    id: p.id,
+    date: getDate(p, "날짜"),
+    assistantName: firstRelationName(p, "조교", staffMap),
+    teacherName: firstRelationName(p, "담당강사", staffMap),
+    studentNames: getRelationIds(p, "담당학생").map((id) => studentNames.get(id) ?? "-"),
+    content: getRichText(p, "진행내용"),
+    nextPrep: getRichText(p, "다음준비사항"),
+    checked: getCheckbox(p, "확인완료"),
+  }));
 }
 
 export async function createCounselingEntry(input: {

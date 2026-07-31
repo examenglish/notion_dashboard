@@ -7,7 +7,7 @@ export default async function InputPage() {
   return (
     <>
       <TopBar active="input" />
-      <InputClient role={session?.role ?? null} />
+      <InputClient role={session?.role ?? null} staffId={session?.staffId ?? null} />
     </>
   );
 }
