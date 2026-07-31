@@ -10,6 +10,9 @@ export type StudentRow = {
   school: string;
   grade: string | null;
   status: string | null;
+  phone?: string | null;
+  parentPhone?: string | null;
+  classNames?: string[];
   attendanceRate: number | null;
   homeworkRate: number | null;
   vocabPassRate: number | null;

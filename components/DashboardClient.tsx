@@ -176,6 +176,13 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
                   전체기록 보기
                 </button>
               </div>
+              <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+                {selected.student.status && `상태: ${selected.student.status}`}
+                {selected.student.status && " · "}
+                소속반: {selected.student.classNames && selected.student.classNames.length > 0 ? selected.student.classNames.join(", ") : "미배정"}
+                <br />
+                학생 연락처: {selected.student.phone || "-"} · 학부모 연락처: {selected.student.parentPhone || "-"}
+              </div>
               <div style={{ display: "flex", gap: 16, margin: "10px 0" }}>
                 <span className="badge">누적출석률 {pct(selected.student.attendanceRate)}</span>
                 <span className="badge">과제제출률 {pct(selected.student.homeworkRate)}</span>

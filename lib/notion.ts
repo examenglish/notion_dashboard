@@ -223,15 +223,24 @@ async function latestExamScoreMap(): Promise<
   return map;
 }
 
-function mapStudentPage(p: any, examMap: Map<string, any>) {
+async function classNameMap(): Promise<Map<string, string>> {
+  const classes = await listClasses();
+  return new Map(classes.map((c) => [c.id, stripClassSuffix(c.name)]));
+}
+
+function mapStudentPage(p: any, examMap: Map<string, any>, classNameById: Map<string, string>) {
   const enrolledAt = getDate(p, "등원일");
+  const classIds = getRelationIds(p, "소속반");
   return {
     id: p.id,
     name: getTitle(p, "이름"),
     school: getRichText(p, "학교"),
     grade: getSelect(p, "학년"),
     status: getSelect(p, "상태"),
-    classIds: getRelationIds(p, "소속반"),
+    phone: getPhone(p, "연락처"),
+    parentPhone: getPhone(p, "학부모연락처"),
+    classIds,
+    classNames: classIds.map((id) => classNameById.get(id) ?? "알수없음"),
     attendanceRate: getRollupNumber(p, "누적출석률"),
     homeworkRate: getRollupNumber(p, "누적숙제제출률"),
     vocabPassRate: getRollupNumber(p, "누적단어테스트통과율"),
@@ -247,24 +256,26 @@ function mapStudentPage(p: any, examMap: Map<string, any>) {
 }
 
 export async function searchStudents(query: string, classId?: string) {
-  const [results, examMap] = await Promise.all([
+  const [results, examMap, classById] = await Promise.all([
     queryAllPages({
       data_source_id: DB.STUDENT,
       filter: query ? { property: "이름", title: { contains: query } } : undefined,
     }),
     latestExamScoreMap(),
+    classNameMap(),
   ]);
-  let mapped = results.map((p: any) => mapStudentPage(p, examMap));
+  let mapped = results.map((p: any) => mapStudentPage(p, examMap, classById));
   if (classId) mapped = mapped.filter((s) => s.classIds.includes(classId));
   return mapped;
 }
 
 export async function getStudent(id: string) {
-  const [p, examMap]: [any, Map<string, any>] = await Promise.all([
+  const [p, examMap, classById]: [any, Map<string, any>, Map<string, string>] = await Promise.all([
     notion.pages.retrieve({ page_id: id }),
     latestExamScoreMap(),
+    classNameMap(),
   ]);
-  return mapStudentPage(p, examMap);
+  return mapStudentPage(p, examMap, classById);
 }
 
 export async function getStudentDailyRecords(studentId: string) {
