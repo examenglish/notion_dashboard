@@ -6,7 +6,9 @@ import { todayKST } from "@/lib/date";
 type StatusField = { status?: string | null };
 type AlarmItem = StatusField & { id: string; studentName: string; content: string };
 type FirstDayItem = StatusField & { id: string; studentName: string; classTime: string };
-type TodoItem = StatusField & { id: string; studentName: string; time: string };
+type TodoItem = StatusField & { id: string; studentName: string; time: string; memo?: string };
+type CounselingBrief = StatusField & { id: string; studentName: string; counselor: string; content: string };
+type InquiryBrief = StatusField & { id: string; studentName: string; type: string | null; content: string; done: boolean };
 
 type Schedule = {
   alarms: AlarmItem[];
@@ -14,6 +16,9 @@ type Schedule = {
   newStudentEvents: TodoItem[];
   makeupClasses: TodoItem[];
   retests: TodoItem[];
+  clinicTasks: TodoItem[];
+  counseling: CounselingBrief[];
+  inquiries: InquiryBrief[];
 };
 
 type TickerItem = { id: string; text: string; status: string | null };
@@ -52,6 +57,27 @@ export default function TodayTicker() {
         );
         d.retests?.forEach((t) =>
           msgs.push({ id: `r-${t.id}`, status: t.status ?? null, text: `${statusTag(t.status)}✏️ ${t.studentName} 재시 ${t.time || ""}` })
+        );
+        d.clinicTasks?.forEach((t) =>
+          msgs.push({
+            id: `c-${t.id}`,
+            status: t.status ?? null,
+            text: `${statusTag(t.status)}🧑‍🏫 ${t.studentName} 클리닉 ${t.time || ""}${t.memo ? " · " + t.memo : ""}`,
+          })
+        );
+        d.counseling?.forEach((c) =>
+          msgs.push({
+            id: `cs-${c.id}`,
+            status: c.status ?? null,
+            text: `${statusTag(c.status)}💬 ${c.studentName} 상담(${c.counselor || "-"}) ${c.content || ""}`,
+          })
+        );
+        d.inquiries?.forEach((q) =>
+          msgs.push({
+            id: `q-${q.id}`,
+            status: q.status ?? null,
+            text: `${statusTag(q.status)}${q.type === "긴급상담요청" ? "🚨" : "📮"} ${q.studentName} ${q.type ?? ""} ${q.done ? "(처리완료)" : ""}`,
+          })
         );
         setItems(msgs);
       })

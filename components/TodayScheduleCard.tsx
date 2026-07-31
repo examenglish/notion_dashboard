@@ -18,11 +18,23 @@ type TodoItem = {
   id: string;
   title: string;
   time: string;
+  memo?: string;
   studentName: string;
   school: string;
   gradeNum: string;
   owner: string;
   done: boolean;
+};
+type CounselingBrief = { id: string; studentName: string; school: string; gradeNum: string; counselor: string; content: string };
+type InquiryBrief = {
+  id: string;
+  studentName: string;
+  school: string;
+  gradeNum: string;
+  type: string | null;
+  content: string;
+  done: boolean;
+  owner: string;
 };
 
 type Schedule = {
@@ -31,16 +43,26 @@ type Schedule = {
   newStudentEvents: TodoItem[];
   makeupClasses: TodoItem[];
   retests: TodoItem[];
+  clinicTasks: TodoItem[];
+  counseling: CounselingBrief[];
+  inquiries: InquiryBrief[];
 };
 
 type SectionKey = keyof Schedule;
 
-const SECTION_META: { key: SectionKey; title: string }[] = [
+// 조교 클리닉/보강/재시/신입생상담은 DB⑱할일관리 기반이라 공용 수정·빠른등록
+// 모달(ScheduleEditModal/ScheduleQuickAddModal)을 그대로 재사용한다. 상담일지와
+// 행정실 문의는 이미 대시보드의 "상담일지"/"행정실" 카드에서 수정 가능하므로
+// 여기서는 훑어보기 전용으로만 보여준다(수정/빠른등록 버튼 없음).
+const SECTION_META: { key: SectionKey; title: string; readOnly?: boolean }[] = [
   { key: "alarms", title: "학습레벨/조치사항" },
   { key: "newStudentEvents", title: "신입생 상담 및 레벨테스트" },
   { key: "firstDays", title: "신입생 첫등원" },
   { key: "makeupClasses", title: "보강" },
   { key: "retests", title: "재시" },
+  { key: "clinicTasks", title: "클리닉" },
+  { key: "counseling", title: "상담일지", readOnly: true },
+  { key: "inquiries", title: "행정실 문의", readOnly: true },
 ];
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
@@ -136,14 +158,14 @@ function ScheduleSectionCard({
   onQuickAdd,
   render,
 }: {
-  meta: { key: SectionKey; title: string };
+  meta: { key: SectionKey; title: string; readOnly?: boolean };
   date: string;
   items: any[];
   loading: boolean;
   onShift: (delta: number) => void;
   onToday: () => void;
   onMore: () => void;
-  onQuickAdd: () => void;
+  onQuickAdd?: () => void;
   render: (item: any) => React.ReactNode;
 }) {
   const visible = items.slice(0, 5);
@@ -153,9 +175,11 @@ function ScheduleSectionCard({
         <span>
           {meta.title} <span className="muted">({items.length})</span>
         </span>
-        <button type="button" className="secondary schedule-quickadd-btn" onClick={onQuickAdd}>
-          ✏️ 글쓰기
-        </button>
+        {!meta.readOnly && onQuickAdd && (
+          <button type="button" className="secondary schedule-quickadd-btn" onClick={onQuickAdd}>
+            ✏️ 글쓰기
+          </button>
+        )}
       </div>
       <DateNav date={date} onShift={onShift} onToday={onToday} />
       {loading ? (
@@ -189,14 +213,14 @@ function SchedulePopup({
   onQuickAdd,
   render,
 }: {
-  meta: { key: SectionKey; title: string };
+  meta: { key: SectionKey; title: string; readOnly?: boolean };
   date: string;
   items: any[];
   loading: boolean;
   onShift: (delta: number) => void;
   onToday: () => void;
   onClose: () => void;
-  onQuickAdd: () => void;
+  onQuickAdd?: () => void;
   render: (item: any) => React.ReactNode;
 }) {
   return (
@@ -207,7 +231,9 @@ function SchedulePopup({
             {meta.title} <span className="muted">({items.length})</span>
           </h2>
           <div style={{ display: "flex", gap: 8 }}>
-            <button type="button" className="secondary" onClick={onQuickAdd}>✏️ 글쓰기</button>
+            {!meta.readOnly && onQuickAdd && (
+              <button type="button" className="secondary" onClick={onQuickAdd}>✏️ 글쓰기</button>
+            )}
             <button type="button" className="secondary" onClick={onClose}>닫기</button>
           </div>
         </div>
@@ -387,7 +413,13 @@ function ScheduleQuickAddModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const todoType = isNewStudentEvent ? subType : target.kind === "makeupClasses" ? "보강" : "재시";
+  const todoType = isNewStudentEvent
+    ? subType
+    : target.kind === "makeupClasses"
+    ? "보강"
+    : target.kind === "clinicTasks"
+    ? "클리닉"
+    : "재시";
 
   async function handleSave() {
     if ((isAlarm || isFirstDay) && !studentId) {
@@ -509,7 +541,16 @@ export default function TodayScheduleCard() {
   const { cache, ensureDate, refetchDate, markDone } = useScheduleCache();
   const [dates, setDates] = useState<Record<SectionKey, string>>(() => {
     const t = todayKST();
-    return { alarms: t, newStudentEvents: t, firstDays: t, makeupClasses: t, retests: t };
+    return {
+      alarms: t,
+      newStudentEvents: t,
+      firstDays: t,
+      makeupClasses: t,
+      retests: t,
+      clinicTasks: t,
+      counseling: t,
+      inquiries: t,
+    };
   });
   const [popup, setPopup] = useState<{ key: SectionKey; date: string } | null>(null);
   const [editing, setEditing] = useState<EditTarget | null>(null);
@@ -533,7 +574,7 @@ export default function TodayScheduleCard() {
     setDates((cur) => ({ ...cur, [key]: todayKST() }));
   }
 
-  async function completeItem(key: "newStudentEvents" | "makeupClasses", date: string, id: string) {
+  async function completeItem(key: "newStudentEvents" | "makeupClasses" | "clinicTasks", date: string, id: string) {
     markDone(date, key, id);
     await fetch(`/api/schedule-entry/${id}`, { method: "PATCH" });
   }
@@ -629,6 +670,61 @@ export default function TodayScheduleCard() {
               <span className="muted">· 보강자: {t.owner}</span>
             </label>
             {editBtn(t)}
+          </div>
+        );
+      case "clinicTasks":
+        return (t: TodoItem) => (
+          <div className="schedule-item-row">
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                margin: 0,
+                cursor: t.done ? "default" : "pointer",
+                textDecoration: t.done ? "line-through" : "none",
+                opacity: t.done ? 0.6 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={t.done}
+                disabled={t.done}
+                onChange={() => completeItem("clinicTasks", date, t.id)}
+              />
+              <strong>{t.studentName}</strong>
+              <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
+              <span className="muted">{t.time || "시간 미정"}</span>
+              <span className="muted">· 담당조교: {t.owner}</span>
+              {t.memo && <span className="muted">· {t.memo}</span>}
+            </label>
+            {editBtn(t)}
+          </div>
+        );
+      case "counseling":
+        return (c: CounselingBrief) => (
+          <div className="schedule-item-row">
+            <div>
+              <strong>{c.studentName}</strong> <span className="muted">{schoolGrade(c.school, c.gradeNum)}</span>
+              {", "}
+              <span className="muted">상담자: {c.counselor || "-"}</span>
+              <br />
+              <span className="muted">{c.content || "-"}</span>
+            </div>
+          </div>
+        );
+      case "inquiries":
+        return (q: InquiryBrief) => (
+          <div className="schedule-item-row">
+            <div>
+              <strong>{q.studentName}</strong> <span className="muted">{schoolGrade(q.school, q.gradeNum)}</span>
+              {" · "}
+              <span className={q.type === "긴급상담요청" ? "badge badge-urgent" : "badge"}>{q.type ?? "-"}</span>{" "}
+              <span className={q.done ? "badge badge-success" : "badge"}>{q.done ? "처리완료" : "미처리"}</span>
+              {q.owner && <span className="muted"> · 담당: {q.owner}</span>}
+              <br />
+              <span className="muted">{q.content || "-"}</span>
+            </div>
           </div>
         );
       case "retests":

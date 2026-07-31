@@ -687,23 +687,43 @@ async function staffNameMap(): Promise<Map<string, string>> {
 }
 
 export async function getTodaySchedule(today: string) {
-  const [alarmStudents, firstDayStudents, todoResults, names, classMap, staffMap] = await Promise.all([
-    queryAllPages({
-      data_source_id: DB.STUDENT,
-      filter: { property: "조치알람일", date: { equals: today } },
-    }),
-    queryAllPages({
-      data_source_id: DB.STUDENT,
-      filter: { property: "등원일", date: { equals: today } },
-    }),
-    queryAllPages({
-      data_source_id: DB.TODO,
-      filter: { property: "예정일", date: { equals: today } },
-    }),
-    studentNameMap(),
-    classInfoMap(),
-    staffNameMap(),
-  ]);
+  const [alarmStudents, firstDayStudents, todoResults, counselingResults, inquiriesByDate, inquiriesByRange, names, classMap, staffMap] =
+    await Promise.all([
+      queryAllPages({
+        data_source_id: DB.STUDENT,
+        filter: { property: "조치알람일", date: { equals: today } },
+      }),
+      queryAllPages({
+        data_source_id: DB.STUDENT,
+        filter: { property: "등원일", date: { equals: today } },
+      }),
+      queryAllPages({
+        data_source_id: DB.TODO,
+        filter: { property: "예정일", date: { equals: today } },
+      }),
+      queryAllPages({
+        data_source_id: DB.COUNSELING,
+        filter: { property: "날짜", date: { equals: today } },
+      }),
+      queryAllPages({
+        data_source_id: DB.ADMIN_INBOX,
+        filter: { property: "날짜", date: { equals: today } },
+      }),
+      // 결석예정처럼 시작일~종료일로 걸쳐있는 문의는 시작일이 오늘이 아니어도
+      // 오늘이 그 구간에 포함되면 "오늘의 일정"에 나와야 한다.
+      queryAllPages({
+        data_source_id: DB.ADMIN_INBOX,
+        filter: {
+          and: [
+            { property: "날짜", date: { on_or_before: today } },
+            { property: "종료일", date: { on_or_after: today } },
+          ],
+        },
+      }),
+      studentNameMap(),
+      classInfoMap(),
+      staffNameMap(),
+    ]);
 
   const alarms = alarmStudents.map((p: any) => ({
     id: p.id,
@@ -738,6 +758,7 @@ export async function getTodaySchedule(today: string) {
           id: p.id,
           title: getTitle(p, "제목"),
           time: getRichText(p, "시간"),
+          memo: getRichText(p, "메모"),
           studentName: studentId ? names.get(studentId) ?? "-" : "-",
           school: "", // filled in below once we know the student
           gradeNum: "",
@@ -756,12 +777,46 @@ export async function getTodaySchedule(today: string) {
       return { ...rest, school: info?.school ?? "", gradeNum: info?.gradeNum ?? "", status: info?.status ?? null };
     });
 
+  const counseling = counselingResults.map((p: any) => {
+    const studentId = getRelationIds(p, "학생")[0];
+    const brief = studentId ? studentBrief.get(studentId) : undefined;
+    return {
+      id: p.id,
+      studentName: studentId ? names.get(studentId) ?? "-" : "-",
+      school: brief?.school ?? "",
+      gradeNum: brief?.gradeNum ?? "",
+      counselor: getRichText(p, "상담자"),
+      content: getRichText(p, "상담내용"),
+      status: brief?.status ?? null,
+    };
+  });
+
+  const inquiryMap = new Map<string, any>();
+  for (const p of [...inquiriesByDate, ...inquiriesByRange] as any[]) {
+    const studentId = getRelationIds(p, "대상학생")[0];
+    const brief = studentId ? studentBrief.get(studentId) : undefined;
+    inquiryMap.set(p.id, {
+      id: p.id,
+      studentName: studentId ? names.get(studentId) ?? "-" : "전체",
+      school: brief?.school ?? "",
+      gradeNum: brief?.gradeNum ?? "",
+      type: getSelect(p, "입력유형"),
+      content: getRichText(p, "내용"),
+      done: getCheckbox(p, "처리완료"),
+      owner: getRichText(p, "담당자"),
+      status: brief?.status ?? null,
+    });
+  }
+
   return {
     alarms,
     firstDays,
     newStudentEvents: withStudentInfo(byTypes(["신입생상담", "레벨체크"])),
     makeupClasses: withStudentInfo(byTypes(["보강"])),
     retests: withStudentInfo(byTypes(["재시"])),
+    clinicTasks: withStudentInfo(byTypes(["클리닉"])),
+    counseling,
+    inquiries: Array.from(inquiryMap.values()),
   };
 }
 
