@@ -17,6 +17,7 @@ type Schedule = {
   makeupClasses: TodoItem[];
   retests: TodoItem[];
   clinicTasks: TodoItem[];
+  reviewTasks: TodoItem[];
   counseling: CounselingBrief[];
   inquiries: InquiryBrief[];
 };
@@ -63,6 +64,13 @@ export default function TodayTicker() {
             id: `c-${t.id}`,
             status: t.status ?? null,
             text: `${statusTag(t.status)}🧑‍🏫 ${t.studentName} 클리닉 ${t.time || ""}${t.memo ? " · " + t.memo : ""}`,
+          })
+        );
+        d.reviewTasks?.forEach((t) =>
+          msgs.push({
+            id: `rv-${t.id}`,
+            status: t.status ?? null,
+            text: `${statusTag(t.status)}📚 ${t.studentName} 복습${t.memo ? " · " + t.memo : ""}`,
           })
         );
         d.counseling?.forEach((c) =>

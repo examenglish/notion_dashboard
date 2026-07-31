@@ -32,6 +32,7 @@ function ClassRecordForm() {
   const [homework, setHomework] = useState("");
   const [nextAssignment, setNextAssignment] = useState("");
   const [notice, setNotice] = useState("");
+  const [reviewDays, setReviewDays] = useState("7");
   const [roster, setRoster] = useState<RosterStudent[]>([]);
   const [extraStudents, setExtraStudents] = useState<RosterStudent[]>([]);
   const [extraPickerId, setExtraPickerId] = useState("");
@@ -181,7 +182,7 @@ function ClassRecordForm() {
           nextAssignment,
           notice,
           perStudent,
-          ...(isEdit ? {} : { briefingTexts }),
+          ...(isEdit ? {} : { briefingTexts, reviewDays: reviewDays ? Number(reviewDays) : undefined }),
           extraStudentIds: extraStudents.map((s) => s.id),
         }),
       });
@@ -289,6 +290,20 @@ function ClassRecordForm() {
 
             <label htmlFor="notice">전달사항</label>
             <input id="notice" type="text" value={notice} onChange={(e) => setNotice(e.target.value)} />
+
+            {!existingProgressId && (
+              <>
+                <label htmlFor="reviewDays">복습 주기 (일 — 오늘 진도를 며칠 뒤 복습 알림으로 등록할지)</label>
+                <input
+                  id="reviewDays"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="예: 7 (비우면 복습 등록 안 함)"
+                  value={reviewDays}
+                  onChange={(e) => setReviewDays(e.target.value.replace(/\D/g, ""))}
+                />
+              </>
+            )}
 
             {error && <p className="error-text">{error}</p>}
             {done && <p className="success-box" style={{ marginTop: 12 }}>저장됐습니다.</p>}

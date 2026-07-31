@@ -246,6 +246,11 @@ function isWithinDays(dateStr: string | null, days: number): boolean {
   return diff >= 0 && diff <= days * DAY_MS;
 }
 
+function addDaysToDate(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
 // Latest exam score per student ("직전 학교시험 점수"), built from one full
 // scan of DB⑦ so we don't do a per-student round trip.
 async function latestExamScoreMap(): Promise<
@@ -383,7 +388,7 @@ export async function getStudentFullHistory(studentId: string) {
     homeworkDone: r.homeworkDone,
   }));
 
-  const [makeupTodos, actionTodos, counselingEntries, inboxEntries, clinicEntries, staffMap] = await Promise.all([
+  const [makeupTodos, actionTodos, reviewTodos, counselingEntries, inboxEntries, clinicEntries, staffMap] = await Promise.all([
     queryAllPages({
       data_source_id: DB.TODO,
       filter: {
@@ -398,6 +403,15 @@ export async function getStudentFullHistory(studentId: string) {
       filter: {
         and: [
           { property: "유형", select: { equals: "조치사항" } },
+          { property: "관련학생", relation: { contains: studentId } },
+        ],
+      },
+    }),
+    queryAllPages({
+      data_source_id: DB.TODO,
+      filter: {
+        and: [
+          { property: "유형", select: { equals: "복습" } },
           { property: "관련학생", relation: { contains: studentId } },
         ],
       },
@@ -470,7 +484,15 @@ export async function getStudentFullHistory(studentId: string) {
     })
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
 
-  return { progress, makeup, actions, counseling, inquiries, clinic };
+  const review = reviewTodos
+    .map((p: any) => ({
+      date: getDate(p, "예정일"),
+      content: getRichText(p, "메모"),
+      done: getCheckbox(p, "완료여부"),
+    }))
+    .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+
+  return { progress, makeup, actions, counseling, inquiries, clinic, review };
 }
 
 export async function getStudentExamScores(studentId: string) {
@@ -826,6 +848,7 @@ export async function getTodaySchedule(today: string) {
     makeupClasses: withStudentInfo(byTypes(["보강"])),
     retests: withStudentInfo(byTypes(["재시"])),
     clinicTasks: withStudentInfo(byTypes(["클리닉"])),
+    reviewTasks: withStudentInfo(byTypes(["복습"])),
     counseling,
     inquiries: Array.from(inquiryMap.values()),
   };
@@ -861,6 +884,9 @@ export async function createClassProgress(input: {
   // record (e.g. a makeup or guest attendee), in addition to the class's
   // own roster.
   extraStudentIds?: string[];
+  // 학생 복습 자동화: 0/undefined면 생성하지 않고, N이면 오늘 배운 내용을
+  // N일 뒤 "복습" 할일로 자동 예약해 "오늘의 일정"에 뜨게 한다.
+  reviewDays?: number;
 }) {
   const classPage: any = await notion.pages.retrieve({ page_id: input.classId });
   const className = getTitle(classPage, "반이름");
@@ -928,6 +954,22 @@ export async function createClassProgress(input: {
       } as any,
     });
     briefingIds.push(briefing.id);
+
+    if (input.reviewDays && input.reviewDays > 0) {
+      await notion.pages.create({
+        parent: { data_source_id: DB.TODO } as any,
+        properties: {
+          제목: { title: [{ text: { content: `복습 - ${studentName}` } }] },
+          유형: { select: { name: "복습" } },
+          관련학생: { relation: [{ id: studentId }] },
+          관련반: { relation: [{ id: input.classId }] },
+          예정일: { date: { start: addDaysToDate(input.date, input.reviewDays) } },
+          메모: { rich_text: [{ text: { content: input.progress } }] },
+          완료여부: { checkbox: false },
+          우선순위: { select: { name: "보통" } },
+        } as any,
+      });
+    }
   }
 
   await notion.pages.update({

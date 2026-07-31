@@ -64,6 +64,7 @@ type Schedule = {
   makeupClasses: TodoItem[];
   retests: TodoItem[];
   clinicTasks: TodoItem[];
+  reviewTasks: TodoItem[];
   counseling: CounselingBrief[];
   inquiries: InquiryBrief[];
 };
@@ -83,6 +84,10 @@ const SECTION_META: { key: SectionKey; title: string; readOnly?: boolean }[] = [
   { key: "makeupClasses", title: "보강" },
   { key: "retests", title: "재시" },
   { key: "clinicTasks", title: "클리닉" },
+  // 복습은 "오늘 수업 기록" 저장 시 복습 주기(일)에 맞춰 자동 생성되므로
+  // 여기서 수동으로 새로 만들 필요는 없지만(글쓰기 버튼 숨김), 완료 체크나
+  // 예정일 수정은 다른 TODO 섹션과 동일하게 가능하다.
+  { key: "reviewTasks", title: "복습", readOnly: true },
   { key: "counseling", title: "상담일지", readOnly: true },
   { key: "inquiries", title: "행정실 문의", readOnly: true },
 ];
@@ -441,6 +446,8 @@ function ScheduleQuickAddModal({
     ? "보강"
     : target.kind === "clinicTasks"
     ? "클리닉"
+    : target.kind === "reviewTasks"
+    ? "복습"
     : "재시";
 
   async function handleSave() {
@@ -576,6 +583,7 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
       makeupClasses: t,
       retests: t,
       clinicTasks: t,
+      reviewTasks: t,
       counseling: t,
       inquiries: t,
     };
@@ -602,7 +610,11 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
     setDates((cur) => ({ ...cur, [key]: todayKST() }));
   }
 
-  async function completeItem(key: "newStudentEvents" | "makeupClasses" | "clinicTasks", date: string, id: string) {
+  async function completeItem(
+    key: "newStudentEvents" | "makeupClasses" | "clinicTasks" | "reviewTasks",
+    date: string,
+    id: string
+  ) {
     markDone(date, key, id);
     await fetch(`/api/schedule-entry/${id}`, { method: "PATCH" });
   }
@@ -724,6 +736,33 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
               <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
               <span className="muted">{t.time || "시간 미정"}</span>
               <span className="muted">· 담당조교: {t.owner}</span>
+              {t.memo && <span className="muted">· {t.memo}</span>}
+            </label>
+            {editBtn(t)}
+          </div>
+        );
+      case "reviewTasks":
+        return (t: TodoItem) => (
+          <div className="schedule-item-row">
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                margin: 0,
+                cursor: t.done ? "default" : "pointer",
+                textDecoration: t.done ? "line-through" : "none",
+                opacity: t.done ? 0.6 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={t.done}
+                disabled={t.done}
+                onChange={() => completeItem("reviewTasks", date, t.id)}
+              />
+              <strong>{t.studentName}</strong>
+              <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
               {t.memo && <span className="muted">· {t.memo}</span>}
             </label>
             {editBtn(t)}

@@ -63,6 +63,7 @@ export async function POST(req: NextRequest) {
     perStudent,
     briefingTexts,
     extraStudentIds,
+    reviewDays,
   } = body ?? {};
 
   if ((!classId && !manualClassName) || !date || !progress) {
@@ -82,6 +83,7 @@ export async function POST(req: NextRequest) {
     perStudent: perStudent ?? {},
     briefingTexts: briefingTexts ?? undefined,
     extraStudentIds: Array.isArray(extraStudentIds) ? extraStudentIds : [],
+    reviewDays: reviewDays ? Number(reviewDays) : undefined,
   });
 
   return NextResponse.json({ ok: true, ...result });
