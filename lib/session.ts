@@ -31,9 +31,23 @@ function getSecret(): string {
   return secret;
 }
 
-function toBase64Url(bytes: ArrayBuffer): string {
-  const b64 = Buffer.from(bytes).toString("base64");
+// Buffer's Edge Runtime polyfill has shipped `__dirname` references in some
+// Next.js/Vercel builder versions, crashing middleware at cold start. These
+// stick to Web APIs (btoa/atob), which are available in both Edge and Node.
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const b64 = btoa(binary);
   return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function base64UrlToBytes(b64url: string): Uint8Array {
+  const padded = b64url + "=".repeat((4 - (b64url.length % 4)) % 4);
+  const b64 = padded.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 async function hmacKey(): Promise<CryptoKey> {
@@ -46,11 +60,11 @@ async function hmacKey(): Promise<CryptoKey> {
 async function sign(payload: string): Promise<string> {
   const key = await hmacKey();
   const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
-  return toBase64Url(signature);
+  return bytesToBase64Url(new Uint8Array(signature));
 }
 
 export async function createSessionCookieValue(data: SessionData): Promise<string> {
-  const payload = Buffer.from(JSON.stringify(data)).toString("base64url");
+  const payload = bytesToBase64Url(new TextEncoder().encode(JSON.stringify(data)));
   const signature = await sign(payload);
   return `${payload}.${signature}`;
 }
@@ -64,7 +78,7 @@ export async function verifySessionCookieValue(
   const expected = await sign(payload);
   if (expected.length !== signature.length || expected !== signature) return null;
   try {
-    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return JSON.parse(new TextDecoder().decode(base64UrlToBytes(payload)));
   } catch {
     return null;
   }
