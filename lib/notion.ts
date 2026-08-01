@@ -1,7 +1,10 @@
 import { Client } from "@notionhq/client";
+import { unstable_cache, revalidateTag } from "next/cache";
 import { todayKST } from "./date";
 import { formatBriefingText } from "./briefingFormat";
 import { stripClassSuffix } from "./format";
+
+const STAFF_CACHE_TAG = "staff-list";
 
 // Server-only. Never import this file from a "use client" component.
 if (typeof window !== "undefined") {
@@ -111,36 +114,41 @@ async function queryAllPages(params: {
   return results;
 }
 
+// 로그인 화면(직원 목록 조회 + PIN 확인)에서 매번 Notion을 직접 조회하면
+// 요청마다 왕복 지연이 그대로 로그인 속도로 이어진다. 직원 명단/PIN은
+// 자주 바뀌지 않으므로 짧은 TTL로 캐싱해 두 API가 같은 캐시를 공유하게 한다.
+const getCachedStaffList = unstable_cache(
+  async () => {
+    const res = await notion.dataSources.query({
+      data_source_id: DB.STAFF,
+      page_size: 100,
+    });
+    return res.results.map((p: any) => ({
+      id: p.id,
+      name: getTitle(p, "이름"),
+      role: getSelect(p, "역할"),
+      pin: getRichText(p, "PIN"),
+      mustChangePin: getCheckbox(p, "비번변경필요"),
+    }));
+  },
+  ["staff-list"],
+  { revalidate: 30, tags: [STAFF_CACHE_TAG] }
+);
+
 export async function listStaff() {
-  const res = await notion.dataSources.query({
-    data_source_id: DB.STAFF,
-    page_size: 100,
-  });
-  return res.results.map((p: any) => ({
-    id: p.id,
-    name: getTitle(p, "이름"),
-    role: getSelect(p, "역할"),
-  }));
+  const all = await getCachedStaffList();
+  return all.map(({ id, name, role }) => ({ id, name, role }));
 }
 
 export async function findStaffByNameAndPin(name: string, pin: string) {
-  const res = await notion.dataSources.query({
-    data_source_id: DB.STAFF,
-    filter: {
-      property: "이름",
-      title: { equals: name },
-    },
-    page_size: 1,
-  });
-  const page = res.results[0] as any;
-  if (!page) return null;
-  const actualPin = getRichText(page, "PIN");
-  if (actualPin !== pin) return null;
+  const all = await getCachedStaffList();
+  const staff = all.find((s) => s.name === name);
+  if (!staff || staff.pin !== pin) return null;
   return {
-    id: page.id,
-    name: getTitle(page, "이름"),
-    role: getSelect(page, "역할"),
-    mustChangePin: getCheckbox(page, "비번변경필요"),
+    id: staff.id,
+    name: staff.name,
+    role: staff.role,
+    mustChangePin: staff.mustChangePin,
   };
 }
 
@@ -152,6 +160,8 @@ export async function updateStaffPin(staffId: string, newPin: string) {
       비번변경필요: { checkbox: false },
     } as any,
   });
+  // PIN 변경 직후에도 캐시가 옛 PIN을 들고 있으면 안 되므로 즉시 무효화.
+  revalidateTag(STAFF_CACHE_TAG);
 }
 
 export async function listClasses() {
