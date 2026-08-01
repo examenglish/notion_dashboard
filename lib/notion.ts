@@ -25,6 +25,7 @@ export const DB = {
   TODO: process.env.NOTION_DB_TODO!,
   STAFF: process.env.NOTION_DB_STAFF!,
   CLINIC: process.env.NOTION_DB_CLINIC!,
+  MATERIAL: process.env.NOTION_DB_MATERIAL!,
 };
 
 // ---- Property value extraction helpers ----
@@ -88,6 +89,18 @@ export function getFormulaNumber(page: Page, prop: string): number | null {
 
 export function getCreatedBy(page: Page, prop: string): string | null {
   return page.properties?.[prop]?.created_by?.name ?? null;
+}
+
+export function getUrl(page: Page, prop: string): string | null {
+  return page.properties?.[prop]?.url ?? null;
+}
+
+export function getFiles(page: Page, prop: string): { name: string; url: string }[] {
+  const files = page.properties?.[prop]?.files ?? [];
+  return files.map((f: any) => ({
+    name: f.name ?? "파일",
+    url: (f.type === "file" ? f.file?.url : f.external?.url) ?? "",
+  }));
 }
 
 // ---- Domain helpers ----
@@ -1701,6 +1714,139 @@ export async function createCounselingEntry(input: {
       상담내용: { rich_text: [{ text: { content: input.summary } }] },
       후속조치: { rich_text: [{ text: { content: input.followUp } }] },
       ...(input.enteredBy ? { 입력자: { rich_text: [{ text: { content: input.enteredBy } }] } } : {}),
+    } as any,
+  });
+}
+
+// ---- 교재·시험자료 제작관리 (DB⑥) ----
+// 교사가 요청 → 담당자가 작업률/원본파일을 채워가는 흐름. 행정실(DB⑭)처럼
+// 전체 이력을 검색할 수 있어야 하고, 오늘의 일정에는 마감일 기준으로 노출된다.
+
+export type MaterialTask = {
+  id: string;
+  title: string;
+  requesterName: string;
+  ownerName: string;
+  content: string;
+  progress: number;
+  status: string;
+  dueDate: string | null;
+  fileLocation: string | null;
+  files: { name: string; url: string }[];
+};
+
+function toMaterialTask(p: any, staffMap: Map<string, string>): MaterialTask {
+  const requesterId = getRelationIds(p, "요청자")[0];
+  const ownerId = getRelationIds(p, "담당자")[0];
+  return {
+    id: p.id,
+    title: getTitle(p, "제목"),
+    requesterName: requesterId ? staffMap.get(requesterId) ?? "-" : "-",
+    ownerName: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
+    content: getRichText(p, "작업내용"),
+    progress: getNumber(p, "작업률") ?? 0,
+    status: getSelect(p, "상태") ?? "요청됨",
+    dueDate: getDate(p, "마감일"),
+    fileLocation: getUrl(p, "파일저장위치"),
+    files: getFiles(p, "원본파일"),
+  };
+}
+
+// 전체보기(행정실과 동일한 RecentListCard 재사용)용 — 마감일이 가까운 순.
+export async function listMaterialTasks(): Promise<MaterialTask[]> {
+  const [results, staffMap] = await Promise.all([
+    queryAllPages({ data_source_id: DB.MATERIAL }),
+    staffNameMap(),
+  ]);
+  return results
+    .map((p: any) => toMaterialTask(p, staffMap))
+    .sort((a, b) => (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99"));
+}
+
+// 오늘의 일정 섹션용 — 마감일이 정확히 그 날짜인 항목만.
+export async function getMaterialTasksForDate(date: string): Promise<MaterialTask[]> {
+  const [results, staffMap] = await Promise.all([
+    queryAllPages({
+      data_source_id: DB.MATERIAL,
+      filter: { property: "마감일", date: { equals: date } },
+    }),
+    staffNameMap(),
+  ]);
+  return results.map((p: any) => toMaterialTask(p, staffMap));
+}
+
+// 교사가 작업요청 — 담당자는 비워둔 채 등록 가능(나중에 배정).
+export async function createMaterialTask(input: {
+  title: string;
+  requesterName?: string;
+  ownerName?: string;
+  content: string;
+  dueDate: string;
+  fileLocation?: string;
+}) {
+  const [requesterId, ownerId] = await Promise.all([
+    input.requesterName ? findStaffIdByName(input.requesterName) : null,
+    input.ownerName ? findStaffIdByName(input.ownerName) : null,
+  ]);
+  await notion.pages.create({
+    parent: { data_source_id: DB.MATERIAL } as any,
+    properties: {
+      제목: { title: [{ text: { content: input.title } }] },
+      ...(requesterId ? { 요청자: { relation: [{ id: requesterId }] } } : {}),
+      ...(ownerId ? { 담당자: { relation: [{ id: ownerId }] } } : {}),
+      작업내용: { rich_text: [{ text: { content: input.content } }] },
+      작업률: { number: 0 },
+      상태: { select: { name: "요청됨" } },
+      마감일: { date: { start: input.dueDate } },
+      ...(input.fileLocation ? { 파일저장위치: { url: input.fileLocation } } : {}),
+    } as any,
+  });
+}
+
+export async function updateMaterialTask(
+  id: string,
+  input: {
+    ownerName?: string;
+    progress?: number;
+    status?: string;
+    fileLocation?: string;
+    content?: string;
+    dueDate?: string;
+  }
+) {
+  const properties: any = {};
+  if (input.ownerName !== undefined) {
+    const ownerId = input.ownerName ? await findStaffIdByName(input.ownerName) : null;
+    properties["담당자"] = { relation: ownerId ? [{ id: ownerId }] : [] };
+  }
+  if (input.progress !== undefined) properties["작업률"] = { number: input.progress };
+  if (input.status !== undefined) properties["상태"] = { select: { name: input.status } };
+  if (input.fileLocation !== undefined) properties["파일저장위치"] = { url: input.fileLocation || null };
+  if (input.content !== undefined) properties["작업내용"] = { rich_text: [{ text: { content: input.content } }] };
+  if (input.dueDate) properties["마감일"] = { date: { start: input.dueDate } };
+  await notion.pages.update({ page_id: id, properties });
+}
+
+// 원본파일 업로드 — 이 작업의 최신 원본으로 교체한다(누적 첨부는 지원하지
+// 않음: Notion API가 돌려주는 기존 파일은 "file"(만료 URL) 타입이라
+// file_upload로 재첨부할 수 없어, 여러 개를 유지하려는 시도 자체가 신뢰할
+// 수 없다).
+export async function uploadMaterialFile(
+  pageId: string,
+  filename: string,
+  contentType: string,
+  data: Blob
+) {
+  const created = await notion.fileUploads.create({
+    mode: "single_part",
+    filename,
+    content_type: contentType,
+  });
+  await notion.fileUploads.send({ file_upload_id: created.id, file: { filename, data } });
+  await notion.pages.update({
+    page_id: pageId,
+    properties: {
+      원본파일: { files: [{ type: "file_upload", file_upload: { id: created.id }, name: filename } as any] },
     } as any,
   });
 }

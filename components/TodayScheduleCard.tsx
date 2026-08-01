@@ -6,6 +6,7 @@ import StaffPicker from "./StaffPicker";
 import StudentPicker from "./StudentPicker";
 import CounselingEditModal, { CounselingRecord } from "./CounselingEditModal";
 import AdminInboxDetailModal, { AdminInboxRecord } from "./AdminInboxDetailModal";
+import MaterialTaskModal, { MaterialTaskRecord } from "./MaterialTaskModal";
 
 type AlarmItem = { id: string; studentName: string; school: string; content: string; counselor: string };
 type FirstDayItem = {
@@ -185,7 +186,7 @@ function ScheduleSectionCard({
   onQuickAdd,
   render,
 }: {
-  meta: { key: SectionKey; title: string; readOnly?: boolean };
+  meta: { key: string; title: string; readOnly?: boolean };
   date: string;
   items: any[];
   loading: boolean;
@@ -240,7 +241,7 @@ function SchedulePopup({
   onQuickAdd,
   render,
 }: {
-  meta: { key: SectionKey; title: string; readOnly?: boolean };
+  meta: { key: string; title: string; readOnly?: boolean };
   date: string;
   items: any[];
   loading: boolean;
@@ -615,6 +616,28 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
   const [editing, setEditing] = useState<EditTarget | null>(null);
   const [quickAdd, setQuickAdd] = useState<QuickAddTarget | null>(null);
 
+  // 교재·시험자료 제작관리는 별도 DB(DB⑥)라 위 useScheduleCache(/api/today-schedule
+  // 하나로 5개 섹션을 공유)에 끼워넣지 않고, 그 자체로 독립된 날짜 탐색기를
+  // 가진 섹션으로 붙인다. 카드/팝업 표시는 기존 ScheduleSectionCard·
+  // SchedulePopup을 그대로 재사용한다.
+  const [materialDate, setMaterialDate] = useState(todayKST());
+  const [materialItems, setMaterialItems] = useState<MaterialTaskRecord[] | null>(null);
+  const [materialPopupOpen, setMaterialPopupOpen] = useState(false);
+  const [materialEditing, setMaterialEditing] = useState<MaterialTaskRecord | null>(null);
+  const [materialCreating, setMaterialCreating] = useState(false);
+
+  function fetchMaterial(date: string) {
+    setMaterialItems(null);
+    fetch(`/api/material-tasks?date=${date}`)
+      .then((r) => r.json())
+      .then(setMaterialItems);
+  }
+
+  useEffect(() => {
+    fetchMaterial(materialDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [materialDate]);
+
   useEffect(() => {
     Object.values(dates).forEach(ensureDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -862,6 +885,28 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
             />
           );
         })}
+        <ScheduleSectionCard
+          meta={{ key: "materialTasks", title: "교재·시험자료 제작" }}
+          date={materialDate}
+          items={materialItems ?? []}
+          loading={materialItems === null}
+          onShift={(d) => setMaterialDate((cur) => shiftDate(cur, d))}
+          onToday={() => setMaterialDate(todayKST())}
+          onMore={() => setMaterialPopupOpen(true)}
+          onQuickAdd={() => setMaterialCreating(true)}
+          render={(t: MaterialTaskRecord) => (
+            <div className="schedule-item-row schedule-item-clickable" onClick={() => setMaterialEditing(t)}>
+              <div>
+                <strong>{t.title}</strong> <span className="muted">담당: {t.ownerName}</span>
+                {" · "}
+                <span className={t.status === "완료" ? "badge badge-success" : "badge"}>{t.status}</span>{" "}
+                <span className="muted">{t.progress}%</span>
+                <br />
+                <span className="muted">{t.content || "-"}</span>
+              </div>
+            </div>
+          )}
+        />
       </div>
 
       {popup &&
@@ -954,6 +999,49 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
 
       {viewingClinicTask && (
         <ClinicTaskDetailModal item={viewingClinicTask} onClose={() => setViewingClinicTask(null)} />
+      )}
+
+      {materialPopupOpen && (
+        <SchedulePopup
+          meta={{ key: "materialTasks", title: "교재·시험자료 제작" }}
+          date={materialDate}
+          items={materialItems ?? []}
+          loading={materialItems === null}
+          onShift={(d) => setMaterialDate((cur) => shiftDate(cur, d))}
+          onToday={() => setMaterialDate(todayKST())}
+          onClose={() => setMaterialPopupOpen(false)}
+          onQuickAdd={() => setMaterialCreating(true)}
+          render={(t: MaterialTaskRecord) => (
+            <div className="schedule-item-row schedule-item-clickable" onClick={() => setMaterialEditing(t)}>
+              <div>
+                <strong>{t.title}</strong> <span className="muted">담당: {t.ownerName}</span>
+                {" · "}
+                <span className={t.status === "완료" ? "badge badge-success" : "badge"}>{t.status}</span>{" "}
+                <span className="muted">{t.progress}%</span>
+                <br />
+                <span className="muted">{t.content || "-"}</span>
+              </div>
+            </div>
+          )}
+        />
+      )}
+
+      {materialCreating && (
+        <MaterialTaskModal
+          item={null}
+          defaultDueDate={materialDate}
+          onClose={() => setMaterialCreating(false)}
+          onSaved={() => fetchMaterial(materialDate)}
+        />
+      )}
+
+      {materialEditing && (
+        <MaterialTaskModal
+          item={materialEditing}
+          defaultDueDate={materialDate}
+          onClose={() => setMaterialEditing(null)}
+          onSaved={() => fetchMaterial(materialDate)}
+        />
       )}
     </>
   );

@@ -22,6 +22,8 @@ import AdminInboxDetailModal, { AdminInboxRecord } from "./AdminInboxDetailModal
 import NaturalLanguageInput from "./NaturalLanguageInput";
 import TodayTicker from "./TodayTicker";
 import StudentHistoryModal from "./StudentHistoryModal";
+import MaterialTaskModal, { MaterialTaskRecord } from "./MaterialTaskModal";
+import { todayKST } from "@/lib/date";
 
 type AdminInboxItem = {
   id: string;
@@ -97,6 +99,11 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
   const [inboxQuery, setInboxQuery] = useState("");
   const [inboxType, setInboxType] = useState("");
   const [inboxStatus, setInboxStatus] = useState("");
+  const [materialTasks, setMaterialTasks] = useState<MaterialTaskRecord[]>([]);
+  const [viewingMaterialTask, setViewingMaterialTask] = useState<MaterialTaskRecord | null>(null);
+  const [materialCreating, setMaterialCreating] = useState(false);
+  const [materialQuery, setMaterialQuery] = useState("");
+  const [materialStatus, setMaterialStatus] = useState("");
 
   function canEdit(enteredBy?: string) {
     return !enteredBy || enteredBy === staffName;
@@ -120,6 +127,12 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
       .then(setClinicRecords);
   }
 
+  function reloadMaterialTasks() {
+    fetch("/api/material-tasks")
+      .then((r) => r.json())
+      .then(setMaterialTasks);
+  }
+
   async function toggleClinicChecked(item: ClinicItem) {
     await fetch(`/api/clinic-records/${item.id}`, {
       method: "PATCH",
@@ -133,6 +146,7 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
     reloadAdminInbox();
     reloadCounseling();
     reloadClinicRecords();
+    reloadMaterialTasks();
   }, []);
 
   useEffect(() => {
@@ -191,6 +205,16 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
       return haystack.includes(q);
     });
   }, [adminInbox, inboxQuery, inboxType, inboxStatus]);
+
+  const filteredMaterialTasks = useMemo(() => {
+    const q = materialQuery.trim().toLowerCase();
+    return materialTasks.filter((t) => {
+      if (materialStatus && t.status !== materialStatus) return false;
+      if (!q) return true;
+      const haystack = [t.title, t.content, t.ownerName, t.requesterName].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [materialTasks, materialQuery, materialStatus]);
 
   return (
     <div className="page">
@@ -362,6 +386,48 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
         )}
       />
 
+      <RecentListCard
+        title="교재·시험자료 제작"
+        items={filteredMaterialTasks}
+        totalCount={materialTasks.length}
+        keyOf={(i) => i.id}
+        onItemClick={(i) => setViewingMaterialTask(i)}
+        emptyText={materialTasks.length === 0 ? "등록된 작업이 없습니다." : "검색 조건에 맞는 항목이 없습니다."}
+        filters={
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              type="text"
+              placeholder="제목/내용/담당자/요청자로 검색"
+              value={materialQuery}
+              onChange={(e) => setMaterialQuery(e.target.value)}
+              style={{ flex: "1 1 200px" }}
+            />
+            <select value={materialStatus} onChange={(e) => setMaterialStatus(e.target.value)} style={{ flex: "0 0 auto" }}>
+              <option value="">전체 상태</option>
+              <option value="요청됨">요청됨</option>
+              <option value="진행중">진행중</option>
+              <option value="완료">완료</option>
+            </select>
+            <button type="button" className="secondary" style={{ flex: "0 0 auto" }} onClick={() => setMaterialCreating(true)}>
+              ✏️ 작업요청
+            </button>
+          </div>
+        }
+        renderItem={(i) => (
+          <>
+            <div className="recent-list-meta">
+              마감 {i.dueDate ?? "-"} · 요청: <span className="badge">{i.requesterName}</span> · 담당:{" "}
+              <span className="badge">{i.ownerName}</span> ·{" "}
+              <span className={i.status === "완료" ? "badge badge-success" : "badge"}>{i.status}</span>{" "}
+              <span className="muted">{i.progress}%</span>
+            </div>
+            <div className="compact-line">
+              <strong>{i.title}</strong> — {i.content || "-"}
+            </div>
+          </>
+        )}
+      />
+
       {editingCounseling && (
         <CounselingEditModal
           item={editingCounseling as CounselingRecord}
@@ -387,6 +453,24 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
           trendData={trendData}
           scoreData={scoreData}
           onClose={() => setShowHistory(false)}
+        />
+      )}
+
+      {viewingMaterialTask && (
+        <MaterialTaskModal
+          item={viewingMaterialTask}
+          defaultDueDate={viewingMaterialTask.dueDate ?? todayKST()}
+          onClose={() => setViewingMaterialTask(null)}
+          onSaved={reloadMaterialTasks}
+        />
+      )}
+
+      {materialCreating && (
+        <MaterialTaskModal
+          item={null}
+          defaultDueDate={todayKST()}
+          onClose={() => setMaterialCreating(false)}
+          onSaved={reloadMaterialTasks}
         />
       )}
     </div>
