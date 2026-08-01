@@ -3,7 +3,7 @@ import Image from "next/image";
 import { getSession } from "@/lib/auth";
 import LogoutButton from "./LogoutButton";
 
-export default async function TopBar({ active }: { active: "dashboard" | "input" }) {
+export default async function TopBar({ active }: { active: "dashboard" | "input" | "exam-prep" }) {
   const session = await getSession();
   return (
     <div className="topbar">
@@ -17,6 +17,9 @@ export default async function TopBar({ active }: { active: "dashboard" | "input"
         </Link>
         <Link href="/input" className={`navlink ${active === "input" ? "active" : ""}`}>
           입력
+        </Link>
+        <Link href="/exam-prep" className={`navlink ${active === "exam-prep" ? "active" : ""}`}>
+          시험대비
         </Link>
         <span className="muted">{session?.name} ({session?.role})</span>
         <LogoutButton />

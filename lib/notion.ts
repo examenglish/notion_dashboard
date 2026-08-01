@@ -3,6 +3,14 @@ import { unstable_cache, revalidateTag } from "next/cache";
 import { todayKST } from "./date";
 import { formatBriefingText } from "./briefingFormat";
 import { stripClassSuffix } from "./format";
+import {
+  type ExamPrepData,
+  type ExamPrepSheet,
+  type SchoolLevel,
+  computeProgress,
+  defaultDataFor,
+  levelFromGrade,
+} from "./examPrep";
 
 const STAFF_CACHE_TAG = "staff-list";
 
@@ -26,6 +34,7 @@ export const DB = {
   STAFF: process.env.NOTION_DB_STAFF!,
   CLINIC: process.env.NOTION_DB_CLINIC!,
   MATERIAL: process.env.NOTION_DB_MATERIAL!,
+  EXAM_PREP: process.env.NOTION_DB_EXAM_PREP!,
 };
 
 // ---- Property value extraction helpers ----
@@ -1862,6 +1871,184 @@ export async function uploadMaterialFile(
     page_id: pageId,
     properties: {
       원본파일: { files: [{ type: "file_upload", file_upload: { id: fileUploadId }, name: filename } as any] },
+    } as any,
+  });
+}
+
+// ---- 학생별 시험대비 (DB⑨) ----
+// Lesson별 암기여부, 워크북/기출모의고사 체크리스트처럼 학생마다 구조가
+// 가변적인 항목이 많아 Notion 속성을 30개 넘게 쪼개는 대신 "데이터" 필드
+// 하나에 JSON으로 저장하고, 이 앱이 구조화된 폼으로 읽고 쓴다(lib/examPrep.ts
+// 참고). 학생당 시험대비 시트는 하나만 유지 — 새 시험을 준비할 때는 시험명/
+// 범위를 바꿔가며 같은 시트를 이어서 편집한다(진도/기출 DB③④처럼 날짜별
+// 이력을 남기지 않음).
+
+function parseExamPrepData(raw: string, level: SchoolLevel): ExamPrepData {
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && (parsed.level === "중등" || parsed.level === "고등")) return parsed as ExamPrepData;
+    } catch {
+      // 손상된 JSON이면 빈 시트로 대체
+    }
+  }
+  return defaultDataFor(level);
+}
+
+export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet> {
+  const [student, res] = await Promise.all([
+    getStudent(studentId),
+    notion.dataSources.query({
+      data_source_id: DB.EXAM_PREP,
+      filter: { property: "학생", relation: { contains: studentId } },
+      sorts: [{ property: "갱신일", direction: "descending" }],
+      page_size: 1,
+    }),
+  ]);
+
+  const fallbackLevel = levelFromGrade(student.grade) ?? "중등";
+  const page = (res.results[0] as any) ?? null;
+  if (!page) {
+    return {
+      id: null,
+      studentId,
+      studentName: student.name,
+      school: student.school,
+      grade: student.grade,
+      level: fallbackLevel,
+      examTitle: "",
+      examRange: "",
+      examDate: null,
+      teacher: "",
+      progress: 0,
+      weakPoints: "",
+      updatedAt: null,
+      data: defaultDataFor(fallbackLevel),
+    };
+  }
+
+  const level = (getSelect(page, "학교급") as SchoolLevel | null) ?? fallbackLevel;
+  return {
+    id: page.id,
+    studentId,
+    studentName: student.name,
+    school: student.school,
+    grade: student.grade,
+    level,
+    examTitle: getRichText(page, "시험명"),
+    examRange: getRichText(page, "시험범위"),
+    examDate: getDate(page, "시험일"),
+    teacher: getRichText(page, "담당교사"),
+    progress: getNumber(page, "진행률") ?? 0,
+    weakPoints: getRichText(page, "취약부분"),
+    updatedAt: getDate(page, "갱신일"),
+    data: parseExamPrepData(getRichText(page, "데이터"), level),
+  };
+}
+
+export async function saveExamPrepSheet(input: {
+  id: string | null;
+  studentId: string;
+  level: SchoolLevel;
+  examTitle: string;
+  examRange: string;
+  examDate: string | null;
+  teacher: string;
+  weakPoints: string;
+  data: ExamPrepData;
+}): Promise<{ id: string; progress: number }> {
+  const progress = computeProgress(input.data);
+  const properties: any = {
+    학교급: { select: { name: input.level } },
+    시험명: { rich_text: [{ text: { content: input.examTitle } }] },
+    시험범위: { rich_text: [{ text: { content: input.examRange } }] },
+    담당교사: { rich_text: [{ text: { content: input.teacher } }] },
+    진행률: { number: progress },
+    취약부분: { rich_text: [{ text: { content: input.weakPoints } }] },
+    데이터: { rich_text: [{ text: { content: JSON.stringify(input.data) } }] },
+    갱신일: { date: { start: todayKST() } },
+    시험일: input.examDate ? { date: { start: input.examDate } } : { date: null },
+  };
+
+  if (input.id) {
+    await notion.pages.update({ page_id: input.id, properties });
+    return { id: input.id, progress };
+  }
+
+  const studentPage: any = await notion.pages.retrieve({ page_id: input.studentId });
+  const studentName = getTitle(studentPage, "이름");
+  const page = await notion.pages.create({
+    parent: { data_source_id: DB.EXAM_PREP } as any,
+    properties: {
+      제목: { title: [{ text: { content: `${studentName} ${input.examTitle || "시험대비"}` } }] },
+      학생: { relation: [{ id: input.studentId }] },
+      ...properties,
+    } as any,
+  });
+  return { id: page.id, progress };
+}
+
+// 현황판/진도표 — 시험대비 시트가 있는 모든 학생을 한 번에 모아온다.
+export async function listExamPrepOverview() {
+  const [results, examMap] = await Promise.all([
+    queryAllPages({ data_source_id: DB.EXAM_PREP, sorts: [{ property: "갱신일", direction: "descending" }] }),
+    latestExamScoreMap(),
+  ]);
+
+  // 학생별 최신 시트 하나만 남긴다(갱신일 내림차순 정렬이라 먼저 만난 것이 최신).
+  const byStudent = new Map<string, any>();
+  for (const p of results as any[]) {
+    const studentId = getRelationIds(p, "학생")[0];
+    if (!studentId || byStudent.has(studentId)) continue;
+    byStudent.set(studentId, p);
+  }
+
+  const studentIds = Array.from(byStudent.keys());
+  const students = await Promise.all(studentIds.map((id) => getStudent(id)));
+  const studentById = new Map(students.map((s) => [s.id, s]));
+
+  return studentIds.map((studentId) => {
+    const p = byStudent.get(studentId);
+    const s = studentById.get(studentId);
+    const level = (getSelect(p, "학교급") as SchoolLevel | null) ?? "중등";
+    return {
+      studentId,
+      studentName: s?.name ?? "-",
+      school: s?.school ?? "",
+      grade: s?.grade ?? null,
+      level,
+      examTitle: getRichText(p, "시험명"),
+      examRange: getRichText(p, "시험범위"),
+      examDate: getDate(p, "시험일"),
+      teacher: getRichText(p, "담당교사"),
+      progress: getNumber(p, "진행률") ?? 0,
+      weakPoints: getRichText(p, "취약부분"),
+      updatedAt: getDate(p, "갱신일"),
+      latestExam: examMap.get(studentId) ?? null,
+    };
+  });
+}
+
+// 시험결과 입력/저장 — 기존 DB⑦시험성적에 이어서 기록한다(대시보드의
+// "직전 학교시험 점수"/성적 추이 차트가 그대로 이 데이터를 함께 사용).
+export async function createExamScore(input: {
+  studentId: string;
+  examName: string;
+  subject?: string;
+  score: number;
+  date: string;
+}) {
+  const studentPage: any = await notion.pages.retrieve({ page_id: input.studentId });
+  const studentName = getTitle(studentPage, "이름");
+  await notion.pages.create({
+    parent: { data_source_id: DB.EXAM_SCORE } as any,
+    properties: {
+      제목: { title: [{ text: { content: `${studentName} ${input.examName}` } }] },
+      학생: { relation: [{ id: input.studentId }] },
+      시험명: { rich_text: [{ text: { content: input.examName } }] },
+      ...(input.subject ? { 과목: { select: { name: input.subject } } } : {}),
+      점수: { number: input.score },
+      날짜: { date: { start: input.date } },
     } as any,
   });
 }
