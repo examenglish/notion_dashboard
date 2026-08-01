@@ -21,7 +21,9 @@ export async function PUT(req: NextRequest, { params }: { params: { studentId: s
     examTitle: typeof body.examTitle === "string" ? body.examTitle : "",
     examRange: typeof body.examRange === "string" ? body.examRange : "",
     examDate: typeof body.examDate === "string" && body.examDate ? body.examDate : null,
-    teacher: typeof body.teacher === "string" ? body.teacher : readStaffName(req),
+    teachers: Array.isArray(body.teachers)
+      ? body.teachers.filter((t: unknown) => typeof t === "string")
+      : [readStaffName(req)].filter(Boolean),
     weakPoints: typeof body.weakPoints === "string" ? body.weakPoints : "",
     data: body.data,
   });

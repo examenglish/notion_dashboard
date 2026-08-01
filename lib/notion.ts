@@ -6,10 +6,14 @@ import { stripClassSuffix } from "./format";
 import {
   type ExamPrepData,
   type ExamPrepSheet,
+  type ExamPrepTemplate,
   type SchoolLevel,
+  computeCategoryBreakdown,
   computeProgress,
   defaultDataFor,
+  joinTeachers,
   levelFromGrade,
+  splitTeachers,
 } from "./examPrep";
 
 const STAFF_CACHE_TAG = "staff-list";
@@ -420,7 +424,7 @@ export async function getStudentFullHistory(studentId: string) {
     homeworkDone: r.homeworkDone,
   }));
 
-  const [makeupTodos, actionTodos, reviewTodos, counselingEntries, inboxEntries, clinicEntries, staffMap] = await Promise.all([
+  const [makeupTodos, actionTodos, reviewTodos, counselingEntries, inboxEntries, clinicEntries, staffMap, examPrepSheet] = await Promise.all([
     queryAllPages({
       data_source_id: DB.TODO,
       filter: {
@@ -461,6 +465,7 @@ export async function getStudentFullHistory(studentId: string) {
       filter: { property: "담당학생", relation: { contains: studentId } },
     }),
     staffNameMap(),
+    getExamPrepSheet(studentId),
   ]);
 
   const makeup = makeupTodos
@@ -524,7 +529,21 @@ export async function getStudentFullHistory(studentId: string) {
     }))
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
 
-  return { progress, makeup, actions, counseling, inquiries, clinic, review };
+  const examPrep = examPrepSheet.id
+    ? {
+        level: examPrepSheet.level,
+        examTitle: examPrepSheet.examTitle,
+        examRange: examPrepSheet.examRange,
+        examDate: examPrepSheet.examDate,
+        teachers: examPrepSheet.teachers,
+        progress: examPrepSheet.progress,
+        weakPoints: examPrepSheet.weakPoints,
+        updatedAt: examPrepSheet.updatedAt,
+        categories: computeCategoryBreakdown(examPrepSheet.data),
+      }
+    : null;
+
+  return { progress, makeup, actions, counseling, inquiries, clinic, review, examPrep };
 }
 
 export async function getStudentExamScores(studentId: string) {
@@ -1919,7 +1938,7 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
       examTitle: "",
       examRange: "",
       examDate: null,
-      teacher: "",
+      teachers: [],
       progress: 0,
       weakPoints: "",
       updatedAt: null,
@@ -1938,7 +1957,7 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
     examTitle: getRichText(page, "시험명"),
     examRange: getRichText(page, "시험범위"),
     examDate: getDate(page, "시험일"),
-    teacher: getRichText(page, "담당교사"),
+    teachers: splitTeachers(getRichText(page, "담당교사")),
     progress: getNumber(page, "진행률") ?? 0,
     weakPoints: getRichText(page, "취약부분"),
     updatedAt: getDate(page, "갱신일"),
@@ -1953,7 +1972,7 @@ export async function saveExamPrepSheet(input: {
   examTitle: string;
   examRange: string;
   examDate: string | null;
-  teacher: string;
+  teachers: string[];
   weakPoints: string;
   data: ExamPrepData;
 }): Promise<{ id: string; progress: number }> {
@@ -1962,7 +1981,7 @@ export async function saveExamPrepSheet(input: {
     학교급: { select: { name: input.level } },
     시험명: { rich_text: [{ text: { content: input.examTitle } }] },
     시험범위: { rich_text: [{ text: { content: input.examRange } }] },
-    담당교사: { rich_text: [{ text: { content: input.teacher } }] },
+    담당교사: { rich_text: [{ text: { content: joinTeachers(input.teachers) } }] },
     진행률: { number: progress },
     취약부분: { rich_text: [{ text: { content: input.weakPoints } }] },
     데이터: { rich_text: [{ text: { content: JSON.stringify(input.data) } }] },
@@ -1988,14 +2007,15 @@ export async function saveExamPrepSheet(input: {
   return { id: page.id, progress };
 }
 
-// 현황판/진도표 — 시험대비 시트가 있는 모든 학생을 한 번에 모아온다.
-export async function listExamPrepOverview() {
-  const [results, examMap] = await Promise.all([
-    queryAllPages({ data_source_id: DB.EXAM_PREP, sorts: [{ property: "갱신일", direction: "descending" }] }),
-    latestExamScoreMap(),
-  ]);
+// 학생별 최신 시험대비 시트 하나씩(페이지 + 학생 정보) — 현황판과
+// getExamPrepTemplate(동일 학교/학년 자동입력)이 공통으로 쓴다.
+async function getAllExamPrepEntries(): Promise<{ page: any; student: Awaited<ReturnType<typeof getStudent>> }[]> {
+  const results = await queryAllPages({
+    data_source_id: DB.EXAM_PREP,
+    sorts: [{ property: "갱신일", direction: "descending" }],
+  });
 
-  // 학생별 최신 시트 하나만 남긴다(갱신일 내림차순 정렬이라 먼저 만난 것이 최신).
+  // 갱신일 내림차순이라 학생별로 먼저 만난 것이 최신 시트.
   const byStudent = new Map<string, any>();
   for (const p of results as any[]) {
     const studentId = getRelationIds(p, "학생")[0];
@@ -2005,28 +2025,80 @@ export async function listExamPrepOverview() {
 
   const studentIds = Array.from(byStudent.keys());
   const students = await Promise.all(studentIds.map((id) => getStudent(id)));
-  const studentById = new Map(students.map((s) => [s.id, s]));
+  return studentIds.map((id, i) => ({ page: byStudent.get(id), student: students[i] }));
+}
 
-  return studentIds.map((studentId) => {
-    const p = byStudent.get(studentId);
-    const s = studentById.get(studentId);
+// 현황판/진도표 — 시험대비 시트가 있는 모든 학생을 한 번에 모아온다.
+export async function listExamPrepOverview() {
+  const [entries, examMap] = await Promise.all([getAllExamPrepEntries(), latestExamScoreMap()]);
+
+  return entries.map(({ page: p, student: s }) => {
     const level = (getSelect(p, "학교급") as SchoolLevel | null) ?? "중등";
+    const data = parseExamPrepData(getRichText(p, "데이터"), level);
     return {
-      studentId,
-      studentName: s?.name ?? "-",
-      school: s?.school ?? "",
-      grade: s?.grade ?? null,
+      studentId: s.id,
+      studentName: s.name,
+      school: s.school,
+      grade: s.grade,
       level,
       examTitle: getRichText(p, "시험명"),
       examRange: getRichText(p, "시험범위"),
       examDate: getDate(p, "시험일"),
-      teacher: getRichText(p, "담당교사"),
+      teachers: splitTeachers(getRichText(p, "담당교사")),
       progress: getNumber(p, "진행률") ?? 0,
       weakPoints: getRichText(p, "취약부분"),
       updatedAt: getDate(p, "갱신일"),
-      latestExam: examMap.get(studentId) ?? null,
+      latestExam: examMap.get(s.id) ?? null,
+      categories: computeCategoryBreakdown(data),
     };
   });
+}
+
+// 같은 학교+학년 학생들의 시험대비 시트를 모아 시험대비명/교과서/부교재/
+// 학교프린트/시험범위/담당교사 표기를 통일할 수 있도록 자동입력 값과
+// 자동완성 후보를 만든다. 대상이 하나도 없으면 null.
+export async function getExamPrepTemplate(input: {
+  school: string;
+  grade: string;
+  excludeStudentId: string;
+}): Promise<ExamPrepTemplate> {
+  const entries = await getAllExamPrepEntries();
+  const matches = entries.filter(
+    (e) => e.student.id !== input.excludeStudentId && e.student.school === input.school && e.student.grade === input.grade
+  );
+  if (matches.length === 0) return null;
+
+  const parsed = matches.map((e) => {
+    const level = (getSelect(e.page, "학교급") as SchoolLevel | null) ?? "중등";
+    return { page: e.page, level, data: parseExamPrepData(getRichText(e.page, "데이터"), level) };
+  });
+
+  const uniq = (vals: (string | null | undefined)[]) =>
+    Array.from(new Set(vals.filter((v): v is string => !!v && v.trim() !== "")));
+
+  // getAllExamPrepEntries()는 갱신일 내림차순이므로 matches[0]/parsed[0]가 최신.
+  const latest = parsed[0];
+  return {
+    level: latest.level,
+    latest: {
+      examTitle: getRichText(latest.page, "시험명"),
+      examRange: getRichText(latest.page, "시험범위"),
+      teachers: splitTeachers(getRichText(latest.page, "담당교사")),
+      textbook: latest.data.level === "중등" ? latest.data.middle.textbook : latest.data.high.textbook,
+      supplementary: latest.data.level === "중등" ? latest.data.middle.supplementary : latest.data.high.supplementary,
+      schoolPrint: latest.data.level === "중등" ? latest.data.middle.schoolPrint : "",
+    },
+    examTitleOptions: uniq(parsed.map((p) => getRichText(p.page, "시험명"))),
+    examRangeOptions: uniq(parsed.map((p) => getRichText(p.page, "시험범위"))),
+    textbookOptions: uniq(parsed.map((p) => (p.data.level === "중등" ? p.data.middle.textbook : p.data.high.textbook))),
+    supplementaryOptions: uniq(
+      parsed.map((p) => (p.data.level === "중등" ? p.data.middle.supplementary : p.data.high.supplementary))
+    ),
+    schoolPrintOptions: uniq(parsed.map((p) => (p.data.level === "중등" ? p.data.middle.schoolPrint : ""))),
+    schoolPrintItemLabels: uniq(
+      parsed.flatMap((p) => (p.data.level === "고등" ? p.data.high.schoolPrints.map((i) => i.label) : []))
+    ),
+  };
 }
 
 // 시험결과 입력/저장 — 기존 DB⑦시험성적에 이어서 기록한다(대시보드의

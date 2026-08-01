@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import StudentPicker from "./StudentPicker";
 import { todayKST } from "@/lib/date";
 import {
+  type CategoryBreakdown,
   type ExamPrepData,
   type ExamPrepSheet,
+  type ExamPrepTemplate,
   type LessonItem,
   type NamedItem,
   type SchoolLevel,
@@ -13,6 +15,7 @@ import {
   newLesson,
   newNamedItem,
   computeProgress,
+  computeCategoryBreakdown,
 } from "@/lib/examPrep";
 
 type OverviewRow = {
@@ -24,37 +27,74 @@ type OverviewRow = {
   examTitle: string;
   examRange: string;
   examDate: string | null;
-  teacher: string;
+  teachers: string[];
   progress: number;
   weakPoints: string;
   updatedAt: string | null;
   latestExam: { date: string; score: number | null; subject: string | null; examName: string } | null;
+  categories: CategoryBreakdown[];
 };
 
 type ExamScore = { date: string | null; examName: string; subject: string | null; score: number | null };
+type StaffOption = { id: string; name: string; role: string | null };
+
+function categoryColor(done: number, total: number): string {
+  if (total === 0) return "#94a3b8";
+  const ratio = done / total;
+  if (ratio >= 0.8) return "#22c55e";
+  if (ratio >= 0.4) return "#f59e0b";
+  return "#e5484d";
+}
 
 function ProgressBar({ value }: { value: number }) {
-  const color = value >= 80 ? "#22c55e" : value >= 40 ? "#f59e0b" : "#e5484d";
   return (
     <div style={{ background: "var(--border)", borderRadius: 6, height: 8, overflow: "hidden", minWidth: 70 }}>
-      <div style={{ width: `${Math.min(100, Math.max(0, value))}%`, background: color, height: "100%" }} />
+      <div
+        style={{
+          width: `${Math.min(100, Math.max(0, value))}%`,
+          background: categoryColor(value, 100),
+          height: "100%",
+        }}
+      />
+    </div>
+  );
+}
+
+// 진행률 하나만으로는 어느 영역이 약한지 안 보여서, Lesson암기/연습문제 또는
+// 기출모의고사/워크북 등 그룹별 완료 개수를 색상 배지로 따로 노출한다.
+function CategoryChips({ categories }: { categories: CategoryBreakdown[] }) {
+  if (categories.length === 0) return <span className="muted" style={{ fontSize: 12 }}>-</span>;
+  return (
+    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+      {categories.map((c) => (
+        <span
+          key={c.label}
+          className="badge"
+          style={{ background: categoryColor(c.done, c.total), color: "#fff", fontSize: 11 }}
+        >
+          {c.label} {c.done}/{c.total}
+        </span>
+      ))}
     </div>
   );
 }
 
 // 자주틀리는문제/기출문제/워크북 단계/기출모의고사/학교프린트/단어암기범위 등,
 // "이름 + 완료여부 + (선택)부가정보 + 메모" 형태를 공유하는 모든 리스트에서
-// 재사용하는 편집기.
+// 재사용하는 편집기. labelDatalist를 주면 항목명 입력에 자동완성 후보를 단다
+// (동일 학교/학년에서 이미 쓰인 이름으로 표기를 통일하기 위함).
 function NamedItemList({
   items,
   onChange,
   addLabel,
   detailPlaceholder,
+  labelDatalist,
 }: {
   items: NamedItem[];
   onChange: (items: NamedItem[]) => void;
   addLabel: string;
   detailPlaceholder?: string;
+  labelDatalist?: { id: string; options: string[] };
 }) {
   function update(i: number, patch: Partial<NamedItem>) {
     onChange(items.map((it, idx) => (idx === i ? { ...it, ...patch } : it)));
@@ -65,6 +105,13 @@ function NamedItemList({
   const doneCount = items.filter((i) => i.done).length;
   return (
     <div style={{ marginBottom: 14 }}>
+      {labelDatalist && (
+        <datalist id={labelDatalist.id}>
+          {labelDatalist.options.map((o) => (
+            <option key={o} value={o} />
+          ))}
+        </datalist>
+      )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span className="muted" style={{ fontSize: 12 }}>
           {items.length > 0 ? `${doneCount}/${items.length} 완료` : "등록된 항목이 없습니다."}
@@ -86,6 +133,7 @@ function NamedItemList({
             placeholder="항목명"
             value={item.label}
             onChange={(e) => update(i, { label: e.target.value })}
+            list={labelDatalist?.id}
             style={{ flex: "1 1 130px" }}
           />
           {detailPlaceholder !== undefined && (
@@ -196,6 +244,63 @@ function LessonList({ lessons, onChange }: { lessons: LessonItem[]; onChange: (l
   );
 }
 
+// 담당교사 복수선택 — 태그 클릭으로 토글, 검색으로 좁혀볼 수 있다.
+function TeacherMultiSelect({ selected, onChange }: { selected: string[]; onChange: (names: string[]) => void }) {
+  const [allStaff, setAllStaff] = useState<StaffOption[]>([]);
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    fetch("/api/staff")
+      .then((r) => r.json())
+      .then(setAllStaff);
+  }, []);
+
+  function toggle(name: string) {
+    onChange(selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
+  }
+
+  const filtered = allStaff.filter((s) => s.name.includes(query));
+
+  return (
+    <div>
+      <label>담당교사 (복수선택 가능)</label>
+      <input
+        type="text"
+        placeholder="이름으로 검색"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        style={{ marginBottom: 6 }}
+      />
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {filtered.map((s) => {
+          const active = selected.includes(s.name);
+          return (
+            <label
+              key={s.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                fontSize: 13,
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                padding: "4px 10px",
+                cursor: "pointer",
+                background: active ? "var(--primary)" : "transparent",
+                color: active ? "#fff" : "inherit",
+              }}
+            >
+              <input type="checkbox" checked={active} onChange={() => toggle(s.name)} style={{ display: "none" }} />
+              {s.name}
+            </label>
+          );
+        })}
+        {filtered.length === 0 && <span className="muted" style={{ fontSize: 12 }}>검색 결과가 없습니다.</span>}
+      </div>
+    </div>
+  );
+}
+
 function ScoreEntryForm({ studentId, onSaved }: { studentId: string; onSaved: () => void }) {
   const [examName, setExamName] = useState("");
   const [subject, setSubject] = useState("영어");
@@ -274,13 +379,14 @@ function ExamPrepEditor({
 }) {
   const [sheet, setSheet] = useState<ExamPrepSheet | null>(null);
   const [scores, setScores] = useState<ExamScore[]>([]);
+  const [template, setTemplate] = useState<ExamPrepTemplate>(null);
   const [loading, setLoading] = useState(true);
 
   const [level, setLevel] = useState<SchoolLevel>("중등");
   const [examTitle, setExamTitle] = useState("");
   const [examRange, setExamRange] = useState("");
   const [examDate, setExamDate] = useState("");
-  const [teacher, setTeacher] = useState("");
+  const [teachers, setTeachers] = useState<string[]>([]);
   const [weakPoints, setWeakPoints] = useState("");
   const [data, setData] = useState<ExamPrepData>(defaultDataFor("중등"));
 
@@ -301,13 +407,80 @@ function ExamPrepEditor({
         setExamTitle(sheetData.examTitle);
         setExamRange(sheetData.examRange);
         setExamDate(sheetData.examDate ?? "");
-        setTeacher(sheetData.teacher);
+        setTeachers(sheetData.teachers);
         setWeakPoints(sheetData.weakPoints);
         setData(sheetData.data);
         setScores(studentData.examScores ?? []);
+
+        if (!sheetData.school || !sheetData.grade) {
+          setTemplate(null);
+          return;
+        }
+        const params = new URLSearchParams({
+          school: sheetData.school,
+          grade: sheetData.grade,
+          excludeStudentId: studentId,
+        });
+        fetch(`/api/exam-prep/template?${params}`)
+          .then((r) => r.json())
+          .then((tpl: ExamPrepTemplate) => {
+            setTemplate(tpl);
+            // 새 시트(id 없음)라면 같은 학교/학년에서 이미 쓰던 값으로
+            // 빈 칸을 자동으로 채워 표기를 통일한다.
+            if (!sheetData.id && tpl) {
+              if (!sheetData.examTitle) setExamTitle(tpl.latest.examTitle);
+              if (!sheetData.examRange) setExamRange(tpl.latest.examRange);
+              if (sheetData.teachers.length === 0) setTeachers(tpl.latest.teachers);
+              setData((prev) => {
+                if (prev.level === "중등") {
+                  return {
+                    level: "중등",
+                    middle: {
+                      ...prev.middle,
+                      textbook: prev.middle.textbook || tpl.latest.textbook,
+                      supplementary: prev.middle.supplementary || tpl.latest.supplementary,
+                      schoolPrint: prev.middle.schoolPrint || tpl.latest.schoolPrint,
+                    },
+                  };
+                }
+                return {
+                  level: "고등",
+                  high: {
+                    ...prev.high,
+                    textbook: prev.high.textbook || tpl.latest.textbook,
+                    supplementary: prev.high.supplementary || tpl.latest.supplementary,
+                  },
+                };
+              });
+            }
+          });
       })
       .finally(() => setLoading(false));
   }, [studentId]);
+
+  function applyTemplate() {
+    if (!template) return;
+    setExamTitle(template.latest.examTitle);
+    setExamRange(template.latest.examRange);
+    setTeachers(template.latest.teachers);
+    setData((prev) => {
+      if (prev.level === "중등") {
+        return {
+          level: "중등",
+          middle: {
+            ...prev.middle,
+            textbook: template.latest.textbook,
+            supplementary: template.latest.supplementary,
+            schoolPrint: template.latest.schoolPrint,
+          },
+        };
+      }
+      return {
+        level: "고등",
+        high: { ...prev.high, textbook: template.latest.textbook, supplementary: template.latest.supplementary },
+      };
+    });
+  }
 
   function switchLevel(next: SchoolLevel) {
     if (next === level) return;
@@ -337,7 +510,7 @@ function ExamPrepEditor({
           examTitle,
           examRange,
           examDate: examDate || null,
-          teacher,
+          teachers,
           weakPoints,
           data,
         }),
@@ -359,6 +532,7 @@ function ExamPrepEditor({
   }
 
   const liveProgress = useMemo(() => computeProgress(data), [data]);
+  const liveCategories = useMemo(() => computeCategoryBreakdown(data), [data]);
 
   if (loading) return <p className="muted">불러오는 중...</p>;
   if (!sheet) return null;
@@ -381,16 +555,74 @@ function ExamPrepEditor({
         </div>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0", flexWrap: "wrap" }}>
         <ProgressBar value={liveProgress} />
         <span className="badge">진행률 {liveProgress}%</span>
+        <CategoryChips categories={liveCategories} />
         {sheet.updatedAt && <span className="muted" style={{ fontSize: 12 }}>최근 저장: {sheet.updatedAt}</span>}
       </div>
+
+      {template && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            background: "var(--bg)",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            padding: "8px 12px",
+            marginBottom: 10,
+            flexWrap: "wrap",
+            gap: 8,
+          }}
+        >
+          <span className="muted" style={{ fontSize: 12 }}>
+            같은 학교·학년 학생들의 최근 입력값이 있습니다 — 시험대비명/시험범위/교과서/부교재/학교프린트를 그대로 가져와
+            표기를 통일할 수 있어요.
+          </span>
+          <button type="button" className="secondary" onClick={applyTemplate} style={{ padding: "4px 10px", fontSize: 12 }}>
+            동일 학교·학년 값 적용
+          </button>
+        </div>
+      )}
+
+      <datalist id="examTitleOptions">
+        {(template?.examTitleOptions ?? []).map((o) => (
+          <option key={o} value={o} />
+        ))}
+      </datalist>
+      <datalist id="examRangeOptions">
+        {(template?.examRangeOptions ?? []).map((o) => (
+          <option key={o} value={o} />
+        ))}
+      </datalist>
+      <datalist id="textbookOptions">
+        {(template?.textbookOptions ?? []).map((o) => (
+          <option key={o} value={o} />
+        ))}
+      </datalist>
+      <datalist id="supplementaryOptions">
+        {(template?.supplementaryOptions ?? []).map((o) => (
+          <option key={o} value={o} />
+        ))}
+      </datalist>
+      <datalist id="schoolPrintOptions">
+        {(template?.schoolPrintOptions ?? []).map((o) => (
+          <option key={o} value={o} />
+        ))}
+      </datalist>
 
       <div className="field-row">
         <div>
           <label>시험명</label>
-          <input type="text" placeholder="예: 2026 2학기 중간고사" value={examTitle} onChange={(e) => setExamTitle(e.target.value)} />
+          <input
+            type="text"
+            list="examTitleOptions"
+            placeholder="예: 2026 2학기 중간고사"
+            value={examTitle}
+            onChange={(e) => setExamTitle(e.target.value)}
+          />
         </div>
         <div>
           <label>시험일</label>
@@ -400,11 +632,16 @@ function ExamPrepEditor({
       <div className="field-row">
         <div>
           <label>시험범위</label>
-          <input type="text" placeholder="예: 1~3과, 모의고사 18-24" value={examRange} onChange={(e) => setExamRange(e.target.value)} />
+          <input
+            type="text"
+            list="examRangeOptions"
+            placeholder="예: 1~3과, 모의고사 18-24"
+            value={examRange}
+            onChange={(e) => setExamRange(e.target.value)}
+          />
         </div>
         <div>
-          <label>담당교사</label>
-          <input type="text" value={teacher} onChange={(e) => setTeacher(e.target.value)} />
+          <TeacherMultiSelect selected={teachers} onChange={setTeachers} />
         </div>
       </div>
 
@@ -425,6 +662,7 @@ function ExamPrepEditor({
               <label>교과서</label>
               <input
                 type="text"
+                list="textbookOptions"
                 value={data.middle.textbook}
                 onChange={(e) => setData({ level: "중등", middle: { ...data.middle, textbook: e.target.value } })}
               />
@@ -433,6 +671,7 @@ function ExamPrepEditor({
               <label>부교재</label>
               <input
                 type="text"
+                list="supplementaryOptions"
                 value={data.middle.supplementary}
                 onChange={(e) => setData({ level: "중등", middle: { ...data.middle, supplementary: e.target.value } })}
               />
@@ -441,6 +680,7 @@ function ExamPrepEditor({
           <label>학교 프린트</label>
           <input
             type="text"
+            list="schoolPrintOptions"
             value={data.middle.schoolPrint}
             onChange={(e) => setData({ level: "중등", middle: { ...data.middle, schoolPrint: e.target.value } })}
           />
@@ -469,6 +709,7 @@ function ExamPrepEditor({
               <label>교과서</label>
               <input
                 type="text"
+                list="textbookOptions"
                 value={data.high.textbook}
                 onChange={(e) => setData({ level: "고등", high: { ...data.high, textbook: e.target.value } })}
               />
@@ -477,6 +718,7 @@ function ExamPrepEditor({
               <label>부교재</label>
               <input
                 type="text"
+                list="supplementaryOptions"
                 value={data.high.supplementary}
                 onChange={(e) => setData({ level: "고등", high: { ...data.high, supplementary: e.target.value } })}
               />
@@ -512,6 +754,11 @@ function ExamPrepEditor({
             onChange={(schoolPrints) => setData({ level: "고등", high: { ...data.high, schoolPrints } })}
             addLabel="프린트 추가"
             detailPlaceholder="출처"
+            labelDatalist={
+              template?.schoolPrintItemLabels?.length
+                ? { id: "schoolPrintItemLabels", options: template.schoolPrintItemLabels }
+                : undefined
+            }
           />
 
           <p style={{ marginBottom: 4, fontWeight: 600 }}>해당범위 단어암기</p>
@@ -601,7 +848,9 @@ export default function ExamPrepClient() {
       <div className="card">
         <h2>학생별 시험대비</h2>
         <p className="muted" style={{ marginTop: 0 }}>
-          학생을 검색해 시험대비 시트를 작성/저장하세요. 아래 현황판에서 진행률이 낮은 순으로 취약 학생을 바로 확인할 수 있습니다.
+          학생을 검색해 시험대비 시트를 작성/저장하세요. 같은 학교·학년 학생이 이미 있으면 시험대비명/시험범위/교과서/
+          부교재/학교프린트를 자동으로 불러와 표기를 통일합니다. 아래 현황판에서 진행률이 낮은 순으로 취약 학생을 바로
+          확인할 수 있습니다.
         </p>
         <StudentPicker studentId={studentId} onChange={setStudentId} label="학생 검색" />
       </div>
@@ -643,7 +892,9 @@ export default function ExamPrepClient() {
                   <th>학생</th>
                   <th>학교급</th>
                   <th>시험명 / 범위</th>
+                  <th>담당교사</th>
                   <th>진행률</th>
+                  <th>항목별 성취</th>
                   <th>최근 시험성적</th>
                   <th>취약부분</th>
                   <th>갱신일</th>
@@ -663,11 +914,15 @@ export default function ExamPrepClient() {
                       {r.examTitle || "-"}
                       {r.examRange && <div className="muted" style={{ fontSize: 12 }}>{r.examRange}</div>}
                     </td>
+                    <td>{r.teachers.length > 0 ? r.teachers.join(", ") : "-"}</td>
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <ProgressBar value={r.progress} />
                         <span style={{ fontSize: 12 }}>{r.progress}%</span>
                       </div>
+                    </td>
+                    <td>
+                      <CategoryChips categories={r.categories} />
                     </td>
                     <td>
                       {r.latestExam

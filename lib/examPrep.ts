@@ -58,12 +58,33 @@ export type ExamPrepSheet = {
   examTitle: string;
   examRange: string;
   examDate: string | null;
-  teacher: string;
+  teachers: string[];
   progress: number;
   weakPoints: string;
   updatedAt: string | null;
   data: ExamPrepData;
 };
+
+// 같은 학교+학년 학생들 사이에서 시험대비명/교과서/부교재/학교프린트/시험범위
+// 표기가 제각각이 되지 않도록, 이미 입력된 값들을 모아 자동입력/자동완성에
+// 쓰는 응답 형태. getExamPrepTemplate(lib/notion.ts)이 채워준다.
+export type ExamPrepTemplate = {
+  level: SchoolLevel;
+  latest: {
+    examTitle: string;
+    examRange: string;
+    teachers: string[];
+    textbook: string;
+    supplementary: string;
+    schoolPrint: string;
+  };
+  examTitleOptions: string[];
+  examRangeOptions: string[];
+  textbookOptions: string[];
+  supplementaryOptions: string[];
+  schoolPrintOptions: string[];
+  schoolPrintItemLabels: string[];
+} | null;
 
 function makeId(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -112,35 +133,54 @@ export function newNamedItem(): NamedItem {
   return namedItem("");
 }
 
-// 0~100 진행률 — Lesson 암기 체크(본문/대화문 각 1개) + 각 리스트의 완료 체크
-// 총합 대비 완료 개수 비율. 텍스트 필드(진도/메모 등)는 진행률에 반영하지 않는다.
-export function computeProgress(data: ExamPrepData): number {
-  let done = 0;
-  let total = 0;
+export type CategoryBreakdown = { label: string; done: number; total: number };
+
+// 항목 그룹별(Lesson 암기/연습문제, 또는 기출모의고사/워크북 등) 완료 개수 —
+// 전체 진행률 하나만으로는 "어느 영역이 약한지"가 안 보여서, 현황판과
+// 학생 히스토리에서 그룹별로 따로 노출한다.
+export function computeCategoryBreakdown(data: ExamPrepData): CategoryBreakdown[] {
   if (data.level === "중등") {
-    for (const l of data.middle.lessons) {
-      total += 2;
-      if (l.bodyMemorized) done += 1;
-      if (l.dialogueMemorized) done += 1;
-    }
-    total += data.middle.practiceItems.length;
-    done += data.middle.practiceItems.filter((i) => i.done).length;
-  } else {
-    const lists = [
-      data.high.mockExams,
-      data.high.mockExams2,
-      data.high.schoolPrints,
-      data.high.vocabItems,
-      data.high.workbook,
-      data.high.transformedProblems,
+    const lessonDone = data.middle.lessons.reduce(
+      (sum, l) => sum + (l.bodyMemorized ? 1 : 0) + (l.dialogueMemorized ? 1 : 0),
+      0
+    );
+    return [
+      { label: "Lesson 암기", done: lessonDone, total: data.middle.lessons.length * 2 },
+      { label: "연습문제", done: data.middle.practiceItems.filter((i) => i.done).length, total: data.middle.practiceItems.length },
     ];
-    for (const list of lists) {
-      total += list.length;
-      done += list.filter((i) => i.done).length;
-    }
   }
+  const lists: [string, NamedItem[]][] = [
+    ["기출모의고사", data.high.mockExams],
+    ["기출모의고사2", data.high.mockExams2],
+    ["학교프린트", data.high.schoolPrints],
+    ["단어암기", data.high.vocabItems],
+    ["워크북", data.high.workbook],
+    ["변형문제", data.high.transformedProblems],
+  ];
+  return lists.map(([label, items]) => ({ label, done: items.filter((i) => i.done).length, total: items.length }));
+}
+
+// 0~100 진행률 — computeCategoryBreakdown의 그룹별 완료/전체를 모두 합산한
+// 비율. 텍스트 필드(진도/메모 등)는 진행률에 반영하지 않는다.
+export function computeProgress(data: ExamPrepData): number {
+  const categories = computeCategoryBreakdown(data);
+  const total = categories.reduce((sum, c) => sum + c.total, 0);
+  const done = categories.reduce((sum, c) => sum + c.done, 0);
   if (total === 0) return 0;
   return Math.round((done / total) * 100);
+}
+
+export function joinTeachers(teachers: string[]): string {
+  return teachers.map((t) => t.trim()).filter(Boolean).join(", ");
+}
+
+export function splitTeachers(raw: string): string[] {
+  return raw
+    ? raw
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean)
+    : [];
 }
 
 // DB②학년(중1~고3)에서 중/고 구분만 뽑아낸다. 초등학생은 시험대비 대상이

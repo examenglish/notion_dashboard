@@ -19,6 +19,18 @@ type CounselingEntry = { date: string | null; counselor: string; content: string
 type InquiryEntry = { date: string | null; type: string | null; content: string; done: boolean };
 type ClinicEntry = { date: string | null; assistant: string; content: string; nextPrep: string };
 type ReviewEntry = { date: string | null; content: string; done: boolean };
+type CategoryBreakdown = { label: string; done: number; total: number };
+type ExamPrepSummary = {
+  level: "중등" | "고등";
+  examTitle: string;
+  examRange: string;
+  examDate: string | null;
+  teachers: string[];
+  progress: number;
+  weakPoints: string;
+  updatedAt: string | null;
+  categories: CategoryBreakdown[];
+};
 
 type History = {
   progress: ProgressEntry[];
@@ -28,7 +40,16 @@ type History = {
   inquiries: InquiryEntry[];
   clinic: ClinicEntry[];
   review: ReviewEntry[];
+  examPrep: ExamPrepSummary | null;
 };
+
+function categoryColor(done: number, total: number): string {
+  if (total === 0) return "#94a3b8";
+  const ratio = done / total;
+  if (ratio >= 0.8) return "#22c55e";
+  if (ratio >= 0.4) return "#f59e0b";
+  return "#e5484d";
+}
 
 type StudentBasic = { name: string; school: string; grade: string | null };
 
@@ -101,6 +122,41 @@ export default function StudentHistoryModal({
           {!loading && !history && <p className="muted" style={{ marginTop: 16 }}>기록을 불러오지 못했습니다.</p>}
           {!loading && history && (
             <>
+              <h3 style={{ marginTop: 16 }}>시험대비 현황</h3>
+              {!history.examPrep ? (
+                <p className="muted">등록된 시험대비 시트가 없습니다.</p>
+              ) : (
+                <div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <span className="badge">{history.examPrep.level}</span>
+                    <strong>{history.examPrep.examTitle || "시험명 미입력"}</strong>
+                    {history.examPrep.examRange && <span className="muted">({history.examPrep.examRange})</span>}
+                    <span className="badge">진행률 {history.examPrep.progress}%</span>
+                  </div>
+                  <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+                    담당교사: {history.examPrep.teachers.length > 0 ? history.examPrep.teachers.join(", ") : "-"}
+                    {history.examPrep.examDate && ` · 시험일: ${history.examPrep.examDate}`}
+                    {history.examPrep.updatedAt && ` · 최근 저장: ${history.examPrep.updatedAt}`}
+                  </div>
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 6 }}>
+                    {history.examPrep.categories.map((c) => (
+                      <span
+                        key={c.label}
+                        className="badge"
+                        style={{ background: categoryColor(c.done, c.total), color: "#fff", fontSize: 11 }}
+                      >
+                        {c.label} {c.done}/{c.total}
+                      </span>
+                    ))}
+                  </div>
+                  {history.examPrep.weakPoints && (
+                    <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                      취약부분: {history.examPrep.weakPoints}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <h3 style={{ marginTop: 20 }}>진도 / 과제 기록</h3>
               {history.progress.length === 0 ? (
                 <p className="muted">기록이 없습니다.</p>
