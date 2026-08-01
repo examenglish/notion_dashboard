@@ -10,6 +10,7 @@ export default async function TopBar({ active }: { active: "dashboard" | "input"
       <Link href="/dashboard" className="topbar-logo">
         <Image src="/logo.png" alt="이그잼영어학원" width={843} height={157} priority style={{ height: 32, width: "auto" }} />
       </Link>
+      <span className="topbar-branch">{process.env.NEXT_PUBLIC_BRANCH_NAME ?? "이그잼영어학원"}</span>
       <nav>
         <Link href="/dashboard" className={`navlink ${active === "dashboard" ? "active" : ""}`}>
           대시보드

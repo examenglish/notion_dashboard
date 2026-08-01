@@ -61,6 +61,12 @@ a {
   align-items: center;
 }
 
+.topbar-branch {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
 .topbar a.navlink {
   padding: 6px 10px;
   border-radius: 8px;
