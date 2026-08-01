@@ -118,7 +118,7 @@ export default function AdminInboxDetailModal({
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>
-            행정실 {canEdit ? "수정" : "상세"} — {item.studentName}
+            {item.studentName} 행정실 {canEdit ? "수정" : "상세"}
             {item.studentSchool && (
               <span className="muted"> {item.studentSchool}{item.studentGrade ? `(${item.studentGrade})` : ""}</span>
             )}

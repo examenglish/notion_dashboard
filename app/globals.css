@@ -349,6 +349,9 @@ th, td {
   max-width: 640px;
   max-height: 85vh;
   overflow-y: auto;
+  /* 담당자 자동완성 목록처럼 안쪽 콘텐츠가 순간적으로 스크롤 임계값을
+     넘나들 때 스크롤바가 나타났다 사라지며 본문 폭이 흔들리는 걸 막는다. */
+  scrollbar-gutter: stable;
 }
 
 .modal-header {
