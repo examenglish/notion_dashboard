@@ -1243,6 +1243,62 @@ export async function updateAdminInboxEntry(
   await notion.pages.update({ page_id: id, properties });
 }
 
+// "결석예정"으로 등록된 날짜에 이미 저장된 "오늘 수업 기록"(DB⑥ 일별기록)이
+// 있으면, 그 학생의 출결을 결석으로 맞춰 자연어/수동 입력 어느 쪽으로 결석을
+// 알려도 실제 출결 통계에 곧바로 반영되게 한다. 아직 그 반의 수업 기록 자체가
+// 없는 날짜(수업 전에 미리 알린 경우)는 업데이트할 대상이 없으므로 그냥 지나가고,
+// 대신 ClassRecordForm이 결석예정 명단을 조회해 체크박스 기본값으로 반영한다
+// (getPlannedAbsentStudentIds 참고).
+async function syncAttendanceForPlannedAbsence(studentId: string, date: string) {
+  const records = await queryAllPages({
+    data_source_id: DB.DAILY_RECORD,
+    filter: {
+      and: [
+        { property: "학생", relation: { contains: studentId } },
+        { property: "날짜", date: { equals: date } },
+      ],
+    },
+  });
+  await Promise.all(
+    (records as any[]).map((r) =>
+      notion.pages.update({ page_id: r.id, properties: { 출결: { select: { name: "결석" } } } as any })
+    )
+  );
+}
+
+// ClassRecordForm이 아직 저장된 적 없는 반/날짜를 열었을 때도 결석 체크박스를
+// 미리 체크해 보여줄 수 있도록, 주어진 날짜에 "결석예정"으로 등록된 학생 id
+// 목록을 돌려준다.
+export async function getPlannedAbsentStudentIds(date: string): Promise<string[]> {
+  const [byDate, byRange] = await Promise.all([
+    queryAllPages({
+      data_source_id: DB.ADMIN_INBOX,
+      filter: {
+        and: [
+          { property: "입력유형", select: { equals: "결석예정" } },
+          { property: "날짜", date: { equals: date } },
+        ],
+      },
+    }),
+    queryAllPages({
+      data_source_id: DB.ADMIN_INBOX,
+      filter: {
+        and: [
+          { property: "입력유형", select: { equals: "결석예정" } },
+          { property: "날짜", date: { on_or_before: date } },
+          { property: "종료일", date: { on_or_after: date } },
+        ],
+      },
+    }),
+  ]);
+  const ids = new Set<string>();
+  for (const p of [...byDate, ...byRange] as any[]) {
+    const sid = getRelationIds(p, "대상학생")[0];
+    if (sid) ids.add(sid);
+  }
+  return Array.from(ids);
+}
+
 export async function createAdminInboxEntry(input: {
   type: string;
   studentId: string | null;
@@ -1272,6 +1328,15 @@ export async function createAdminInboxEntry(input: {
       ...(input.owner ? { 담당자: { rich_text: [{ text: { content: input.owner } }] } } : {}),
     } as any,
   });
+
+  if (input.type === "결석예정" && input.studentId) {
+    const endDate = input.endDate || startDate;
+    // 날짜 오입력으로 범위가 지나치게 넓어지는 경우에 대비한 안전장치 —
+    // 결석예정은 통상 며칠 내 기간이라 90일이면 충분하다.
+    for (let d = startDate, i = 0; d <= endDate && i < 90; d = addDaysToDate(d, 1), i++) {
+      await syncAttendanceForPlannedAbsence(input.studentId, d);
+    }
+  }
 }
 
 export async function updateStudentInfo(input: {

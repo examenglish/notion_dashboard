@@ -84,10 +84,23 @@ function ClassRecordForm() {
     Promise.all([
       fetch(`/api/class-record?classId=${classId}&date=${date}`).then((r) => r.json()),
       fetch(`/api/students?classId=${classId}`).then((r) => r.json()),
-    ]).then(([rec, rosterList]: [any, RosterStudent[]]) => {
+    ]).then(([data, rosterList]: [{ existing: any; plannedAbsentIds: string[] }, RosterStudent[]]) => {
       if (cancelled) return;
+      const rec = data?.existing;
+      const plannedAbsentIds = data?.plannedAbsentIds ?? [];
       if (!rec) {
         setExistingProgressId(null);
+        // 아직 이 반/날짜의 수업 기록이 없어도, 행정실에 "결석예정"으로 이미
+        // 접수된 학생은 결석 체크를 미리 반영해 강사가 다시 체크하지 않게 한다.
+        if (plannedAbsentIds.length > 0) {
+          setPerStudent((cur) => {
+            const next = { ...cur };
+            for (const sid of plannedAbsentIds) {
+              if (next[sid]) next[sid] = { ...next[sid], absent: true };
+            }
+            return next;
+          });
+        }
         return;
       }
       setExistingProgressId(rec.progressId);

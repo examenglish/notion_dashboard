@@ -1,14 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClassProgress, getClassProgressForEdit, resolveOrCreateClass, updateClassProgress } from "@/lib/notion";
+import {
+  createClassProgress,
+  getClassProgressForEdit,
+  getPlannedAbsentStudentIds,
+  resolveOrCreateClass,
+  updateClassProgress,
+} from "@/lib/notion";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const classId = req.nextUrl.searchParams.get("classId");
   const date = req.nextUrl.searchParams.get("date");
-  if (!classId || !date) return NextResponse.json(null);
-  const record = await getClassProgressForEdit(classId, date);
-  return NextResponse.json(record);
+  if (!classId || !date) return NextResponse.json({ existing: null, plannedAbsentIds: [] });
+  const [existing, plannedAbsentIds] = await Promise.all([
+    getClassProgressForEdit(classId, date),
+    getPlannedAbsentStudentIds(date),
+  ]);
+  return NextResponse.json({ existing, plannedAbsentIds });
 }
 
 export async function PATCH(req: NextRequest) {
