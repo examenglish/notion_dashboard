@@ -10,6 +10,8 @@ export default function RecentListCard<T>({
   onItemClick,
   pageSize = 10,
   emptyText = "표시할 항목이 없습니다.",
+  filters,
+  totalCount,
 }: {
   title: string;
   items: T[];
@@ -18,6 +20,15 @@ export default function RecentListCard<T>({
   onItemClick?: (item: T) => void;
   pageSize?: number;
   emptyText?: string;
+  // Search/filter controls rendered between the header and the list — the
+  // list itself (and its "전체 N건" count) always reflects the already
+  // filtered `items`, so the caller does the filtering and this component
+  // stays a dumb paginated list either way.
+  filters?: React.ReactNode;
+  // When filters are active, showing how many that narrows down from is
+  // more useful than just the filtered count. Optional — defaults to
+  // items.length (no filtering).
+  totalCount?: number;
 }) {
   const [page, setPage] = useState(0);
   const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
@@ -34,8 +45,14 @@ export default function RecentListCard<T>({
     <div className="card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <h2>{title}</h2>
-        <span className="muted">전체 {items.length}건</span>
+        <span className="muted">
+          {totalCount !== undefined && totalCount !== items.length
+            ? `전체 ${totalCount}건 중 ${items.length}건`
+            : `전체 ${items.length}건`}
+        </span>
       </div>
+
+      {filters && <div style={{ margin: "8px 0 12px" }}>{filters}</div>}
 
       {items.length === 0 ? (
         <p className="muted">{emptyText}</p>

@@ -94,6 +94,9 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
   const [editingCounseling, setEditingCounseling] = useState<CounselingItem | null>(null);
   const [viewingAdminInbox, setViewingAdminInbox] = useState<AdminInboxItem | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [inboxQuery, setInboxQuery] = useState("");
+  const [inboxType, setInboxType] = useState("");
+  const [inboxStatus, setInboxStatus] = useState("");
 
   function canEdit(enteredBy?: string) {
     return !enteredBy || enteredBy === staffName;
@@ -169,6 +172,25 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
       시험명: s.examName,
     }));
   }, [selected]);
+
+  // 행정실은 "결석예정 담긴 순간부터 몇 년치가 쌓이는" 성격이라 최근 10건만
+  // 보여주는 페이지네이션만으로는 원하는 기록을 못 찾는다. 서버는 이미 전체
+  // 기록을 내려주므로(getRecentAdminInbox), 여기서 학생명/내용/담당자/입력자
+  // 텍스트 검색 + 유형/처리상태 필터만 클라이언트에서 적용한다.
+  const filteredAdminInbox = useMemo(() => {
+    const q = inboxQuery.trim().toLowerCase();
+    return adminInbox.filter((i) => {
+      if (inboxType && i.type !== inboxType) return false;
+      if (inboxStatus === "처리완료" && !i.done) return false;
+      if (inboxStatus === "미처리" && i.done) return false;
+      if (!q) return true;
+      const haystack = [i.studentName, i.content, i.owner, i.enteredBy, i.type, i.date, i.endDate]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [adminInbox, inboxQuery, inboxType, inboxStatus]);
 
   return (
     <div className="page">
@@ -252,9 +274,34 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
       <div className="grid-2">
         <RecentListCard
           title="행정실"
-          items={adminInbox}
+          items={filteredAdminInbox}
+          totalCount={adminInbox.length}
           keyOf={(i) => i.id}
           onItemClick={(i) => setViewingAdminInbox(i)}
+          emptyText={adminInbox.length === 0 ? "표시할 항목이 없습니다." : "검색 조건에 맞는 항목이 없습니다."}
+          filters={
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <input
+                type="text"
+                placeholder="학생명/내용/담당자로 검색"
+                value={inboxQuery}
+                onChange={(e) => setInboxQuery(e.target.value)}
+                style={{ flex: "1 1 200px" }}
+              />
+              <select value={inboxType} onChange={(e) => setInboxType(e.target.value)} style={{ flex: "0 0 auto" }}>
+                <option value="">전체 유형</option>
+                <option value="결석예정">결석예정</option>
+                <option value="긴급상담요청">긴급상담요청</option>
+                <option value="신규생문의">신규생문의</option>
+                <option value="기타">기타</option>
+              </select>
+              <select value={inboxStatus} onChange={(e) => setInboxStatus(e.target.value)} style={{ flex: "0 0 auto" }}>
+                <option value="">전체 상태</option>
+                <option value="미처리">미처리</option>
+                <option value="처리완료">처리완료</option>
+              </select>
+            </div>
+          }
           renderItem={(i) => (
             <>
               <div className="recent-list-meta">
