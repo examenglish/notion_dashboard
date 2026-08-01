@@ -27,6 +27,8 @@ export async function POST(req: NextRequest) {
     content,
     dueDate,
     fileLocation: typeof body?.fileLocation === "string" ? body.fileLocation : undefined,
+    fileUploadId: typeof body?.fileUploadId === "string" ? body.fileUploadId : undefined,
+    fileName: typeof body?.fileName === "string" ? body.fileName : undefined,
   });
   return NextResponse.json({ ok: true });
 }

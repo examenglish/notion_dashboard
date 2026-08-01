@@ -1783,6 +1783,8 @@ export async function createMaterialTask(input: {
   content: string;
   dueDate: string;
   fileLocation?: string;
+  fileUploadId?: string;
+  fileName?: string;
 }) {
   const [requesterId, ownerId] = await Promise.all([
     input.requesterName ? findStaffIdByName(input.requesterName) : null,
@@ -1799,6 +1801,9 @@ export async function createMaterialTask(input: {
       상태: { select: { name: "요청됨" } },
       마감일: { date: { start: input.dueDate } },
       ...(input.fileLocation ? { 파일저장위치: { url: input.fileLocation } } : {}),
+      ...(input.fileUploadId
+        ? { 원본파일: { files: [{ type: "file_upload", file_upload: { id: input.fileUploadId }, name: input.fileName } as any] } }
+        : {}),
     } as any,
   });
 }
@@ -1831,22 +1836,32 @@ export async function updateMaterialTask(
 // 않음: Notion API가 돌려주는 기존 파일은 "file"(만료 URL) 타입이라
 // file_upload로 재첨부할 수 없어, 여러 개를 유지하려는 시도 자체가 신뢰할
 // 수 없다).
-export async function uploadMaterialFile(
-  pageId: string,
-  filename: string,
-  contentType: string,
-  data: Blob
-) {
+// Notion에 바이트를 올려두기만 하고(create + send), 아직 어느 페이지에도
+// 붙이지 않은 file_upload id를 돌려준다. 새 작업요청은 페이지가 생기기
+// 전에 파일부터 선택하는 경우가 많아서, 업로드 자체는 미리 해두고 그
+// id를 createMaterialTask에 실어 페이지 생성과 동시에 붙인다.
+export async function createFileUploadDraft(filename: string, contentType: string, data: Blob) {
   const created = await notion.fileUploads.create({
     mode: "single_part",
     filename,
     content_type: contentType,
   });
   await notion.fileUploads.send({ file_upload_id: created.id, file: { filename, data } });
+  return { fileUploadId: created.id, filename };
+}
+
+// 기존 작업의 원본파일을 새로 올린 것으로 교체한다.
+export async function uploadMaterialFile(
+  pageId: string,
+  filename: string,
+  contentType: string,
+  data: Blob
+) {
+  const { fileUploadId } = await createFileUploadDraft(filename, contentType, data);
   await notion.pages.update({
     page_id: pageId,
     properties: {
-      원본파일: { files: [{ type: "file_upload", file_upload: { id: created.id }, name: filename } as any] },
+      원본파일: { files: [{ type: "file_upload", file_upload: { id: fileUploadId }, name: filename } as any] },
     } as any,
   });
 }

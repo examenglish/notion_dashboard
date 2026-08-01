@@ -42,6 +42,33 @@ export default function MaterialTaskModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // create 모드는 페이지가 아직 없어서 파일을 바로 붙일 수 없다 — 선택
+  // 즉시 Notion에 올려두기만 하고(draft), file_upload id를 들고 있다가
+  // "요청 등록" 시 페이지 생성과 함께 붙인다.
+  const [draftUploading, setDraftUploading] = useState(false);
+  const [draftFile, setDraftFile] = useState<{ fileUploadId: string; filename: string } | null>(null);
+
+  async function handleDraftFileChange(f: File | null) {
+    if (!f) return;
+    setError(null);
+    setDraftUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", f);
+      const res = await fetch("/api/material-tasks/upload-draft", { method: "POST", body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error ?? "파일 업로드에 실패했습니다.");
+        return;
+      }
+      setDraftFile({ fileUploadId: data.fileUploadId, filename: data.filename });
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setDraftUploading(false);
+    }
+  }
+
   async function handleSave() {
     setError(null);
     if (!title.trim() || !content.trim() || !dueDate) {
@@ -55,7 +82,14 @@ export default function MaterialTaskModal({
         res = await fetch("/api/material-tasks", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title, content, dueDate, ownerName: owner || undefined }),
+          body: JSON.stringify({
+            title,
+            content,
+            dueDate,
+            ownerName: owner || undefined,
+            fileUploadId: draftFile?.fileUploadId,
+            fileName: draftFile?.filename,
+          }),
         });
       } else {
         res = await fetch(`/api/material-tasks/${item!.id}`, {
@@ -109,6 +143,22 @@ export default function MaterialTaskModal({
 
         <StaffPicker value={owner} onChange={setOwner} label="담당자" />
 
+        {isCreate && (
+          <>
+            <label htmlFor="mtDraftFile">참고파일 업로드 (선택, 최대 4MB)</label>
+            <input
+              id="mtDraftFile"
+              type="file"
+              disabled={draftUploading}
+              onChange={(e) => handleDraftFileChange(e.target.files?.[0] ?? null)}
+            />
+            {draftUploading && <p className="muted" style={{ fontSize: 12 }}>업로드 중...</p>}
+            {draftFile && !draftUploading && (
+              <p className="muted" style={{ fontSize: 12 }}>업로드됨: {draftFile.filename}</p>
+            )}
+          </>
+        )}
+
         {!isCreate && (
           <>
             <label htmlFor="mtStatus">상태</label>
@@ -154,7 +204,7 @@ export default function MaterialTaskModal({
         {error && <p className="error-text">{error}</p>}
 
         <div style={{ marginTop: 16 }}>
-          <button type="button" disabled={saving} onClick={handleSave}>
+          <button type="button" disabled={saving || draftUploading} onClick={handleSave}>
             {saving ? "저장 중..." : isCreate ? "요청 등록" : "저장"}
           </button>
         </div>
