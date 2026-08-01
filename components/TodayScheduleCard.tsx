@@ -408,6 +408,28 @@ function ScheduleEditModal({
   );
 }
 
+// "클리닉" 섹션은 목록에 학생명/시간/담당조교만 보여주고, 지시사항(메모)처럼
+// 길이가 들쭉날쭉한 내용은 "더보기" 클릭 시 팝업으로만 노출해 목록 카드가
+// 메모 길이에 따라 틀어지지 않게 한다.
+function ClinicTaskDetailModal({ item, onClose }: { item: TodoItem; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>{item.studentName} 클리닉</h2>
+          <button type="button" className="secondary" onClick={onClose}>닫기</button>
+        </div>
+        <p className="muted">{schoolGrade(item.school, item.gradeNum)}</p>
+        <p className="muted">
+          {item.time || "시간 미정"} · 담당조교: {item.owner}
+        </p>
+        <label>지시사항</label>
+        <p style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{item.memo || "-"}</p>
+      </div>
+    </div>
+  );
+}
+
 type QuickAddTarget = { kind: SectionKey; date: string };
 
 // Lets staff add a new 오늘의 일정 item without leaving the dashboard for
@@ -570,6 +592,7 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
   const { cache, ensureDate, refetchDate, markDone } = useScheduleCache();
   const [viewingCounseling, setViewingCounseling] = useState<{ item: CounselingBrief; date: string } | null>(null);
   const [viewingInquiry, setViewingInquiry] = useState<{ item: InquiryBrief; date: string } | null>(null);
+  const [viewingClinicTask, setViewingClinicTask] = useState<TodoItem | null>(null);
 
   function canEdit(enteredBy?: string) {
     return !enteredBy || enteredBy === staffName;
@@ -733,11 +756,19 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
                 onChange={() => completeItem("clinicTasks", date, t.id)}
               />
               <strong>{t.studentName}</strong>
-              <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
               <span className="muted">{t.time || "시간 미정"}</span>
               <span className="muted">· 담당조교: {t.owner}</span>
-              {t.memo && <span className="muted">· {t.memo}</span>}
             </label>
+            <button
+              type="button"
+              className="secondary schedule-edit-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setViewingClinicTask(t);
+              }}
+            >
+              더보기
+            </button>
             {editBtn(t)}
           </div>
         );
@@ -763,7 +794,7 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
               />
               <strong>{t.studentName}</strong>
               <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
-              {t.memo && <span className="muted">· {t.memo}</span>}
+              {t.memo && <span className="muted schedule-item-memo">· {t.memo}</span>}
             </label>
             {editBtn(t)}
           </div>
@@ -920,6 +951,10 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
             />
           );
         })()}
+
+      {viewingClinicTask && (
+        <ClinicTaskDetailModal item={viewingClinicTask} onClose={() => setViewingClinicTask(null)} />
+      )}
     </>
   );
 }

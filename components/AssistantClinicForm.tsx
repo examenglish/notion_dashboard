@@ -133,6 +133,7 @@ export default function AssistantClinicForm() {
                   style={{
                     display: "flex",
                     alignItems: "center",
+                    flexWrap: "wrap",
                     gap: 6,
                     margin: 0,
                     cursor: t.done ? "default" : "pointer",
@@ -144,7 +145,7 @@ export default function AssistantClinicForm() {
                   <span className="badge">{t.type ?? "-"}</span>
                   <strong>{t.studentName}</strong>
                   <span className="muted">{t.time || "시간 미정"}</span>
-                  {t.memo && <span className="muted">· {t.memo}</span>}
+                  {t.memo && <span className="muted schedule-item-memo">· {t.memo}</span>}
                 </label>
               </li>
             ))}
