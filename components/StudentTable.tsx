@@ -21,7 +21,7 @@ export type StudentRow = {
   latestExam: { date: string; score: number | null; subject: string | null; examName: string } | null;
 };
 
-export type MetricKey = "attendanceRate" | "vocabRetryRate" | "homeworkIncompleteRate";
+export type MetricKey = "attendanceRate" | "vocabPassRate" | "homeworkIncompleteRate";
 
 export type MonthlyMetricRow = {
   studentId: string;
@@ -29,7 +29,7 @@ export type MonthlyMetricRow = {
   className: string;
   recordCount: number;
   attendanceRate: number | null;
-  vocabRetryRate: number | null;
+  vocabPassRate: number | null;
   homeworkIncompleteRate: number | null;
 };
 
@@ -55,7 +55,7 @@ function StatusBadge({ status }: { status: string | null }) {
 
 const METRIC_TABS: { key: MetricKey; label: string }[] = [
   { key: "attendanceRate", label: "출석률" },
-  { key: "vocabRetryRate", label: "단어재시율" },
+  { key: "vocabPassRate", label: "단어통과율" },
   { key: "homeworkIncompleteRate", label: "과제미이행률" },
 ];
 
@@ -72,14 +72,14 @@ function BottomMetricsList({ onSelect }: { onSelect: (id: string) => void }) {
       .finally(() => setLoading(false));
   }, []);
 
-  // attendanceRate: lower is worse (ascending). The other two: higher is worse (descending).
+  // attendanceRate/vocabPassRate: lower is worse (ascending). homeworkIncompleteRate: higher is worse (descending).
   const sorted = useMemo(() => {
     return [...rows]
       .filter((r) => r[metric] !== null)
       .sort((a, b) => {
         const av = a[metric] as number;
         const bv = b[metric] as number;
-        return metric === "attendanceRate" ? av - bv : bv - av;
+        return metric === "homeworkIncompleteRate" ? bv - av : av - bv;
       });
   }, [rows, metric]);
 

@@ -599,7 +599,7 @@ export async function getClassSummaryByDate(date: string) {
 // Students with the worst attendance rate so far this (KST) calendar month —
 // drives the dashboard's default "학생검색" view before anything is typed.
 // Per-student rates for this (KST) month — the dashboard sorts/slices this
-// three different ways (출석률/단어재시율/과제미이행률 tabs) rather than
+// three different ways (출석률/단어통과율/과제미이행률 tabs) rather than
 // making three separate round trips.
 export async function getMonthlyStudentMetrics() {
   const [y, m] = todayKST().split("-").map(Number);
@@ -619,7 +619,7 @@ export async function getMonthlyStudentMetrics() {
     attTotal: number;
     attPresent: number;
     vocabTotal: number;
-    vocabRetry: number;
+    vocabPass: number;
     hwTotal: number;
     hwIncomplete: number;
     classId: string | null;
@@ -632,7 +632,7 @@ export async function getMonthlyStudentMetrics() {
       attTotal: 0,
       attPresent: 0,
       vocabTotal: 0,
-      vocabRetry: 0,
+      vocabPass: 0,
       hwTotal: 0,
       hwIncomplete: 0,
       classId: getRelationIds(r, "반")[0] ?? null,
@@ -642,7 +642,7 @@ export async function getMonthlyStudentMetrics() {
     const voc = getSelect(r, "단어테스트결과");
     if (voc && voc !== "미응시") {
       cur.vocabTotal += 1;
-      if (voc === "재시험") cur.vocabRetry += 1;
+      if (voc === "통과") cur.vocabPass += 1;
     }
     cur.hwTotal += 1;
     if (!getCheckbox(r, "과제여부")) cur.hwIncomplete += 1;
@@ -655,7 +655,7 @@ export async function getMonthlyStudentMetrics() {
     className: v.classId ? classNameById.get(v.classId) ?? "-" : "-",
     recordCount: v.attTotal,
     attendanceRate: v.attTotal > 0 ? v.attPresent / v.attTotal : null,
-    vocabRetryRate: v.vocabTotal > 0 ? v.vocabRetry / v.vocabTotal : null,
+    vocabPassRate: v.vocabTotal > 0 ? v.vocabPass / v.vocabTotal : null,
     homeworkIncompleteRate: v.hwTotal > 0 ? v.hwIncomplete / v.hwTotal : null,
   }));
 }
