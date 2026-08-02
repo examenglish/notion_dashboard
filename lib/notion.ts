@@ -759,7 +759,7 @@ async function staffNameMap(): Promise<Map<string, string>> {
   return new Map(results.map((p: any) => [p.id, getTitle(p, "이름")]));
 }
 
-export async function getTodaySchedule(today: string) {
+export async function getTodaySchedule(today: string, viewerStaffId?: string) {
   const [alarmStudents, firstDayStudents, todoResults, counselingResults, inquiriesByDate, inquiriesByRange, names, classMap, staffMap] =
     await Promise.all([
       queryAllPages({
@@ -892,6 +892,16 @@ export async function getTodaySchedule(today: string) {
     });
   }
 
+  // 본인만 보는 개인 할일 — 같은 DB⑱를 쓰되 유형="개인할일" + 담당자=조회한
+  // 본인으로 걸러낸다. viewerStaffId는 항상 세션에서 읽은 값만 받으므로(클라
+  // 이언트가 다른 사람 id를 넘겨도 서버가 무시), 다른 직원의 목록이 섞여
+  // 보일 일이 없다.
+  const personalTodos = viewerStaffId
+    ? (todoResults as any[])
+        .filter((p) => getSelect(p, "유형") === "개인할일" && getRelationIds(p, "담당자").includes(viewerStaffId))
+        .map((p) => ({ id: p.id, title: getTitle(p, "제목"), done: getCheckbox(p, "완료여부") }))
+    : [];
+
   return {
     alarms,
     firstDays,
@@ -900,9 +910,34 @@ export async function getTodaySchedule(today: string) {
     retests: withStudentInfo(byTypes(["재시"])),
     clinicTasks: withStudentInfo(byTypes(["클리닉"])),
     reviewTasks: withStudentInfo(byTypes(["복습"])),
+    personalTodos,
     counseling,
     inquiries: Array.from(inquiryMap.values()),
   };
+}
+
+// ---- 개인 할일 (DB⑱, 유형=개인할일) ----
+// 본인만 보이는 체크리스트 — 자연어 입력의 "/to do list" 명령이나 오늘의
+// 일정 카드의 빠른등록에서 만든다.
+export async function createPersonalTodo(input: { staffId: string; content: string; date: string }) {
+  await notion.pages.create({
+    parent: { data_source_id: DB.TODO } as any,
+    properties: {
+      제목: { title: [{ text: { content: input.content } }] },
+      유형: { select: { name: "개인할일" } },
+      담당자: { relation: [{ id: input.staffId }] },
+      예정일: { date: { start: input.date } },
+      완료여부: { checkbox: false },
+      우선순위: { select: { name: "보통" } },
+    } as any,
+  });
+}
+
+export async function updatePersonalTodo(id: string, input: { content?: string; date?: string }) {
+  const properties: any = {};
+  if (input.content !== undefined) properties["제목"] = { title: [{ text: { content: input.content } }] };
+  if (input.date) properties["예정일"] = { date: { start: input.date } };
+  await notion.pages.update({ page_id: id, properties });
 }
 
 async function studentBriefMap(): Promise<

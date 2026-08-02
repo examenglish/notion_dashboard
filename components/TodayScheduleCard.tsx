@@ -59,6 +59,7 @@ type InquiryBrief = {
   owner: string;
   enteredBy?: string;
 };
+type PersonalTodoItem = { id: string; title: string; done: boolean };
 
 type Schedule = {
   alarms: AlarmItem[];
@@ -68,6 +69,7 @@ type Schedule = {
   retests: TodoItem[];
   clinicTasks: TodoItem[];
   reviewTasks: TodoItem[];
+  personalTodos: PersonalTodoItem[];
   counseling: CounselingBrief[];
   inquiries: InquiryBrief[];
 };
@@ -91,6 +93,9 @@ const SECTION_META: { key: SectionKey; title: string; readOnly?: boolean }[] = [
   // 여기서 수동으로 새로 만들 필요는 없지만(글쓰기 버튼 숨김), 완료 체크나
   // 예정일 수정은 다른 TODO 섹션과 동일하게 가능하다.
   { key: "reviewTasks", title: "복습", readOnly: true },
+  // 본인만 보이는 개인 할일 — 서버가 세션의 담당자로만 걸러서 내려주므로
+  // 다른 직원 목록과 섞이지 않는다. "/to do list ..."로도 등록 가능.
+  { key: "personalTodos", title: "개인 할일" },
   { key: "counseling", title: "상담일지", readOnly: true },
   { key: "inquiries", title: "행정실 문의", readOnly: true },
 ];
@@ -284,7 +289,7 @@ function SchedulePopup({
   );
 }
 
-type EditTarget = { kind: SectionKey; item: AlarmItem | FirstDayItem | TodoItem; date: string };
+type EditTarget = { kind: SectionKey; item: AlarmItem | FirstDayItem | TodoItem | PersonalTodoItem; date: string };
 
 const EDIT_GRADE_OPTIONS = ["초1", "초2", "초3", "초4", "초5", "초6", "중1", "중2", "중3", "고1", "고2", "고3"];
 
@@ -299,10 +304,12 @@ function ScheduleEditModal({
 }) {
   const isAlarm = target.kind === "alarms";
   const isFirstDay = target.kind === "firstDays";
-  const isTodo = !isAlarm && !isFirstDay;
+  const isPersonal = target.kind === "personalTodos";
+  const isTodo = !isAlarm && !isFirstDay && !isPersonal;
 
   const alarmItem = target.item as AlarmItem;
   const todoItem = target.item as TodoItem;
+  const personalItem = target.item as PersonalTodoItem;
 
   const [content, setContent] = useState(isAlarm ? alarmItem.content : "");
   const [counselor, setCounselor] = useState(isAlarm ? alarmItem.counselor : "");
@@ -311,6 +318,8 @@ function ScheduleEditModal({
   const [note, setNote] = useState(isTodo ? todoItem.memo ?? "" : "");
   const [owner, setOwner] = useState(isTodo && todoItem.owner !== "-" ? todoItem.owner : "");
   const [todoDate, setTodoDate] = useState(target.date);
+  const [personalContent, setPersonalContent] = useState(isPersonal ? personalItem.title : "");
+  const [personalDate, setPersonalDate] = useState(target.date);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -380,6 +389,12 @@ function ScheduleEditModal({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name, school, grade, phone, parentPhone, classIds, enrolledAt }),
         });
+      } else if (isPersonal) {
+        res = await fetch(`/api/personal-todo/${target.item.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: personalContent, date: personalDate }),
+        });
       } else {
         res = await fetch(`/api/schedule-entry/${target.item.id}`, {
           method: "PATCH",
@@ -401,7 +416,13 @@ function ScheduleEditModal({
     }
   }
 
-  const modalTitle = isFirstDay ? name || "학생 정보" : "studentName" in target.item ? target.item.studentName : "";
+  const modalTitle = isFirstDay
+    ? name || "학생 정보"
+    : isPersonal
+    ? "개인 할일"
+    : "studentName" in target.item
+    ? target.item.studentName
+    : "";
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -492,6 +513,15 @@ function ScheduleEditModal({
           </>
         )}
 
+        {isPersonal && (
+          <>
+            <label htmlFor="editPersonalContent">내용</label>
+            <textarea id="editPersonalContent" value={personalContent} onChange={(e) => setPersonalContent(e.target.value)} />
+            <label htmlFor="editPersonalDate">날짜</label>
+            <input id="editPersonalDate" type="date" value={personalDate} onChange={(e) => setPersonalDate(e.target.value)} />
+          </>
+        )}
+
         {error && <p className="error-text">{error}</p>}
 
         <div style={{ marginTop: 16 }}>
@@ -543,7 +573,8 @@ function ScheduleQuickAddModal({
   const isAlarm = target.kind === "alarms";
   const isFirstDay = target.kind === "firstDays";
   const isNewStudentEvent = target.kind === "newStudentEvents";
-  const isTodo = !isAlarm && !isFirstDay;
+  const isPersonal = target.kind === "personalTodos";
+  const isTodo = !isAlarm && !isFirstDay && !isPersonal;
 
   const [studentId, setStudentId] = useState("");
   const [subType, setSubType] = useState("신입생상담");
@@ -573,6 +604,10 @@ function ScheduleQuickAddModal({
       setError("학생을 선택해 주세요.");
       return;
     }
+    if (isPersonal && !content.trim()) {
+      setError("내용을 입력해 주세요.");
+      return;
+    }
     if (!window.confirm("등록하시겠습니까?")) return;
     setError(null);
     setSaving(true);
@@ -592,6 +627,13 @@ function ScheduleQuickAddModal({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ studentId, enrolledAt }),
+        });
+      } else if (isPersonal) {
+        savedDate = todoDate;
+        res = await fetch("/api/personal-todo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content, date: todoDate }),
         });
       } else {
         savedDate = todoDate;
@@ -625,7 +667,16 @@ function ScheduleQuickAddModal({
           <button type="button" className="secondary" onClick={onClose}>닫기</button>
         </div>
 
-        <StudentPicker studentId={studentId} onChange={setStudentId} allowEmpty={isTodo} />
+        {!isPersonal && <StudentPicker studentId={studentId} onChange={setStudentId} allowEmpty={isTodo} />}
+
+        {isPersonal && (
+          <>
+            <label htmlFor="quickPersonalContent">내용</label>
+            <textarea id="quickPersonalContent" value={content} onChange={(e) => setContent(e.target.value)} placeholder="예: 문법책 재고 주문하기" />
+            <label htmlFor="quickPersonalDate">날짜</label>
+            <input id="quickPersonalDate" type="date" value={todoDate} onChange={(e) => setTodoDate(e.target.value)} />
+          </>
+        )}
 
         {isNewStudentEvent && (
           <>
@@ -703,6 +754,7 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
       retests: t,
       clinicTasks: t,
       reviewTasks: t,
+      personalTodos: t,
       counseling: t,
       inquiries: t,
     };
@@ -758,6 +810,11 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
   ) {
     markDone(date, key, id);
     await fetch(`/api/schedule-entry/${id}`, { method: "PATCH" });
+  }
+
+  async function completePersonalTodo(date: string, id: string) {
+    markDone(date, "personalTodos", id);
+    await fetch(`/api/personal-todo/${id}`, { method: "PATCH" });
   }
 
   function renderItem(key: SectionKey, date: string): (item: any) => React.ReactNode {
@@ -915,6 +972,31 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
               <strong>{t.studentName}</strong>
               <span className="muted">{schoolGrade(t.school, t.gradeNum)}</span>
               {t.memo && <span className="muted schedule-item-memo">· {t.memo}</span>}
+            </label>
+            {editBtn(t)}
+          </div>
+        );
+      case "personalTodos":
+        return (t: PersonalTodoItem) => (
+          <div className="schedule-item-row">
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                margin: 0,
+                cursor: t.done ? "default" : "pointer",
+                textDecoration: t.done ? "line-through" : "none",
+                opacity: t.done ? 0.6 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={t.done}
+                disabled={t.done}
+                onChange={() => completePersonalTodo(date, t.id)}
+              />
+              {t.title}
             </label>
             {editBtn(t)}
           </div>
