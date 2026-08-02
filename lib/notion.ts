@@ -1637,6 +1637,29 @@ export async function updateStudentFull(
   await notion.pages.update({ page_id: studentId, properties });
 }
 
+// 대기생을 등원일에 맞춰 자동으로 재원 전환 — 매일 새벽 크론(app/api/cron/
+// promote-waitlist)이 호출한다. "신입생" 표시는 별도 상태값이 아니라
+// StudentTable의 isNew 배지(등원일 기준 30일 이내)가 맡고 있으므로, 여기서는
+// 상태만 재원으로 바꿔주면 등원일 당일부터 그 배지가 자동으로 함께 뜬다.
+export async function promoteWaitlistedStudents(today: string): Promise<{ id: string; name: string }[]> {
+  const results = await queryAllPages({
+    data_source_id: DB.STUDENT,
+    filter: {
+      and: [
+        { property: "상태", select: { equals: "대기생" } },
+        { property: "등원일", date: { on_or_before: today } },
+        { property: "등원일", date: { is_not_empty: true } },
+      ],
+    },
+  });
+  const promoted: { id: string; name: string }[] = [];
+  for (const p of results as any[]) {
+    await notion.pages.update({ page_id: p.id, properties: { 상태: { select: { name: "재원" } } } as any });
+    promoted.push({ id: p.id, name: getTitle(p, "이름") });
+  }
+  return promoted;
+}
+
 async function findStaffIdByName(name: string): Promise<string | null> {
   const res = await notion.dataSources.query({
     data_source_id: DB.STAFF,

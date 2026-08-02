@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE, verifySessionCookieValue } from "./lib/session";
 
-// Routes that must work before a session exists.
-const PUBLIC_API_PATHS = ["/api/login", "/api/staff"];
+// Routes that must work before a session exists. /api/cron/* is called by
+// Vercel Cron (no login cookie) — each route under it authenticates itself
+// via the CRON_SECRET bearer token instead.
+const PUBLIC_API_PATHS = ["/api/login", "/api/staff", "/api/cron/"];
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
