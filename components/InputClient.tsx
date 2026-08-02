@@ -5,6 +5,7 @@ import StudentPicker from "./StudentPicker";
 import StaffPicker from "./StaffPicker";
 import DailyBriefingPreviewModal from "./DailyBriefingPreviewModal";
 import AssistantClinicForm from "./AssistantClinicForm";
+import AttendanceCheckForm from "./AttendanceCheckForm";
 import ClassAssistantAssignForm from "./ClassAssistantAssignForm";
 import ClassManageForm from "./ClassManageForm";
 import AssignClinicTaskForm from "./AssignClinicTaskForm";
@@ -1028,7 +1029,11 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
   // 원장/행정은 강사·조교·행정 입력폼을 모두 볼 수 있어야 하므로, "행정 전용"
   // 폼들도 원장에게 함께 열어준다. 조교는 강사의 "오늘 수업 기록"이 아니라
   // 클리닉(코칭) 전용 폼을 쓴다 — 정규수업 진도가 아니라 1:1~1:다수 코칭이
-  // 업무의 핵심이라 강사 폼을 그대로 재사용할 수 없다.
+  // 업무의 핵심이라 강사 폼을 그대로 재사용할 수 없다. 다만 결석/단어통과
+  // 체크는 조교·행정도 진도 없이 바로 할 수 있어야 하므로 AttendanceCheckForm은
+  // 둘 다에게 열어준다 — 같은 반/날짜 기록을 담당교사의 "오늘 수업 기록"과
+  // 공유해서, 먼저 체크해두면 교사가 열었을 때 그대로 남아있고, 교사가 진도를
+  // 채워 저장하면 그 시점에 브리핑이 생성된다.
   const isAdminLike = role === "행정" || role === "원장";
   const isAssistant = role === "조교";
   return (
@@ -1038,6 +1043,7 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
       {isAdminLike && <ClassAssistantAssignForm />}
       {!isAssistant && <AssignClinicTaskForm />}
       {(isAssistant || isAdminLike) && <AssistantClinicForm />}
+      {(isAssistant || isAdminLike) && <AttendanceCheckForm />}
       {!isAssistant && <ClassRecordForm />}
       <div className="grid-3">
         <ScheduleEntryForm />

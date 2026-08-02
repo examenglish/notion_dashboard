@@ -1088,35 +1088,40 @@ export async function getClassProgressForEdit(classId: string, date: string) {
 // Updates an existing 오늘 수업 기록 in place: the shared 반별진도 page plus
 // each student's 일일기록 row. Students already covered by an existing row
 // are updated; any newly-called-up 다른반 student gets a fresh row appended
-// (mirrors createClassProgress's row-creation, minus 브리핑 regeneration —
-// briefings already generated/sent for this date are left untouched).
+// (mirrors createClassProgress's row-creation).
+//
+// subjects/progress/homework/nextAssignment/notice는 선택값이다 — 조교·행정이
+// checkInAttendance로 출결/단어통과만 먼저 체크해둘 때는 이 필드들을 아예
+// 넘기지 않아, 아직 비어있는(또는 담당교사가 이미 채워둔) 진도/과제 내용을
+// 실수로 지우지 않는다. progress가 실제로 채워져 들어오면(=담당교사가 저장한
+// 시점) 그 학생에게 아직 브리핑이 없는 경우에 한해 새로 생성한다 — 조교가
+// 먼저 체크인해 브리핑 없이 레코드만 만들어진 경우를 보정하기 위함. 이미
+// 브리핑이 있는 학생(기존처럼 교사가 처음부터 다 채워 저장한 경우, 또는 오타
+// 수정 등으로 재저장하는 경우)은 중복 생성하지 않는다.
 export async function updateClassProgress(input: {
   progressId: string;
   classId: string;
   date: string;
-  subjects: string[];
-  progress: string;
-  homework: string;
-  nextAssignment: string;
-  notice: string;
+  subjects?: string[];
+  progress?: string;
+  homework?: string;
+  nextAssignment?: string;
+  notice?: string;
   perStudent: Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean }>;
   extraStudentIds?: string[];
 }) {
   const classPage: any = await notion.pages.retrieve({ page_id: input.classId });
+  const className = getTitle(classPage, "반이름");
   const classRosterIds = getRelationIds(classPage, "소속학생");
   const studentIds = Array.from(new Set([...classRosterIds, ...(input.extraStudentIds ?? [])]));
 
-  await notion.pages.update({
-    page_id: input.progressId,
-    properties: {
-      반: { relation: [{ id: input.classId }] },
-      수업과목: { multi_select: input.subjects.map((name) => ({ name })) },
-      진도내용: { rich_text: [{ text: { content: input.progress } }] },
-      과제내용: { rich_text: [{ text: { content: input.homework } }] },
-      다음시간테스트: { rich_text: [{ text: { content: input.nextAssignment } }] },
-      전달사항: { rich_text: [{ text: { content: input.notice } }] },
-    } as any,
-  });
+  const progressPageProperties: any = { 반: { relation: [{ id: input.classId }] } };
+  if (input.subjects !== undefined) progressPageProperties.수업과목 = { multi_select: input.subjects.map((name) => ({ name })) };
+  if (input.progress !== undefined) progressPageProperties.진도내용 = { rich_text: [{ text: { content: input.progress } }] };
+  if (input.homework !== undefined) progressPageProperties.과제내용 = { rich_text: [{ text: { content: input.homework } }] };
+  if (input.nextAssignment !== undefined) progressPageProperties.다음시간테스트 = { rich_text: [{ text: { content: input.nextAssignment } }] };
+  if (input.notice !== undefined) progressPageProperties.전달사항 = { rich_text: [{ text: { content: input.notice } }] };
+  await notion.pages.update({ page_id: input.progressId, properties: progressPageProperties });
 
   const existingDaily = await queryAllPages({
     data_source_id: DB.DAILY_RECORD,
@@ -1131,12 +1136,12 @@ export async function updateClassProgress(input: {
   const newDailyIds: string[] = [];
   for (const studentId of studentIds) {
     const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false };
-    const properties = {
-      진도내용: { rich_text: [{ text: { content: input.progress } }] },
+    const properties: any = {
       출결: { select: { name: flags.absent ? "결석" : "출석" } },
       과제여부: { checkbox: !flags.homeworkIncomplete },
       단어테스트결과: { select: { name: flags.vocabFail ? "재시험" : "통과" } },
     };
+    if (input.progress !== undefined) properties.진도내용 = { rich_text: [{ text: { content: input.progress } }] };
     const existing = dailyByStudent.get(studentId);
     if (existing) {
       await notion.pages.update({ page_id: existing.id, properties: properties as any });
@@ -1162,9 +1167,115 @@ export async function updateClassProgress(input: {
     const allIds = [...Array.from(dailyByStudent.values()).map((d: any) => d.id), ...newDailyIds];
     await notion.pages.update({
       page_id: input.progressId,
-      properties: { 생성된학생기록: { relation: allIds.map((id) => ({ id })) } } as any,
+      properties: { 학생기록생성됨: { checkbox: true }, 생성된학생기록: { relation: allIds.map((id) => ({ id })) } } as any,
     });
   }
+
+  if (input.progress !== undefined && input.progress.trim() !== "") {
+    await Promise.all(
+      studentIds.map(async (studentId) => {
+        const existingBriefing = await notion.dataSources.query({
+          data_source_id: DB.BRIEFING,
+          filter: { and: [{ property: "학생", relation: { contains: studentId } }, { property: "날짜", date: { equals: input.date } }] },
+          page_size: 1,
+        });
+        if (existingBriefing.results.length > 0) return;
+
+        const studentPage: any = await notion.pages.retrieve({ page_id: studentId });
+        const studentName = getTitle(studentPage, "이름");
+        const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false };
+        const briefingText = formatBriefingText({
+          date: input.date,
+          className,
+          studentName,
+          progress: input.progress!,
+          homework: input.homework ?? "",
+          nextAssignment: input.nextAssignment ?? "",
+          notice: input.notice ?? "",
+          vocabFail: flags.vocabFail,
+          homeworkIncomplete: flags.homeworkIncomplete,
+        });
+        await notion.pages.create({
+          parent: { data_source_id: DB.BRIEFING } as any,
+          properties: {
+            제목: { title: [{ text: { content: `${studentName} 데일리브리핑 ${input.date}` } }] },
+            학생: { relation: [{ id: studentId }] },
+            날짜: { date: { start: input.date } },
+            브리핑유형: { select: { name: flags.vocabFail || flags.homeworkIncomplete ? "주의" : "전달사항" } },
+            브리핑내용: { rich_text: [{ text: { content: briefingText } }] },
+          } as any,
+        });
+      })
+    );
+  }
+}
+
+// 조교·행정이 진도 내용 없이 결석/단어통과여부만 빠르게 체크하는 경로.
+// 이미 그 반/날짜의 수업 기록(DB③)이 있으면 그 위에 출결/단어테스트결과만
+// 얹어 업데이트하고(updateClassProgress에 진도 관련 필드는 아예 넘기지 않아
+// 기존 내용을 지우지 않음), 없으면 진도/과제가 빈 채로 골격만 만들어둔다 —
+// 담당교사가 나중에 같은 반/날짜로 "오늘 수업 기록"을 열면 그대로 불러와
+// 진도를 채워 저장할 수 있고(getClassProgressForEdit), 그 시점에 브리핑이
+// 생성된다(updateClassProgress의 브리핑 보정 로직).
+export async function checkInAttendance(input: {
+  classId: string;
+  date: string;
+  perStudent: Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean }>;
+  extraStudentIds?: string[];
+}): Promise<{ progressId: string; created: boolean }> {
+  const existing = await getClassProgressForEdit(input.classId, input.date);
+  if (existing) {
+    await updateClassProgress({
+      progressId: existing.progressId,
+      classId: input.classId,
+      date: input.date,
+      perStudent: input.perStudent,
+      extraStudentIds: input.extraStudentIds,
+    });
+    return { progressId: existing.progressId, created: false };
+  }
+
+  const classPage: any = await notion.pages.retrieve({ page_id: input.classId });
+  const className = getTitle(classPage, "반이름");
+  const classRosterIds = getRelationIds(classPage, "소속학생");
+  const studentIds = Array.from(new Set([...classRosterIds, ...(input.extraStudentIds ?? [])]));
+
+  const progressPage = await notion.pages.create({
+    parent: { data_source_id: DB.CLASS_PROGRESS } as any,
+    properties: {
+      제목: { title: [{ text: { content: `${input.date} ${className} 진도` } }] },
+      반: { relation: [{ id: input.classId }] },
+      날짜: { date: { start: input.date } },
+    } as any,
+  });
+
+  const dailyRecordIds: string[] = [];
+  for (const studentId of studentIds) {
+    const studentPage: any = await notion.pages.retrieve({ page_id: studentId });
+    const studentName = getTitle(studentPage, "이름");
+    const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false };
+    const daily = await notion.pages.create({
+      parent: { data_source_id: DB.DAILY_RECORD } as any,
+      properties: {
+        제목: { title: [{ text: { content: `${studentName} ${input.date}` } }] },
+        학생: { relation: [{ id: studentId }] },
+        반: { relation: [{ id: input.classId }] },
+        날짜: { date: { start: input.date } },
+        출결: { select: { name: flags.absent ? "결석" : "출석" } },
+        과제여부: { checkbox: !flags.homeworkIncomplete },
+        단어테스트결과: { select: { name: flags.vocabFail ? "재시험" : "통과" } },
+        반별진도원본: { relation: [{ id: progressPage.id }] },
+      } as any,
+    });
+    dailyRecordIds.push(daily.id);
+  }
+
+  await notion.pages.update({
+    page_id: progressPage.id,
+    properties: { 학생기록생성됨: { checkbox: true }, 생성된학생기록: { relation: dailyRecordIds.map((id) => ({ id })) } } as any,
+  });
+
+  return { progressId: progressPage.id, created: true };
 }
 
 // ---- Recent-activity feeds (dashboard "최근 10개 + 전체보기" widgets) ----
