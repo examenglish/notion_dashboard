@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { todayKST } from "@/lib/date";
+import { stripClassSuffix } from "@/lib/format";
 import StaffPicker from "./StaffPicker";
 import StudentPicker from "./StudentPicker";
 import CounselingEditModal, { CounselingRecord } from "./CounselingEditModal";
@@ -16,6 +17,7 @@ type FirstDayItem = {
   gradeNum: string;
   classDays: string[];
   classTime: string;
+  status: string | null;
 };
 type TodoItem = {
   id: string;
@@ -284,6 +286,8 @@ function SchedulePopup({
 
 type EditTarget = { kind: SectionKey; item: AlarmItem | FirstDayItem | TodoItem; date: string };
 
+const EDIT_GRADE_OPTIONS = ["초1", "초2", "초3", "초4", "초5", "초6", "중1", "중2", "중3", "고1", "고2", "고3"];
+
 function ScheduleEditModal({
   target,
   onClose,
@@ -303,12 +307,55 @@ function ScheduleEditModal({
   const [content, setContent] = useState(isAlarm ? alarmItem.content : "");
   const [counselor, setCounselor] = useState(isAlarm ? alarmItem.counselor : "");
   const [alarmDate, setAlarmDate] = useState(target.date);
-  const [enrolledAt, setEnrolledAt] = useState(target.date);
   const [time, setTime] = useState(isTodo ? todoItem.time : "");
+  const [note, setNote] = useState(isTodo ? todoItem.memo ?? "" : "");
   const [owner, setOwner] = useState(isTodo && todoItem.owner !== "-" ? todoItem.owner : "");
   const [todoDate, setTodoDate] = useState(target.date);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // "신입생 첫등원" 수정은 등원일만 고치는 게 아니라, 반을 옮기거나 이름/학교
+  // 등이 잘못 입력된 경우도 바로잡을 수 있어야 해서 학생 전체 정보를 불러와
+  // /api/students/[id] PATCH로 저장한다(다른 반으로 옮기면 Notion 양방향
+  // relation이라 DB①반의 소속학생 목록도 함께 갱신된다 — 별도 처리 불필요).
+  const [loadingStudent, setLoadingStudent] = useState(isFirstDay);
+  const [classes, setClasses] = useState<{ id: string; name: string }[]>([]);
+  const [name, setNameField] = useState("");
+  const [school, setSchool] = useState("");
+  const [grade, setGrade] = useState("");
+  const [phone, setPhone] = useState("");
+  const [parentPhone, setParentPhone] = useState("");
+  const [classIds, setClassIds] = useState<string[]>([]);
+  const [enrolledAt, setEnrolledAt] = useState(target.date);
+
+  useEffect(() => {
+    if (!isFirstDay) return;
+    let cancelled = false;
+    Promise.all([
+      fetch(`/api/students/${target.item.id}`).then((r) => r.json()),
+      fetch("/api/classes").then((r) => r.json()),
+    ]).then(([data, classList]) => {
+      if (cancelled) return;
+      const s = data.student;
+      setNameField(s.name ?? "");
+      setSchool(s.school ?? "");
+      setGrade(s.grade ?? "");
+      setPhone(s.phone ?? "");
+      setParentPhone(s.parentPhone ?? "");
+      setClassIds(s.classIds ?? []);
+      setEnrolledAt(s.enrolledAt || target.date);
+      setClasses(classList);
+      setLoadingStudent(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFirstDay, target.item.id]);
+
+  function toggleClass(id: string) {
+    setClassIds((cur) => (cur.includes(id) ? cur.filter((c) => c !== id) : [...cur, id]));
+  }
 
   async function handleSave() {
     if (!window.confirm("수정하시겠습니까?")) return;
@@ -328,16 +375,16 @@ function ScheduleEditModal({
           }),
         });
       } else if (isFirstDay) {
-        res = await fetch("/api/student-info", {
-          method: "POST",
+        res = await fetch(`/api/students/${target.item.id}`, {
+          method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ studentId: target.item.id, enrolledAt }),
+          body: JSON.stringify({ name, school, grade, phone, parentPhone, classIds, enrolledAt }),
         });
       } else {
         res = await fetch(`/api/schedule-entry/${target.item.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ date: todoDate, time, ownerName: owner }),
+          body: JSON.stringify({ date: todoDate, time, ownerName: owner, note }),
         });
       }
       if (!res.ok) {
@@ -354,13 +401,13 @@ function ScheduleEditModal({
     }
   }
 
-  const name = "studentName" in target.item ? target.item.studentName : "";
+  const modalTitle = isFirstDay ? name || "학생 정보" : "studentName" in target.item ? target.item.studentName : "";
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>{name} 수정</h2>
+          <h2>{modalTitle} 수정</h2>
           <button type="button" className="secondary" onClick={onClose}>닫기</button>
         </div>
 
@@ -374,10 +421,56 @@ function ScheduleEditModal({
           </>
         )}
 
-        {isFirstDay && (
+        {isFirstDay && loadingStudent && <p className="muted">불러오는 중...</p>}
+        {isFirstDay && !loadingStudent && (
           <>
-            <label htmlFor="editEnrolledAt">등원일</label>
-            <input id="editEnrolledAt" type="date" value={enrolledAt} onChange={(e) => setEnrolledAt(e.target.value)} />
+            <div className="field-row">
+              <div>
+                <label htmlFor="editName">이름</label>
+                <input id="editName" type="text" value={name} onChange={(e) => setNameField(e.target.value)} />
+              </div>
+              <div>
+                <label htmlFor="editSchool">학교</label>
+                <input id="editSchool" type="text" value={school} onChange={(e) => setSchool(e.target.value)} />
+              </div>
+            </div>
+            <div className="field-row">
+              <div>
+                <label htmlFor="editGrade">학년</label>
+                <select id="editGrade" value={grade} onChange={(e) => setGrade(e.target.value)}>
+                  <option value="">선택 안 함</option>
+                  {EDIT_GRADE_OPTIONS.map((g) => (
+                    <option key={g} value={g}>{g}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="editEnrolledAt">등원일 (첫 등원일)</label>
+                <input id="editEnrolledAt" type="date" value={enrolledAt} onChange={(e) => setEnrolledAt(e.target.value)} />
+              </div>
+            </div>
+            <div className="field-row">
+              <div>
+                <label htmlFor="editPhone">학생 연락처</label>
+                <input id="editPhone" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="010-0000-0000" />
+              </div>
+              <div>
+                <label htmlFor="editParentPhone">학부모 연락처</label>
+                <input id="editParentPhone" type="tel" value={parentPhone} onChange={(e) => setParentPhone(e.target.value)} placeholder="010-0000-0000" />
+              </div>
+            </div>
+            <label>소속반 (반 이동 시 여기서 변경)</label>
+            <div className="class-checkbox-grid">
+              {classes.map((c) => (
+                <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, margin: 0 }}>
+                  <input type="checkbox" checked={classIds.includes(c.id)} onChange={() => toggleClass(c.id)} />
+                  {stripClassSuffix(c.name)}
+                </label>
+              ))}
+            </div>
+            <p className="muted" style={{ fontSize: 12 }}>
+              등원일이 오늘이거나 지났으면 저장 시 대기생 상태가 자동으로 재원으로 전환됩니다.
+            </p>
           </>
         )}
 
@@ -394,13 +487,15 @@ function ScheduleEditModal({
               placeholder="예: 16:00"
             />
             <StaffPicker value={owner} onChange={setOwner} label="담당자" />
+            <label htmlFor="editTodoNote">내용/메모</label>
+            <textarea id="editTodoNote" value={note} onChange={(e) => setNote(e.target.value)} />
           </>
         )}
 
         {error && <p className="error-text">{error}</p>}
 
         <div style={{ marginTop: 16 }}>
-          <button type="button" disabled={saving} onClick={handleSave}>
+          <button type="button" disabled={saving || loadingStudent} onClick={handleSave}>
             {saving ? "저장 중..." : "저장"}
           </button>
         </div>
@@ -722,6 +817,8 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
           <div className="schedule-item-row">
             <div>
               <strong>{f.studentName}</strong> <span className="muted">{schoolGrade(f.school, f.gradeNum)}</span>
+              {" · "}
+              <span className={f.status === "대기생" ? "badge" : "badge badge-success"}>{f.status ?? "-"}</span>
               {", "}
               <span className="muted">
                 {f.classDays.length > 0 ? f.classDays.join("·") : "요일 미정"} {f.classTime || ""}

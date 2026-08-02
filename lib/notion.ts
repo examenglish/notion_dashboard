@@ -1491,6 +1491,21 @@ export async function createAdminInboxEntry(input: {
   }
 }
 
+// 등원일이 오늘이거나 이미 지났는데 상태가 아직 대기생이면 그 자리에서
+// 바로 재원으로 전환한다. 매일 새벽 크론(promoteWaitlistedStudents)이
+// 놓친 학생을 다음날까지 기다리지 않도록, 등원일을 입력/수정하는 모든
+// 경로(학생등록, 학생정보수정, 오늘의 일정 "신입생 첫등원" 수정)에서
+// 즉시 반영한다. 상태를 캐시 없이 매번 다시 읽는 이유: 이 함수를 부르는
+// 쪽은 보통 상태를 같이 넘기지 않으므로(등원일만 입력) 최신값을 확인해야
+// "이미 재원/휴원/퇴원인 학생을 실수로 되돌리지" 않는다.
+async function autoPromoteFromEnrolledAt(studentId: string, enrolledAt: string | undefined) {
+  if (!enrolledAt || enrolledAt > todayKST()) return;
+  const page: any = await notion.pages.retrieve({ page_id: studentId });
+  if (getSelect(page, "상태") === "대기생") {
+    await notion.pages.update({ page_id: studentId, properties: { 상태: { select: { name: "재원" } } } as any });
+  }
+}
+
 export async function updateStudentInfo(input: {
   studentId: string;
   enrolledAt?: string;
@@ -1513,6 +1528,7 @@ export async function updateStudentInfo(input: {
     properties["조치알람일"] = { date: { start: input.actionAlarmDate } };
 
   await notion.pages.update({ page_id: input.studentId, properties });
+  await autoPromoteFromEnrolledAt(input.studentId, input.enrolledAt);
 
   // DB②의 조치/조치담당자/조치알람일은 매번 덮어써지는 "현재 상태" 필드라
   // 이력이 남지 않는다. action이 있을 때는 DB⑱에 조치사항 유형 레코드를
@@ -1573,11 +1589,16 @@ export async function createStudent(input: {
   classIds?: string[];
   memo?: string;
 }): Promise<string> {
+  // 대기생으로 등록하면서 등원일을 오늘 이전/오늘로 잡으면(예: 지난주부터
+  // 다니기 시작한 학생을 뒤늦게 입력하는 경우), 굳이 대기생을 거쳤다가
+  // 크론을 기다릴 필요 없이 바로 재원으로 저장한다.
+  const effectiveStatus =
+    input.status === "대기생" && input.enrolledAt && input.enrolledAt <= todayKST() ? "재원" : input.status;
   const page = await notion.pages.create({
     parent: { data_source_id: DB.STUDENT } as any,
     properties: {
       이름: { title: [{ text: { content: input.name } }] },
-      상태: { select: { name: input.status } },
+      상태: { select: { name: effectiveStatus } },
       ...(input.school ? { 학교: { rich_text: [{ text: { content: input.school } }] } } : {}),
       ...(input.grade ? { 학년: { select: { name: input.grade } } } : {}),
       ...(input.phone ? { 연락처: { phone_number: input.phone } } : {}),
@@ -1635,6 +1656,14 @@ export async function updateStudentFull(
   if (input.classIds !== undefined) properties["소속반"] = { relation: input.classIds.map((id) => ({ id })) };
   if (input.memo !== undefined) properties["메모"] = { rich_text: [{ text: { content: input.memo } }] };
   await notion.pages.update({ page_id: studentId, properties });
+
+  // status를 이 호출에서 명시적으로 같이 바꾸는 중이면(예: 관리자가 직접
+  // 휴원/퇴원으로 바꾸는 경우) 그 판단을 그대로 존중하고 자동 승격을 하지
+  // 않는다 — enrolledAt만 바뀌었을 때만(= 등원일 수정/반 이동 등) 대기생
+  // 여부를 확인해 자동 전환한다.
+  if (input.status === undefined) {
+    await autoPromoteFromEnrolledAt(studentId, input.enrolledAt);
+  }
 }
 
 // 대기생을 등원일에 맞춰 자동으로 재원 전환 — 매일 새벽 크론(app/api/cron/
@@ -1706,11 +1735,12 @@ export async function completeScheduleEntry(id: string) {
 
 export async function updateScheduleEntry(
   id: string,
-  input: { date?: string; time?: string; ownerName?: string }
+  input: { date?: string; time?: string; ownerName?: string; note?: string }
 ) {
   const properties: any = {};
   if (input.date) properties["예정일"] = { date: { start: input.date } };
   if (input.time !== undefined) properties["시간"] = { rich_text: [{ text: { content: input.time } }] };
+  if (input.note !== undefined) properties["메모"] = { rich_text: [{ text: { content: input.note } }] };
   if (input.ownerName !== undefined) {
     const ownerId = input.ownerName ? await findStaffIdByName(input.ownerName) : null;
     properties["담당자"] = { relation: ownerId ? [{ id: ownerId }] : [] };
