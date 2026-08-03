@@ -96,9 +96,7 @@ export default function NaturalLanguageInput({ onSaved }: { onSaved?: () => void
     <div className="card">
       <h2>이그잼 AI</h2>
       <p className="muted">
-        예: &ldquo;김민준 학생 내일 감기몸살로 결석해요, 학부모가 전화주셨어요&rdquo; / &ldquo;황지환 8/5 보강, 이강사 담당&rdquo;
-        <br />
-        나만 보는 할일: &ldquo;/to do list 문법책 재고 주문하기&rdquo;
+        <strong>자연어로 자유롭게 입력하세요. 자동처리됩니다.</strong>
       </p>
       <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
         <textarea
