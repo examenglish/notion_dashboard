@@ -120,7 +120,7 @@ export default function AssistantClinicForm() {
   return (
     <>
       <div className="card">
-        <h2>오늘 할 일</h2>
+        <h2>오늘 할 일 <span className="title-lab-tag">(실험실)</span></h2>
         {loading && <p className="muted">불러오는 중...</p>}
         {!loading && (!brief || brief.todayTasks.length === 0) && (
           <p className="muted">오늘 배정된 일정이 없습니다.</p>
@@ -154,7 +154,7 @@ export default function AssistantClinicForm() {
       </div>
 
       <div className="card">
-        <h2>다음 준비사항</h2>
+        <h2>다음 준비사항 <span className="title-lab-tag">(실험실)</span></h2>
         <p className="muted">직전 클리닉 기록에 남긴 학생별 준비사항입니다.</p>
         {!loading && (!brief || brief.upcomingPrep.length === 0) && <p className="muted">준비사항이 없습니다.</p>}
         {!loading && brief && brief.upcomingPrep.length > 0 && (
@@ -171,7 +171,7 @@ export default function AssistantClinicForm() {
       </div>
 
       <form className="card" onSubmit={handleSubmit}>
-        <h2>클리닉 기록 작성</h2>
+        <h2>클리닉 기록 작성 <span className="title-lab-tag">(실험실)</span></h2>
         <p className="muted">이번 클리닉 시간에 지도한 학생, 진행 내용, 다음 준비사항을 남겨주세요.</p>
 
         {brief && brief.myClasses.length > 0 && (
@@ -244,7 +244,7 @@ export default function AssistantClinicForm() {
 
       {brief && brief.recentClinic.length > 0 && (
         <div className="card">
-          <h2>최근 내 클리닉 기록</h2>
+          <h2>최근 내 클리닉 기록 <span className="title-lab-tag">(실험실)</span></h2>
           <ul className="schedule-list">
             {brief.recentClinic.map((c) => (
               <li key={c.id}>

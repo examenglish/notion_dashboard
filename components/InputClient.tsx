@@ -234,7 +234,7 @@ function ClassRecordForm() {
   return (
     <>
       <form className="card" onSubmit={(e) => e.preventDefault()}>
-        <h2>오늘 수업 기록</h2>
+        <h2>오늘 수업 기록 <span className="title-lab-tag">(실험실)</span></h2>
         {existingProgressId && (
           <p className="muted" style={{ marginTop: -4 }}>
             이미 저장된 기록을 불러왔습니다 — 수정 후 저장하면 기존 기록이 업데이트됩니다.
@@ -469,7 +469,7 @@ function AdminInputForm() {
 
   return (
     <form className="card" onSubmit={handleSubmit}>
-      <h2>결석예정 / 긴급상담요청</h2>
+      <h2>결석예정 / 긴급상담요청 <span className="title-lab-tag">(실험실)</span></h2>
 
       <label htmlFor="type">유형</label>
       <select id="type" value={type} onChange={(e) => setType(e.target.value)}>
@@ -554,7 +554,7 @@ function ScheduleEntryForm() {
 
   return (
     <form className="card" onSubmit={handleSubmit}>
-      <h2>일정 등록</h2>
+      <h2>일정 등록 <span className="title-lab-tag">(실험실)</span></h2>
       <p className="muted">보강 / 재시 / 신입생상담 / 레벨체크 — 오늘 날짜면 대시보드 "오늘의 일정"에 표시됩니다.</p>
 
       <label htmlFor="scheduleType">유형</label>
@@ -631,7 +631,7 @@ function CounselingForm() {
 
   return (
     <form className="card" onSubmit={handleSubmit}>
-      <h2>상담일지 등록</h2>
+      <h2>상담일지 등록 <span className="title-lab-tag">(실험실)</span></h2>
       <p className="muted">전사내용(원본)과 상담내용(요약)을 나눠서 입력합니다.</p>
 
       <StudentPicker studentId={studentId} onChange={setStudentId} />
@@ -729,7 +729,7 @@ function StudentInfoForm() {
 
   return (
     <form className="card" onSubmit={handleSubmit}>
-      <h2>학생 정보 업데이트</h2>
+      <h2>학생 정보 업데이트 <span className="title-lab-tag">(실험실)</span></h2>
       <p className="muted">등원일 · 회비일 · 학습레벨 · 조치(알람) 입력 (행정 전용)</p>
 
       <StudentPicker studentId={studentId} onChange={setStudentId} />
@@ -913,7 +913,7 @@ function StudentRegisterForm() {
 
   return (
     <form className="card" onSubmit={handleSubmit}>
-      <h2>학생 등록</h2>
+      <h2>학생 등록 <span className="title-lab-tag">(실험실)</span></h2>
       <p className="muted">이름으로 검색하면 기존 학생 정보를 불러와 수정할 수 있고, 검색 결과가 없으면 새로 등록됩니다.</p>
 
       <StudentPicker studentId={searchPickerId} onChange={handlePickExisting} label="학생 검색 (있으면 불러오기, 없으면 새로 등록)" />

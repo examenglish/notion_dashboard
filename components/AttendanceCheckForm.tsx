@@ -103,7 +103,7 @@ export default function AttendanceCheckForm() {
 
   return (
     <form className="card" onSubmit={(e) => e.preventDefault()}>
-      <h2>결석 · 단어테스트 체크</h2>
+      <h2>결석 · 단어테스트 체크 <span className="title-lab-tag">(실험실)</span></h2>
       <p className="muted" style={{ marginTop: 0 }}>
         진도 입력 없이 결석/단어통과여부만 바로 체크해 저장합니다. 저장하면 곧바로 학생별 통계에 반영되고, 담당교사가
         같은 반/날짜로 "오늘 수업 기록"을 열면 이 체크 내용을 그대로 불러와 이어서 진도를 입력할 수 있습니다.

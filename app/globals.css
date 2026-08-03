@@ -96,6 +96,11 @@ h2 {
   font-size: 13px;
 }
 
+.title-lab-tag {
+  font-size: 50%;
+  font-weight: bold;
+}
+
 .login-shell {
   min-height: 100vh;
   display: flex;

@@ -64,7 +64,7 @@ export default function ClassAssistantAssignForm() {
 
   return (
     <div className="card">
-      <h2>반별 담당 조교 배정</h2>
+      <h2>반별 담당 조교 배정 <span className="title-lab-tag">(실험실)</span></h2>
       <p className="muted">조교가 클리닉 기록 작성 시 반 전체 명단을 한 번에 불러올 수 있도록 반별 담당 조교를 지정합니다.</p>
 
       <label htmlFor="assignClass">반</label>

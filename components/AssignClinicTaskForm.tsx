@@ -112,7 +112,7 @@ export default function AssignClinicTaskForm() {
 
   return (
     <form className="card" onSubmit={handleSubmit}>
-      <h2>조교 클리닉 지시</h2>
+      <h2>조교 클리닉 지시 <span className="title-lab-tag">(실험실)</span></h2>
       <p className="muted">담당 조교에게 클리닉 시간에 봐야 할 학생과 지시사항을 전달합니다. "오늘의 일정"과 조교의 "오늘 할 일"에 표시됩니다.</p>
 
       <StaffPicker value={assistant} onChange={setAssistant} label="담당 조교" />

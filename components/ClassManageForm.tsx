@@ -94,7 +94,7 @@ export default function ClassManageForm() {
 
   return (
     <form className="card" onSubmit={handleSubmit}>
-      <h2>반 관리</h2>
+      <h2>반 관리 <span className="title-lab-tag">(실험실)</span></h2>
       <p className="muted">반을 선택하면 반명을 포함해 정보를 수정할 수 있고, "새 반 추가"를 선택하면 새로 만듭니다.</p>
 
       <label htmlFor="classSelect">반 선택</label>
