@@ -725,7 +725,7 @@ th, td {
 .ticker-track {
   display: inline-flex;
   animation: tickerScroll linear infinite;
-  animation-duration: 26.7s;
+  animation-duration: 33.38s;
 }
 
 .ticker-item {
