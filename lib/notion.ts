@@ -1430,6 +1430,10 @@ export async function updateAdminInboxEntry(
   await notion.pages.update({ page_id: id, properties });
 }
 
+export async function deleteAdminInboxEntry(id: string) {
+  await notion.pages.update({ page_id: id, archived: true });
+}
+
 // "결석예정"으로 등록된 날짜에 이미 저장된 "오늘 수업 기록"(DB⑥ 일별기록)이
 // 있으면, 그 학생의 출결을 결석으로 맞춰 자연어/수동 입력 어느 쪽으로 결석을
 // 알려도 실제 출결 통계에 곧바로 반영되게 한다. 아직 그 반의 수업 기록 자체가

@@ -39,6 +39,7 @@ export default function AdminInboxDetailModal({
   const [saving, setSaving] = useState(false);
   const [togglingDone, setTogglingDone] = useState(false);
   const [savingOwner, setSavingOwner] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSave() {
@@ -88,6 +89,26 @@ export default function AdminInboxDetailModal({
       setError("네트워크 오류가 발생했습니다.");
     } finally {
       setTogglingDone(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!window.confirm("이 항목을 삭제하시겠습니까?")) return;
+    setError(null);
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/admin-inbox/${item.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "삭제에 실패했습니다.");
+        return;
+      }
+      onSaved();
+      onClose();
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -191,9 +212,12 @@ export default function AdminInboxDetailModal({
         {error && <p className="error-text">{error}</p>}
 
         {canEdit && (
-          <div style={{ marginTop: 16 }}>
+          <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
             <button type="button" disabled={saving} onClick={handleSave}>
               {saving ? "저장 중..." : "저장"}
+            </button>
+            <button type="button" className="secondary" disabled={deleting} onClick={handleDelete}>
+              {deleting ? "삭제 중..." : "삭제"}
             </button>
           </div>
         )}
