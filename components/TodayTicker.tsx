@@ -36,7 +36,7 @@ function statusTag(status: string | null | undefined) {
   return `[${STATUS_LABEL[status] ?? status}] `;
 }
 
-export default function TodayTicker() {
+export default function TodayTicker({ refreshSignal }: { refreshSignal?: number } = {}) {
   const [items, setItems] = useState<TickerItem[]>([]);
 
   useEffect(() => {
@@ -90,7 +90,7 @@ export default function TodayTicker() {
         setItems(msgs);
       })
       .catch(() => setItems([]));
-  }, []);
+  }, [refreshSignal]);
 
   if (items.length === 0) return null;
 

@@ -735,7 +735,15 @@ function ScheduleQuickAddModal({
   );
 }
 
-export default function TodayScheduleCard({ staffName }: { staffName: string | null }) {
+export default function TodayScheduleCard({
+  staffName,
+  refreshSignal,
+  onChanged,
+}: {
+  staffName: string | null;
+  refreshSignal?: number;
+  onChanged?: () => void;
+}) {
   const { cache, ensureDate, refetchDate, markDone } = useScheduleCache();
   const [viewingCounseling, setViewingCounseling] = useState<{ item: CounselingBrief; date: string } | null>(null);
   const [viewingInquiry, setViewingInquiry] = useState<{ item: InquiryBrief; date: string } | null>(null);
@@ -795,6 +803,20 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [popup?.date]);
 
+  // 행정실/상담일지가 이 카드 밖(대시보드의 행정실 리스트 등)에서 수정·삭제돼도
+  // 여기 캐시는 그대로라 반영이 안 되던 문제 — 부모가 refreshSignal을 bump하면
+  // 현재 열려있는 모든 날짜를 다시 불러온다. 최초 마운트 시(undefined->0 등)에는
+  // 건너뛴다 — 어차피 위 useEffect들이 처음 데이터를 채운다.
+  const prevRefreshSignal = useRef(refreshSignal);
+  useEffect(() => {
+    if (refreshSignal === undefined) return;
+    if (prevRefreshSignal.current === refreshSignal) return;
+    prevRefreshSignal.current = refreshSignal;
+    Object.values(dates).forEach(refetchDate);
+    if (materialDate) fetchMaterial(materialDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshSignal]);
+
   function shiftSection(key: SectionKey, delta: number) {
     setDates((cur) => ({ ...cur, [key]: shiftDate(cur[key], delta) }));
   }
@@ -810,11 +832,13 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
   ) {
     markDone(date, key, id);
     await fetch(`/api/schedule-entry/${id}`, { method: "PATCH" });
+    onChanged?.();
   }
 
   async function completePersonalTodo(date: string, id: string) {
     markDone(date, "personalTodos", id);
     await fetch(`/api/personal-todo/${id}`, { method: "PATCH" });
+    onChanged?.();
   }
 
   function renderItem(key: SectionKey, date: string): (item: any) => React.ReactNode {
@@ -1112,7 +1136,10 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
         <ScheduleEditModal
           target={editing}
           onClose={() => setEditing(null)}
-          onSaved={() => refetchDate(editing.date)}
+          onSaved={() => {
+            refetchDate(editing.date);
+            onChanged?.();
+          }}
         />
       )}
 
@@ -1120,7 +1147,10 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
         <ScheduleQuickAddModal
           target={quickAdd}
           onClose={() => setQuickAdd(null)}
-          onSaved={(savedDate) => refetchDate(savedDate)}
+          onSaved={(savedDate) => {
+            refetchDate(savedDate);
+            onChanged?.();
+          }}
         />
       )}
 
@@ -1145,7 +1175,10 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
               item={record}
               canEdit={canEdit(c.enteredBy)}
               onClose={() => setViewingCounseling(null)}
-              onSaved={() => refetchDate(viewingCounseling.date)}
+              onSaved={() => {
+                refetchDate(viewingCounseling.date);
+                onChanged?.();
+              }}
             />
           );
         })()}
@@ -1171,7 +1204,10 @@ export default function TodayScheduleCard({ staffName }: { staffName: string | n
               item={record}
               canEdit={canEdit(q.enteredBy)}
               onClose={() => setViewingInquiry(null)}
-              onSaved={() => refetchDate(viewingInquiry.date)}
+              onSaved={() => {
+                refetchDate(viewingInquiry.date);
+                onChanged?.();
+              }}
             />
           );
         })()}

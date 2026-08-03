@@ -109,16 +109,27 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
     return !enteredBy || enteredBy === staffName;
   }
 
+  // 행정실/상담일지는 이 리스트(RecentListCard), "오늘의 일정" 카드, 상단
+  // 티커 세 곳에서 각자 따로 fetch한다. 한쪽에서 수정·삭제해도 나머지 두
+  // 곳은 그대로 남아있던 버그(행정실에서 삭제해도 오늘의 일정/티커에 계속
+  // 보임)가 있어, scheduleVersion을 bump해 세 곳이 서로 재조회하도록 묶는다.
+  const [scheduleVersion, setScheduleVersion] = useState(0);
+  function bumpSchedule() {
+    setScheduleVersion((v) => v + 1);
+  }
+
   function reloadCounseling() {
     fetch("/api/counseling")
       .then((r) => r.json())
       .then(setCounseling);
+    bumpSchedule();
   }
 
   function reloadAdminInbox() {
     fetch("/api/admin-inbox")
       .then((r) => r.json())
       .then(setAdminInbox);
+    bumpSchedule();
   }
 
   function reloadClinicRecords() {
@@ -219,11 +230,11 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
   return (
     <div className="page">
       <DateTimeHeader />
-      <TodayScheduleCard staffName={staffName} />
+      <TodayScheduleCard staffName={staffName} refreshSignal={scheduleVersion} onChanged={() => { reloadAdminInbox(); reloadCounseling(); }} />
 
       <NaturalLanguageInput onSaved={() => { reloadAdminInbox(); reloadCounseling(); }} />
 
-      <TodayTicker />
+      <TodayTicker refreshSignal={scheduleVersion} />
 
       <div className="grid-2">
         <ClassDateChart />
