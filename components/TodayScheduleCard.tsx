@@ -295,10 +295,12 @@ const EDIT_GRADE_OPTIONS = ["초1", "초2", "초3", "초4", "초5", "초6", "중
 
 function ScheduleEditModal({
   target,
+  staffRole,
   onClose,
   onSaved,
 }: {
   target: EditTarget;
+  staffRole: string | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -321,6 +323,7 @@ function ScheduleEditModal({
   const [personalContent, setPersonalContent] = useState(isPersonal ? personalItem.title : "");
   const [personalDate, setPersonalDate] = useState(target.date);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // "신입생 첫등원" 수정은 등원일만 고치는 게 아니라, 반을 옮기거나 이름/학교
@@ -413,6 +416,26 @@ function ScheduleEditModal({
       setError("네트워크 오류가 발생했습니다.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleDeleteAlarm() {
+    if (!window.confirm("이 조치사항 알람을 삭제하시겠습니까? 전체기록의 조치사항 이력도 함께 정리됩니다.")) return;
+    setError(null);
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/student-info/${target.item.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "삭제에 실패했습니다.");
+        return;
+      }
+      onSaved();
+      onClose();
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -524,10 +547,15 @@ function ScheduleEditModal({
 
         {error && <p className="error-text">{error}</p>}
 
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
           <button type="button" disabled={saving || loadingStudent} onClick={handleSave}>
             {saving ? "저장 중..." : "저장"}
           </button>
+          {isAlarm && staffRole === "원장" && (
+            <button type="button" className="secondary" disabled={deleting} onClick={handleDeleteAlarm}>
+              {deleting ? "삭제 중..." : "삭제"}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -737,10 +765,12 @@ function ScheduleQuickAddModal({
 
 export default function TodayScheduleCard({
   staffName,
+  staffRole,
   refreshSignal,
   onChanged,
 }: {
   staffName: string | null;
+  staffRole: string | null;
   refreshSignal?: number;
   onChanged?: () => void;
 }) {
@@ -1135,6 +1165,7 @@ export default function TodayScheduleCard({
       {editing && (
         <ScheduleEditModal
           target={editing}
+          staffRole={staffRole}
           onClose={() => setEditing(null)}
           onSaved={() => {
             refetchDate(editing.date);

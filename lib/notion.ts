@@ -1804,8 +1804,51 @@ export async function updateScheduleEntry(
 
 // 학생별 전체기록(StudentHistoryModal)에서 보강/조치사항/복습 이력을 지울 때
 // 쓰인다 — 삭제는 원장만 가능(권한 확인은 라우트에서).
+// 조치사항(DB⑱) 이력 하나를 지울 때, 그게 학생 마스터(DB②)의 "현재 조치"
+// 상태와 같은 내용이면("오늘의 일정 > 학습레벨/조치사항"에 그대로 뜨는 값)
+// 그 현재상태도 같이 비워서 두 화면이 따로 놀지 않게 한다. 다른 유형
+// (보강/복습)은 이 매칭 대상이 아니라 그냥 지운다.
 export async function deleteScheduleEntry(id: string) {
+  const page: any = await notion.pages.retrieve({ page_id: id });
+  if (getSelect(page, "유형") === "조치사항") {
+    const content = getTitle(page, "제목");
+    const studentId = getRelationIds(page, "관련학생")[0];
+    if (studentId && content) {
+      const studentPage: any = await notion.pages.retrieve({ page_id: studentId });
+      if (getRichText(studentPage, "조치") === content) {
+        await notion.pages.update({
+          page_id: studentId,
+          properties: { 조치: { rich_text: [] }, 조치담당자: { rich_text: [] }, 조치알람일: { date: null } },
+        });
+      }
+    }
+  }
   await notion.pages.update({ page_id: id, archived: true });
+}
+
+// "오늘의 일정 > 학습레벨/조치사항"에서 알람을 지울 때 — 학생 마스터의
+// 현재상태를 비우고, 같은 내용으로 남아있는 DB⑱ 조치사항 이력도 함께
+// archive해 전체기록의 "조치사항 이력"에 죽은 기록이 남지 않게 한다.
+export async function deleteStudentActionAlarm(studentId: string) {
+  const studentPage: any = await notion.pages.retrieve({ page_id: studentId });
+  const currentAction = getRichText(studentPage, "조치");
+  await notion.pages.update({
+    page_id: studentId,
+    properties: { 조치: { rich_text: [] }, 조치담당자: { rich_text: [] }, 조치알람일: { date: null } },
+  });
+  if (currentAction) {
+    const matches = await queryAllPages({
+      data_source_id: DB.TODO,
+      filter: {
+        and: [
+          { property: "유형", select: { equals: "조치사항" } },
+          { property: "관련학생", relation: { contains: studentId } },
+          { property: "제목", title: { equals: currentAction } },
+        ],
+      },
+    });
+    await Promise.all(matches.map((m: any) => notion.pages.update({ page_id: m.id, archived: true })));
+  }
 }
 
 // DB⑥ 일별기록의 학생별 행 하나를 지운다. 반 전체 진도(반별진도원본)는

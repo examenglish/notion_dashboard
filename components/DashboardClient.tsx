@@ -230,7 +230,7 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
   return (
     <div className="page">
       <DateTimeHeader />
-      <TodayScheduleCard staffName={staffName} refreshSignal={scheduleVersion} onChanged={() => { reloadAdminInbox(); reloadCounseling(); }} />
+      <TodayScheduleCard staffName={staffName} staffRole={staffRole} refreshSignal={scheduleVersion} onChanged={() => { reloadAdminInbox(); reloadCounseling(); }} />
 
       <NaturalLanguageInput onSaved={() => { reloadAdminInbox(); reloadCounseling(); }} />
 
@@ -471,7 +471,10 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
           trendData={trendData}
           scoreData={scoreData}
           onClose={() => setShowHistory(false)}
-          onChanged={() => selectStudent(selected.student.id)}
+          onChanged={() => {
+            selectStudent(selected.student.id);
+            bumpSchedule();
+          }}
         />
       )}
 
