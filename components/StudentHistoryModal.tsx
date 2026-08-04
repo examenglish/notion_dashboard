@@ -107,7 +107,8 @@ export default function StudentHistoryModal({
     setLoading(true);
     fetch(`/api/students/${studentId}/history`)
       .then((r) => r.json())
-      .then(setHistory)
+      .then((data) => setHistory(data && !data.error ? data : null))
+      .catch(() => setHistory(null))
       .finally(() => setLoading(false));
   }
 
