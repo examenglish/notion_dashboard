@@ -22,7 +22,7 @@ export type StudentRow = {
   memo?: string;
 };
 
-export type MetricKey = "attendanceRate" | "vocabPassRate" | "homeworkIncompleteRate";
+export type MetricKey = "attendanceRate" | "vocabPassRate" | "homeworkRate";
 
 export type MonthlyMetricRow = {
   studentId: string;
@@ -31,7 +31,7 @@ export type MonthlyMetricRow = {
   recordCount: number;
   attendanceRate: number | null;
   vocabPassRate: number | null;
-  homeworkIncompleteRate: number | null;
+  homeworkRate: number | null;
 };
 
 type SortKey = "attendanceRate" | "homeworkRate" | "vocabPassRate" | "tuitionDay";
@@ -57,13 +57,13 @@ function StatusBadge({ status }: { status: string | null }) {
 const METRIC_TABS: { key: MetricKey; label: string }[] = [
   { key: "attendanceRate", label: "출석률" },
   { key: "vocabPassRate", label: "단어통과율" },
-  { key: "homeworkIncompleteRate", label: "과제미이행률" },
+  { key: "homeworkRate", label: "과제수행률" },
 ];
 
 function BottomMetricsList({ onSelect }: { onSelect: (id: string) => void }) {
   const [rows, setRows] = useState<MonthlyMetricRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [metric, setMetric] = useState<MetricKey>("homeworkIncompleteRate");
+  const [metric, setMetric] = useState<MetricKey>("homeworkRate");
   const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
@@ -73,15 +73,11 @@ function BottomMetricsList({ onSelect }: { onSelect: (id: string) => void }) {
       .finally(() => setLoading(false));
   }, []);
 
-  // attendanceRate/vocabPassRate: lower is worse (ascending). homeworkIncompleteRate: higher is worse (descending).
+  // 세 지표 모두 낮을수록 나쁨 — 낮은 순(오름차순)으로 정렬해 상위에 노출.
   const sorted = useMemo(() => {
     return [...rows]
       .filter((r) => r[metric] !== null)
-      .sort((a, b) => {
-        const av = a[metric] as number;
-        const bv = b[metric] as number;
-        return metric === "homeworkIncompleteRate" ? bv - av : av - bv;
-      });
+      .sort((a, b) => (a[metric] as number) - (b[metric] as number));
   }, [rows, metric]);
 
   const visible = sorted.slice(0, 5);

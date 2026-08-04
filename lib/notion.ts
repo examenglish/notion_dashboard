@@ -650,7 +650,7 @@ export async function getClassSummaryByDate(date: string) {
 // Students with the worst attendance rate so far this (KST) calendar month —
 // drives the dashboard's default "학생검색" view before anything is typed.
 // Per-student rates for this (KST) month — the dashboard sorts/slices this
-// three different ways (출석률/단어통과율/과제미이행률 tabs) rather than
+// three different ways (출석률/단어통과율/과제수행률 tabs) rather than
 // making three separate round trips.
 export async function getMonthlyStudentMetrics() {
   const [y, m] = todayKST().split("-").map(Number);
@@ -707,7 +707,7 @@ export async function getMonthlyStudentMetrics() {
     recordCount: v.attTotal,
     attendanceRate: v.attTotal > 0 ? v.attPresent / v.attTotal : null,
     vocabPassRate: v.vocabTotal > 0 ? v.vocabPass / v.vocabTotal : null,
-    homeworkIncompleteRate: v.hwTotal > 0 ? v.hwIncomplete / v.hwTotal : null,
+    homeworkRate: v.hwTotal > 0 ? (v.hwTotal - v.hwIncomplete) / v.hwTotal : null,
   }));
 }
 

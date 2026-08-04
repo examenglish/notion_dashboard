@@ -8,7 +8,7 @@ const pct = (v: number | null) => (v === null ? "-" : `${Math.round(v * 100)}%`)
 const METRIC_LABEL: Record<MetricKey, string> = {
   attendanceRate: "출석률",
   vocabPassRate: "단어통과율",
-  homeworkIncompleteRate: "과제미이행률",
+  homeworkRate: "과제수행률",
 };
 
 export default function MonthlyBottomModal({
@@ -22,14 +22,10 @@ export default function MonthlyBottomModal({
   onClose: () => void;
   onSelect: (id: string) => void;
 }) {
-  // attendanceRate/vocabPassRate: lower is worse. homeworkIncompleteRate: higher is worse.
+  // 세 지표 모두 낮을수록 나쁨 — 낮은 순(오름차순)으로 정렬해 상위에 노출.
   const sorted = [...rows]
     .filter((r) => r[metric] !== null)
-    .sort((a, b) => {
-      const av = a[metric] as number;
-      const bv = b[metric] as number;
-      return metric === "homeworkIncompleteRate" ? bv - av : av - bv;
-    })
+    .sort((a, b) => (a[metric] as number) - (b[metric] as number))
     .slice(0, 30);
 
   return (
