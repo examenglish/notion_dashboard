@@ -85,7 +85,7 @@ function compactLine(name: string, school: string | undefined, grade: string | n
   return `${prefix}${content}`;
 }
 
-export default function DashboardClient({ staffName }: { staffName: string | null }) {
+export default function DashboardClient({ staffName, staffRole }: { staffName: string | null; staffRole: string | null }) {
   const [query, setQuery] = useState("");
   const [students, setStudents] = useState<StudentListItem[]>([]);
   const [selected, setSelected] = useState<StudentDetail | null>(null);
@@ -460,10 +460,18 @@ export default function DashboardClient({ staffName }: { staffName: string | nul
       {showHistory && selected && (
         <StudentHistoryModal
           studentId={selected.student.id}
-          student={{ name: selected.student.name, school: selected.student.school, grade: selected.student.grade }}
+          student={{
+            name: selected.student.name,
+            school: selected.student.school,
+            grade: selected.student.grade,
+            memo: selected.student.memo ?? "",
+          }}
+          staffName={staffName}
+          staffRole={staffRole}
           trendData={trendData}
           scoreData={scoreData}
           onClose={() => setShowHistory(false)}
+          onChanged={() => selectStudent(selected.student.id)}
         />
       )}
 

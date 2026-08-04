@@ -19,6 +19,7 @@ export type StudentRow = {
   isNew: boolean;
   tuitionDay: number | null;
   latestExam: { date: string; score: number | null; subject: string | null; examName: string } | null;
+  memo?: string;
 };
 
 export type MetricKey = "attendanceRate" | "vocabPassRate" | "homeworkIncompleteRate";
@@ -62,7 +63,7 @@ const METRIC_TABS: { key: MetricKey; label: string }[] = [
 function BottomMetricsList({ onSelect }: { onSelect: (id: string) => void }) {
   const [rows, setRows] = useState<MonthlyMetricRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [metric, setMetric] = useState<MetricKey>("attendanceRate");
+  const [metric, setMetric] = useState<MetricKey>("homeworkIncompleteRate");
   const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {

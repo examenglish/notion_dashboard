@@ -401,6 +401,7 @@ export async function getStudentFullHistory(studentId: string) {
     page_size: 100,
   });
   const dailyRecords = dailyRes.results.map((p: any) => ({
+    id: p.id,
     date: getDate(p, "날짜"),
     progress: getRichText(p, "진도내용"),
     attendance: getSelect(p, "출결"),
@@ -417,6 +418,7 @@ export async function getStudentFullHistory(studentId: string) {
   const homeworkByProgressId = new Map(progressPages.map((p: any) => [p.id, getRichText(p, "과제내용")]));
 
   const progress = dailyRecords.map((r) => ({
+    id: r.id,
     date: r.date,
     progress: r.progress,
     homework: r.progressPageId ? homeworkByProgressId.get(r.progressPageId) ?? "" : "",
@@ -472,6 +474,7 @@ export async function getStudentFullHistory(studentId: string) {
     .map((p: any) => {
       const ownerId = getRelationIds(p, "담당자")[0];
       return {
+        id: p.id,
         date: getDate(p, "예정일"),
         time: getRichText(p, "시간"),
         owner: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
@@ -484,6 +487,7 @@ export async function getStudentFullHistory(studentId: string) {
     .map((p: any) => {
       const ownerId = getRelationIds(p, "담당자")[0];
       return {
+        id: p.id,
         date: getDate(p, "예정일"),
         content: getTitle(p, "제목"),
         owner: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
@@ -493,19 +497,23 @@ export async function getStudentFullHistory(studentId: string) {
 
   const counseling = counselingEntries
     .map((p: any) => ({
+      id: p.id,
       date: getDate(p, "날짜"),
       counselor: getRichText(p, "상담자"),
       content: getRichText(p, "상담내용"),
       followUp: getRichText(p, "후속조치"),
+      enteredBy: getRichText(p, "입력자"),
     }))
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
 
   const inquiries = inboxEntries
     .map((p: any) => ({
+      id: p.id,
       date: getDate(p, "날짜"),
       type: getSelect(p, "입력유형"),
       content: getRichText(p, "내용"),
       done: getCheckbox(p, "처리완료"),
+      enteredBy: getRichText(p, "입력자"),
     }))
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
 
@@ -513,6 +521,7 @@ export async function getStudentFullHistory(studentId: string) {
     .map((p: any) => {
       const assistantId = getRelationIds(p, "조교")[0];
       return {
+        id: p.id,
         date: getDate(p, "날짜"),
         assistant: assistantId ? staffMap.get(assistantId) ?? "-" : "-",
         content: getRichText(p, "진행내용"),
@@ -523,6 +532,7 @@ export async function getStudentFullHistory(studentId: string) {
 
   const review = reviewTodos
     .map((p: any) => ({
+      id: p.id,
       date: getDate(p, "예정일"),
       content: getRichText(p, "메모"),
       done: getCheckbox(p, "완료여부"),
@@ -1414,6 +1424,10 @@ export async function updateCounselingEntry(
   await notion.pages.update({ page_id: id, properties });
 }
 
+export async function deleteCounselingEntry(id: string) {
+  await notion.pages.update({ page_id: id, archived: true });
+}
+
 export async function updateAdminInboxEntry(
   id: string,
   input: { type?: string; content?: string; startDate?: string; endDate?: string; owner?: string; done?: boolean }
@@ -1774,17 +1788,31 @@ export async function completeScheduleEntry(id: string) {
 
 export async function updateScheduleEntry(
   id: string,
-  input: { date?: string; time?: string; ownerName?: string; note?: string }
+  input: { date?: string; time?: string; ownerName?: string; note?: string; title?: string }
 ) {
   const properties: any = {};
   if (input.date) properties["예정일"] = { date: { start: input.date } };
   if (input.time !== undefined) properties["시간"] = { rich_text: [{ text: { content: input.time } }] };
   if (input.note !== undefined) properties["메모"] = { rich_text: [{ text: { content: input.note } }] };
+  if (input.title !== undefined) properties["제목"] = { title: [{ text: { content: input.title } }] };
   if (input.ownerName !== undefined) {
     const ownerId = input.ownerName ? await findStaffIdByName(input.ownerName) : null;
     properties["담당자"] = { relation: ownerId ? [{ id: ownerId }] : [] };
   }
   await notion.pages.update({ page_id: id, properties });
+}
+
+// 학생별 전체기록(StudentHistoryModal)에서 보강/조치사항/복습 이력을 지울 때
+// 쓰인다 — 삭제는 원장만 가능(권한 확인은 라우트에서).
+export async function deleteScheduleEntry(id: string) {
+  await notion.pages.update({ page_id: id, archived: true });
+}
+
+// DB⑥ 일별기록의 학생별 행 하나를 지운다. 반 전체 진도(반별진도원본)는
+// 건드리지 않으므로 같은 반 다른 학생의 기록에는 영향이 없다 — 삭제는
+// 원장만 가능(권한 확인은 라우트에서).
+export async function deleteDailyRecordEntry(id: string) {
+  await notion.pages.update({ page_id: id, archived: true });
 }
 
 // ---- 조교 클리닉 (DB⑮) ----
@@ -1825,10 +1853,19 @@ export async function createClinicRecord(input: {
   });
 }
 
-export async function updateClinicRecord(id: string, input: { checked?: boolean }) {
+export async function updateClinicRecord(
+  id: string,
+  input: { checked?: boolean; content?: string; nextPrep?: string }
+) {
   const properties: any = {};
   if (input.checked !== undefined) properties["확인완료"] = { checkbox: input.checked };
+  if (input.content !== undefined) properties["진행내용"] = { rich_text: [{ text: { content: input.content } }] };
+  if (input.nextPrep !== undefined) properties["다음준비사항"] = { rich_text: [{ text: { content: input.nextPrep } }] };
   await notion.pages.update({ page_id: id, properties });
+}
+
+export async function deleteClinicRecord(id: string) {
+  await notion.pages.update({ page_id: id, archived: true });
 }
 
 // "출근했을 때 오늘 뭘 해야 하는지" — 담당자(조교)로 지정된 오늘자 할일.

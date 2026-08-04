@@ -7,7 +7,7 @@ export default async function DashboardPage() {
   return (
     <>
       <TopBar active="dashboard" />
-      <DashboardClient staffName={session?.name ?? null} />
+      <DashboardClient staffName={session?.name ?? null} staffRole={session?.role ?? null} />
     </>
   );
 }

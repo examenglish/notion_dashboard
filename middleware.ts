@@ -43,6 +43,7 @@ export async function middleware(req: NextRequest) {
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set("x-staff-name", encodeURIComponent(session.name));
   requestHeaders.set("x-staff-id", session.staffId);
+  requestHeaders.set("x-staff-role", encodeURIComponent(session.role ?? ""));
   return NextResponse.next({ request: { headers: requestHeaders } });
 }
 

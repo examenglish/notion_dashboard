@@ -25,6 +25,11 @@ export function readStaffId(req: { headers: Headers }): string {
   return req.headers.get("x-staff-id") ?? "";
 }
 
+export function readStaffRole(req: { headers: Headers }): string {
+  const raw = req.headers.get("x-staff-role");
+  return raw ? decodeURIComponent(raw) : "";
+}
+
 function getSecret(): string {
   const secret = process.env.SESSION_SECRET;
   if (!secret) throw new Error("SESSION_SECRET is not set");
