@@ -1871,12 +1871,17 @@ export async function createClinicRecord(input: {
   content: string;
   nextPrep: string;
 }) {
-  const [assistantPage, studentPages] = await Promise.all([
+  // 학생 이름은 학생마다 notion.pages.retrieve를 개별 호출하지 않고
+  // studentNameMap()(전체 학생을 한 번의 쿼리로 조회)에서 찾는다 — 조교가
+  // "담당반 전체 추가"로 학생을 한 번에 여러 명(10명 이상) 담아 저장하면
+  // 개별 retrieve가 그 수만큼 동시에 Notion API를 두드려 레이트리밋(429)에
+  // 걸리기 쉬웠고, 그 예외가 라우트에서 잡히지 않아 "네트워크 오류"로 보였다.
+  const [assistantPage, names] = await Promise.all([
     notion.pages.retrieve({ page_id: input.assistantId }),
-    Promise.all(input.studentIds.map((id) => notion.pages.retrieve({ page_id: id }))),
+    studentNameMap(),
   ]);
   const assistantName = getTitle(assistantPage as any, "이름");
-  const studentNamesJoined = studentPages.map((p: any) => getTitle(p, "이름")).join(", ");
+  const studentNamesJoined = input.studentIds.map((id) => names.get(id) ?? "-").join(", ");
   await notion.pages.create({
     parent: { data_source_id: DB.CLINIC } as any,
     properties: {

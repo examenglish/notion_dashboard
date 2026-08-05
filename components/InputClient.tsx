@@ -1042,7 +1042,7 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
       {isAdminLike && <ClassManageForm />}
       {isAdminLike && <ClassAssistantAssignForm />}
       {!isAssistant && <AssignClinicTaskForm />}
-      {(isAssistant || isAdminLike) && <AssistantClinicForm />}
+      {(isAssistant || isAdminLike) && <AssistantClinicForm role={role} />}
       {(isAssistant || isAdminLike) && <AttendanceCheckForm />}
       {!isAssistant && <ClassRecordForm />}
       <div className="grid-3">

@@ -6,8 +6,13 @@ import { todayKST } from "@/lib/date";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const records = await getRecentClinicRecords();
-  return NextResponse.json(records);
+  try {
+    const records = await getRecentClinicRecords();
+    return NextResponse.json(records);
+  } catch (err) {
+    console.error("getRecentClinicRecords failed", err);
+    return NextResponse.json({ error: "기록을 불러오지 못했습니다." }, { status: 500 });
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -20,13 +25,18 @@ export async function POST(req: NextRequest) {
   if (!Array.isArray(studentIds) || studentIds.length === 0 || !content) {
     return NextResponse.json({ error: "학생과 진행내용은 필수입니다." }, { status: 400 });
   }
-  await createClinicRecord({
-    assistantId,
-    studentIds,
-    teacherId: teacherId || undefined,
-    date: date || todayKST(),
-    content,
-    nextPrep: nextPrep ?? "",
-  });
-  return NextResponse.json({ ok: true });
+  try {
+    await createClinicRecord({
+      assistantId,
+      studentIds,
+      teacherId: teacherId || undefined,
+      date: date || todayKST(),
+      content,
+      nextPrep: nextPrep ?? "",
+    });
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    console.error("createClinicRecord failed", assistantId, studentIds, err);
+    return NextResponse.json({ error: "저장에 실패했습니다. 잠시 후 다시 시도해 주세요." }, { status: 500 });
+  }
 }

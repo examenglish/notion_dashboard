@@ -27,7 +27,7 @@ function confirmSave() {
 // 조교 전용 입력 화면 — 강사의 "오늘 수업 기록" 대신, 코칭/클리닉 업무에 맞춰
 // (1) 오늘 배정된 일 확인, (2) 직전 클리닉에서 남긴 다음 준비사항 확인,
 // (3) 방금 진행한 클리닉 세션 기록 작성을 한 곳에서 처리한다.
-export default function AssistantClinicForm() {
+export default function AssistantClinicForm({ role }: { role?: string | null } = {}) {
   const [brief, setBrief] = useState<Brief | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -42,10 +42,23 @@ export default function AssistantClinicForm() {
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 방금 저장한 클리닉 기록도 여기서 바로 고쳐 쓸 수 있어야 한다 — 조교가
+  // 빠르게 여러 건을 연달아 입력하다 보면 오타나 누락을 그 자리에서 바로잡고
+  // 싶을 때가 많은데, 지금까지는 "최근 내 클리닉 기록" 목록이 읽기 전용이라
+  // 학생별 전체기록 화면까지 가야만 수정할 수 있었다.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState("");
+  const [editNextPrep, setEditNextPrep] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const canDelete = role === "원장";
+
   function loadBrief() {
     fetch("/api/assistant-brief")
       .then((r) => r.json())
-      .then(setBrief)
+      .then((data) => setBrief(data && !data.error ? data : null))
+      .catch(() => setBrief(null))
       .finally(() => setLoading(false));
   }
 
@@ -115,6 +128,59 @@ export default function AssistantClinicForm() {
   async function toggleTaskDone(taskId: string) {
     await fetch(`/api/schedule-entry/${taskId}`, { method: "PATCH" });
     loadBrief();
+  }
+
+  function startEdit(c: ClinicHistoryItem) {
+    setEditingId(c.id);
+    setEditContent(c.content);
+    setEditNextPrep(c.nextPrep);
+    setEditError(null);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditError(null);
+  }
+
+  async function saveEdit(id: string) {
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      const res = await fetch(`/api/clinic-records/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: editContent, nextPrep: editNextPrep }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setEditError(data.error ?? "수정에 실패했습니다.");
+        return;
+      }
+      setEditingId(null);
+      loadBrief();
+    } catch {
+      setEditError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  async function deleteRecord(id: string) {
+    if (!window.confirm("이 클리닉 기록을 삭제하시겠습니까?")) return;
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/clinic-records/${id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setEditError(data.error ?? "삭제에 실패했습니다.");
+        return;
+      }
+      loadBrief();
+    } catch {
+      setEditError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   return (
@@ -245,15 +311,61 @@ export default function AssistantClinicForm() {
       {brief && brief.recentClinic.length > 0 && (
         <div className="card">
           <h2>최근 내 클리닉 기록 <span className="title-lab-tag">(실험실)</span></h2>
+          {editError && <p className="error-text">{editError}</p>}
           <ul className="schedule-list">
-            {brief.recentClinic.map((c) => (
-              <li key={c.id}>
-                <strong>{c.date ?? "-"}</strong> <span className="muted">{c.studentNames.join(", ")}</span>
-                <br />
-                {c.content}
-                {c.nextPrep && <div className="muted">다음: {c.nextPrep}</div>}
-              </li>
-            ))}
+            {brief.recentClinic.map((c) =>
+              editingId === c.id ? (
+                <li key={c.id}>
+                  <strong>{c.date ?? "-"}</strong> <span className="muted">{c.studentNames.join(", ")}</span>
+                  <textarea
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    placeholder="진행 내용"
+                    style={{ minHeight: 60, marginTop: 4 }}
+                  />
+                  <textarea
+                    value={editNextPrep}
+                    onChange={(e) => setEditNextPrep(e.target.value)}
+                    placeholder="다음 준비사항"
+                    style={{ minHeight: 40, marginTop: 4 }}
+                  />
+                  <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                    <button type="button" disabled={editSaving} onClick={() => saveEdit(c.id)}>
+                      {editSaving ? "저장 중..." : "저장"}
+                    </button>
+                    <button type="button" className="secondary" onClick={cancelEdit}>취소</button>
+                  </div>
+                </li>
+              ) : (
+                <li key={c.id}>
+                  <strong>{c.date ?? "-"}</strong> <span className="muted">{c.studentNames.join(", ")}</span>
+                  <span style={{ display: "inline-flex", gap: 6, marginLeft: 8 }}>
+                    <button
+                      type="button"
+                      className="secondary"
+                      style={{ padding: "2px 8px", fontSize: 12 }}
+                      onClick={() => startEdit(c)}
+                    >
+                      수정
+                    </button>
+                    {canDelete && (
+                      <button
+                        type="button"
+                        className="secondary"
+                        style={{ padding: "2px 8px", fontSize: 12 }}
+                        disabled={deletingId === c.id}
+                        onClick={() => deleteRecord(c.id)}
+                      >
+                        {deletingId === c.id ? "삭제 중..." : "삭제"}
+                      </button>
+                    )}
+                  </span>
+                  <br />
+                  {c.content}
+                  {c.nextPrep && <div className="muted">다음: {c.nextPrep}</div>}
+                </li>
+              )
+            )}
           </ul>
         </div>
       )}
