@@ -35,6 +35,11 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
   const [studentPickerId, setStudentPickerId] = useState("");
   const [studentNames, setStudentNames] = useState<Record<string, string>>({});
   const [teacher, setTeacher] = useState("");
+  // StaffPicker의 onChange는 이름 문자열만 넘겨준다(다른 모든 화면에서
+  // 담당자/상담자를 텍스트 필드로 저장하는 것과 같은 계약). 하지만 여기
+  // 담당강사는 Notion에서 진짜 relation 필드라서 이름이 아니라 페이지 ID가
+  // 필요하다 — 그래서 이름→ID 매핑을 따로 들고 있다가 제출 시점에 바꿔치기한다.
+  const [staffList, setStaffList] = useState<{ id: string; name: string }[]>([]);
   const [date, setDate] = useState(todayKST());
   const [content, setContent] = useState("");
   const [nextPrep, setNextPrep] = useState("");
@@ -64,6 +69,10 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
 
   useEffect(() => {
     loadBrief();
+    fetch("/api/staff")
+      .then((r) => r.json())
+      .then((list: { id: string; name: string }[]) => setStaffList(list))
+      .catch(() => setStaffList([]));
   }, []);
 
   function addStudent(id: string) {
@@ -97,6 +106,16 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // teacher는 StaffPicker가 준 "이름" 문자열이다 — 담당강사는 Notion relation이라
+    // 실제 페이지 ID가 필요하므로 목록에서 이름이 일치하는 스태프를 찾아 ID로
+    // 바꿔 보낸다. 목록에 없는 이름(오타 등)을 그대로 보내면 Notion이 잘못된
+    // relation ID로 저장을 거부해 "저장에 실패했습니다"만 뜨고 원인을 알 수
+    // 없었다 — 그 전에 여기서 걸러서 알려준다.
+    const teacherId = teacher ? staffList.find((s) => s.name === teacher)?.id : undefined;
+    if (teacher && !teacherId) {
+      setError("담당 강사 이름이 목록에 없습니다. 검색 결과에서 선택해주세요.");
+      return;
+    }
     if (!confirmSave()) return;
     setError(null);
     setSaving(true);
@@ -105,7 +124,7 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
       const res = await fetch("/api/clinic-records", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ studentIds, teacherId: teacher || undefined, date, content, nextPrep }),
+        body: JSON.stringify({ studentIds, teacherId, date, content, nextPrep }),
       });
       const data = await res.json();
       if (!res.ok) {
