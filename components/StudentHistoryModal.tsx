@@ -18,7 +18,7 @@ type MakeupEntry = { id: string; date: string | null; time: string; owner: strin
 type ActionEntry = { id: string; date: string | null; content: string; owner: string };
 type CounselingEntry = { id: string; date: string | null; counselor: string; content: string; followUp: string; enteredBy?: string };
 type InquiryEntry = { id: string; date: string | null; type: string | null; content: string; done: boolean; enteredBy?: string };
-type ClinicEntry = { id: string; date: string | null; assistant: string; content: string; nextPrep: string };
+type ClinicEntry = { id: string; date: string | null; assistant: string; content: string; nextPrep: string; source: "record" | "task" };
 type ReviewEntry = { id: string; date: string | null; content: string; done: boolean };
 type CategoryBreakdown = { label: string; done: number; total: number };
 type ExamPrepSummary = {
@@ -60,7 +60,7 @@ type EditState =
   | { kind: "review"; id: string; date: string; content: string }
   | { kind: "counseling"; id: string; date: string; counselor: string; content: string; followUp: string }
   | { kind: "inquiries"; id: string; date: string; content: string }
-  | { kind: "clinic"; id: string; content: string; nextPrep: string };
+  | { kind: "clinic"; id: string; content: string; nextPrep: string; source: "record" | "task" };
 
 const DELETE_ENDPOINT: Record<EditState["kind"] | "progress", (id: string) => string> = {
   progress: (id) => `/api/daily-record/${id}`,
@@ -69,6 +69,9 @@ const DELETE_ENDPOINT: Record<EditState["kind"] | "progress", (id: string) => st
   review: (id) => `/api/schedule-entry/${id}`,
   counseling: (id) => `/api/counseling/${id}`,
   inquiries: (id) => `/api/admin-inbox/${id}`,
+  // "클리닉 기록"은 두 군데서 온다 — DB⑮조교클리닉기록(source: "record")과
+  // DB⑱할일관리의 유형="클리닉" 항목(source: "task")이라 삭제 endpoint가 다르다.
+  // 기본값은 record 쪽이고, task 쪽은 삭제 호출 시 명시적으로 override한다.
   clinic: (id) => `/api/clinic-records/${id}`,
 };
 
@@ -143,12 +146,12 @@ export default function StudentHistoryModal({
     }
   }
 
-  async function handleDelete(kind: EditState["kind"] | "progress", id: string) {
+  async function handleDelete(kind: EditState["kind"] | "progress", id: string, endpointOverride?: string) {
     if (!window.confirm("이 기록을 삭제하시겠습니까?")) return;
     setBusyDeleteId(id);
     setError(null);
     try {
-      const res = await fetch(DELETE_ENDPOINT[kind](id), { method: "DELETE" });
+      const res = await fetch(endpointOverride ?? DELETE_ENDPOINT[kind](id), { method: "DELETE" });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setError(data.error ?? "삭제에 실패했습니다.");
@@ -199,6 +202,14 @@ export default function StudentHistoryModal({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ startDate: edit.date, content: edit.content }),
         });
+      } else if (edit.source === "task") {
+        // DB⑱할일관리 유형="클리닉" 항목 — 메모 필드 하나만 있고 별도
+        // "다음준비사항" 개념이 없으므로 note로만 저장한다.
+        res = await fetch(`/api/schedule-entry/${edit.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note: edit.content }),
+        });
       } else {
         res = await fetch(`/api/clinic-records/${edit.id}`, {
           method: "PATCH",
@@ -226,11 +237,13 @@ export default function StudentHistoryModal({
     id,
     canEdit,
     onEditClick,
+    deleteEndpoint,
   }: {
     kind: EditState["kind"] | "progress";
     id: string;
     canEdit: boolean;
     onEditClick?: () => void;
+    deleteEndpoint?: string;
   }) {
     return (
       <span className="no-print" style={{ display: "inline-flex", gap: 6, marginLeft: 8 }}>
@@ -245,7 +258,7 @@ export default function StudentHistoryModal({
             className="secondary"
             style={{ padding: "2px 8px", fontSize: 12 }}
             disabled={busyDeleteId === id}
-            onClick={() => handleDelete(kind, id)}
+            onClick={() => handleDelete(kind, id, deleteEndpoint)}
           >
             {busyDeleteId === id ? "삭제 중..." : "삭제"}
           </button>
@@ -557,12 +570,14 @@ export default function StudentHistoryModal({
                           placeholder="진행내용"
                           style={{ minHeight: 60 }}
                         />
-                        <textarea
-                          value={edit.nextPrep}
-                          onChange={(e) => setEdit({ ...edit, nextPrep: e.target.value })}
-                          placeholder="다음준비사항"
-                          style={{ minHeight: 40, marginTop: 4 }}
-                        />
+                        {edit.source === "record" && (
+                          <textarea
+                            value={edit.nextPrep}
+                            onChange={(e) => setEdit({ ...edit, nextPrep: e.target.value })}
+                            placeholder="다음준비사항"
+                            style={{ minHeight: 40, marginTop: 4 }}
+                          />
+                        )}
                         <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
                           <button type="button" disabled={saving} onClick={handleSaveEdit}>저장</button>
                           <button type="button" className="secondary" onClick={() => setEdit(null)}>취소</button>
@@ -573,11 +588,13 @@ export default function StudentHistoryModal({
                         <strong>{c.date ?? "-"}</strong>
                         {" · "}
                         담당 조교: {c.assistant || "-"}
+                        {c.source === "task" && <span className="muted"> · 오늘의 일정에서 지시된 클리닉</span>}
                         <ActionButtons
                           kind="clinic"
                           id={c.id}
                           canEdit
-                          onEditClick={() => setEdit({ kind: "clinic", id: c.id, content: c.content, nextPrep: c.nextPrep })}
+                          onEditClick={() => setEdit({ kind: "clinic", id: c.id, content: c.content, nextPrep: c.nextPrep, source: c.source })}
+                          deleteEndpoint={c.source === "task" ? `/api/schedule-entry/${c.id}` : undefined}
                         />
                         <br />
                         {c.content || "-"}

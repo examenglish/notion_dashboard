@@ -426,7 +426,7 @@ export async function getStudentFullHistory(studentId: string) {
     homeworkDone: r.homeworkDone,
   }));
 
-  const [makeupTodos, actionTodos, reviewTodos, counselingEntries, inboxEntries, clinicEntries, staffMap, examPrepSheet] = await Promise.all([
+  const [makeupTodos, actionTodos, reviewTodos, clinicTasks, counselingEntries, inboxEntries, clinicEntries, staffMap, examPrepSheet] = await Promise.all([
     queryAllPages({
       data_source_id: DB.TODO,
       filter: {
@@ -450,6 +450,19 @@ export async function getStudentFullHistory(studentId: string) {
       filter: {
         and: [
           { property: "유형", select: { equals: "복습" } },
+          { property: "관련학생", relation: { contains: studentId } },
+        ],
+      },
+    }),
+    // "조교 클리닉 지시"(AssignClinicTaskForm)로 만든 DB⑱할일관리의 유형="클리닉"
+    // 항목 — 조교가 실제 클리닉 진행 내용을 여기 메모에 적는다. DB⑮조교클리닉기록
+    // (AssistantClinicForm으로 만든 별도 기록)과는 다른 데이터라 지금까지 전체기록의
+    // "클리닉 기록" 섹션에서 완전히 빠져 있었다 — 아래에서 함께 합쳐준다.
+    queryAllPages({
+      data_source_id: DB.TODO,
+      filter: {
+        and: [
+          { property: "유형", select: { equals: "클리닉" } },
           { property: "관련학생", relation: { contains: studentId } },
         ],
       },
@@ -517,18 +530,31 @@ export async function getStudentFullHistory(studentId: string) {
     }))
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
 
-  const clinic = clinicEntries
-    .map((p: any) => {
-      const assistantId = getRelationIds(p, "조교")[0];
-      return {
-        id: p.id,
-        date: getDate(p, "날짜"),
-        assistant: assistantId ? staffMap.get(assistantId) ?? "-" : "-",
-        content: getRichText(p, "진행내용"),
-        nextPrep: getRichText(p, "다음준비사항"),
-      };
-    })
-    .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+  const clinicFromRecords = clinicEntries.map((p: any) => {
+    const assistantId = getRelationIds(p, "조교")[0];
+    return {
+      id: p.id,
+      date: getDate(p, "날짜"),
+      assistant: assistantId ? staffMap.get(assistantId) ?? "-" : "-",
+      content: getRichText(p, "진행내용"),
+      nextPrep: getRichText(p, "다음준비사항"),
+      source: "record" as const,
+    };
+  });
+  const clinicFromTasks = clinicTasks.map((p: any) => {
+    const ownerId = getRelationIds(p, "담당자")[0];
+    return {
+      id: p.id,
+      date: getDate(p, "예정일"),
+      assistant: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
+      content: getRichText(p, "메모"),
+      nextPrep: "",
+      source: "task" as const,
+    };
+  });
+  const clinic = [...clinicFromRecords, ...clinicFromTasks].sort((a, b) =>
+    (a.date ?? "").localeCompare(b.date ?? "")
+  );
 
   const review = reviewTodos
     .map((p: any) => ({
