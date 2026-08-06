@@ -4,12 +4,23 @@ import { SESSION_COOKIE, verifySessionCookieValue } from "./lib/session";
 // Routes that must work before a session exists. /api/cron/* is called by
 // Vercel Cron (no login cookie) — each route under it authenticates itself
 // via the CRON_SECRET bearer token instead.
-const PUBLIC_API_PATHS = ["/api/login", "/api/staff", "/api/cron/"];
+//
+// "/api/staff" (exact) is the login screen's name list, fetched before any
+// cookie exists — but "/api/staff/[id]" (e.g. the work-schedule PATCH) must
+// stay behind auth, so it's deliberately NOT in here. A plain startsWith
+// match on "/api/staff" used to swallow "/api/staff/[id]" too and skip
+// attaching x-staff-role, which made every role check on that subroute see
+// an empty role and 403 even for 원장.
+const PUBLIC_API_EXACT_PATHS = ["/api/login", "/api/staff"];
+const PUBLIC_API_PREFIX_PATHS = ["/api/cron/"];
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  if (pathname.startsWith("/api/") && PUBLIC_API_PATHS.some((p) => pathname.startsWith(p))) {
+  if (
+    pathname.startsWith("/api/") &&
+    (PUBLIC_API_EXACT_PATHS.includes(pathname) || PUBLIC_API_PREFIX_PATHS.some((p) => pathname.startsWith(p)))
+  ) {
     return NextResponse.next();
   }
 
