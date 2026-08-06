@@ -41,7 +41,7 @@ function ClassRecordForm() {
   const [extraPickerId, setExtraPickerId] = useState("");
   const [loadingRoster, setLoadingRoster] = useState(false);
   const [perStudent, setPerStudent] = useState<
-    Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean }>
+    Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean; late: boolean }>
   >({});
   const [showPreview, setShowPreview] = useState(false);
   const [done, setDone] = useState(false);
@@ -67,7 +67,7 @@ function ClassRecordForm() {
         setExtraStudents([]); // switching class clears any manually-called-up guests
         setPerStudent(
           Object.fromEntries(
-            list.map((s) => [s.id, { vocabFail: false, homeworkIncomplete: false, absent: false }])
+            list.map((s) => [s.id, { vocabFail: false, homeworkIncomplete: false, absent: false, late: false }])
           )
         );
       })
@@ -117,7 +117,7 @@ function ClassRecordForm() {
       setPerStudent((cur) => {
         const next = { ...cur };
         for (const sid of rec.studentIds ?? []) {
-          next[sid] = rec.perStudent[sid] ?? { vocabFail: false, homeworkIncomplete: false, absent: false };
+          next[sid] = rec.perStudent[sid] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
         }
         return next;
       });
@@ -150,7 +150,7 @@ function ClassRecordForm() {
       .then((r) => r.json())
       .then((data: { student: { id: string; name: string } }) => {
         setExtraStudents((cur) => [...cur, { id: data.student.id, name: data.student.name }]);
-        setPerStudent((cur) => ({ ...cur, [id]: { vocabFail: false, homeworkIncomplete: false, absent: false } }));
+        setPerStudent((cur) => ({ ...cur, [id]: { vocabFail: false, homeworkIncomplete: false, absent: false, late: false } }));
       });
     setExtraPickerId("");
   }
@@ -168,11 +168,16 @@ function ClassRecordForm() {
     setSubjects((cur) => (cur.includes(name) ? cur.filter((s) => s !== name) : [...cur, name]));
   }
 
-  function toggleFlag(studentId: string, key: "vocabFail" | "homeworkIncomplete" | "absent") {
-    setPerStudent((cur) => ({
-      ...cur,
-      [studentId]: { ...cur[studentId], [key]: !cur[studentId]?.[key] },
-    }));
+  function toggleFlag(studentId: string, key: "vocabFail" | "homeworkIncomplete" | "absent" | "late") {
+    setPerStudent((cur) => {
+      const nextValue = !cur[studentId]?.[key];
+      const next = { ...cur[studentId], [key]: nextValue };
+      // 결석과 지각은 동시에 켜질 수 없는 출결 상태라, 한쪽을 체크하면 다른
+      // 한쪽은 자동으로 꺼진다.
+      if (nextValue && key === "absent") next.late = false;
+      if (nextValue && key === "late") next.absent = false;
+      return { ...cur, [studentId]: next };
+    });
   }
 
   function handleOpenPreview() {
@@ -366,6 +371,14 @@ function ClassRecordForm() {
                           onChange={() => toggleFlag(s.id, "absent")}
                         />
                         결석
+                      </label>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={perStudent[s.id]?.late ?? false}
+                          onChange={() => toggleFlag(s.id, "late")}
+                        />
+                        지각
                       </label>
                       <label>
                         <input

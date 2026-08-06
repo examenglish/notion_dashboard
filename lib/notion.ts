@@ -1029,7 +1029,7 @@ export async function createClassProgress(input: {
   homework: string;
   nextAssignment: string;
   notice: string;
-  perStudent: Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean }>;
+  perStudent: Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean; late?: boolean }>;
   briefingTexts?: Record<string, string>;
   // Students called up from a different class for a one-off individual
   // record (e.g. a makeup or guest attendee), in addition to the class's
@@ -1063,7 +1063,7 @@ export async function createClassProgress(input: {
   for (const studentId of studentIds) {
     const studentPage: any = await notion.pages.retrieve({ page_id: studentId });
     const studentName = getTitle(studentPage, "이름");
-    const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false };
+    const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
 
     const daily = await notion.pages.create({
       parent: { data_source_id: DB.DAILY_RECORD } as any,
@@ -1073,7 +1073,7 @@ export async function createClassProgress(input: {
         반: { relation: [{ id: input.classId }] },
         날짜: { date: { start: input.date } },
         진도내용: { rich_text: [{ text: { content: input.progress } }] },
-        출결: { select: { name: flags.absent ? "결석" : "출석" } },
+        출결: { select: { name: flags.absent ? "결석" : flags.late ? "지각" : "출석" } },
         과제여부: { checkbox: !flags.homeworkIncomplete },
         단어테스트결과: { select: { name: flags.vocabFail ? "재시험" : "통과" } },
         반별진도원본: { relation: [{ id: progressPage.id }] },
@@ -1161,13 +1161,14 @@ export async function getClassProgressForEdit(classId: string, date: string) {
   });
 
   const studentIds: string[] = [];
-  const perStudent: Record<string, { absent: boolean; vocabFail: boolean; homeworkIncomplete: boolean }> = {};
+  const perStudent: Record<string, { absent: boolean; late: boolean; vocabFail: boolean; homeworkIncomplete: boolean }> = {};
   for (const dp of dailyRecords as any[]) {
     const studentId = getRelationIds(dp, "학생")[0];
     if (!studentId) continue;
     studentIds.push(studentId);
     perStudent[studentId] = {
       absent: getSelect(dp, "출결") === "결석",
+      late: getSelect(dp, "출결") === "지각",
       vocabFail: getSelect(dp, "단어테스트결과") === "재시험",
       homeworkIncomplete: !getCheckbox(dp, "과제여부"),
     };
@@ -1207,7 +1208,7 @@ export async function updateClassProgress(input: {
   homework?: string;
   nextAssignment?: string;
   notice?: string;
-  perStudent: Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean }>;
+  perStudent: Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean; late?: boolean }>;
   extraStudentIds?: string[];
 }) {
   const classPage: any = await notion.pages.retrieve({ page_id: input.classId });
@@ -1235,9 +1236,9 @@ export async function updateClassProgress(input: {
 
   const newDailyIds: string[] = [];
   for (const studentId of studentIds) {
-    const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false };
+    const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
     const properties: any = {
-      출결: { select: { name: flags.absent ? "결석" : "출석" } },
+      출결: { select: { name: flags.absent ? "결석" : flags.late ? "지각" : "출석" } },
       과제여부: { checkbox: !flags.homeworkIncomplete },
       단어테스트결과: { select: { name: flags.vocabFail ? "재시험" : "통과" } },
     };
@@ -1283,7 +1284,7 @@ export async function updateClassProgress(input: {
 
         const studentPage: any = await notion.pages.retrieve({ page_id: studentId });
         const studentName = getTitle(studentPage, "이름");
-        const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false };
+        const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
         const briefingText = formatBriefingText({
           date: input.date,
           className,
@@ -1320,7 +1321,7 @@ export async function updateClassProgress(input: {
 export async function checkInAttendance(input: {
   classId: string;
   date: string;
-  perStudent: Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean }>;
+  perStudent: Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean; late?: boolean }>;
   extraStudentIds?: string[];
 }): Promise<{ progressId: string; created: boolean }> {
   const existing = await getClassProgressForEdit(input.classId, input.date);
@@ -1353,7 +1354,7 @@ export async function checkInAttendance(input: {
   for (const studentId of studentIds) {
     const studentPage: any = await notion.pages.retrieve({ page_id: studentId });
     const studentName = getTitle(studentPage, "이름");
-    const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false };
+    const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
     const daily = await notion.pages.create({
       parent: { data_source_id: DB.DAILY_RECORD } as any,
       properties: {
@@ -1361,7 +1362,7 @@ export async function checkInAttendance(input: {
         학생: { relation: [{ id: studentId }] },
         반: { relation: [{ id: input.classId }] },
         날짜: { date: { start: input.date } },
-        출결: { select: { name: flags.absent ? "결석" : "출석" } },
+        출결: { select: { name: flags.absent ? "결석" : flags.late ? "지각" : "출석" } },
         과제여부: { checkbox: !flags.homeworkIncomplete },
         단어테스트결과: { select: { name: flags.vocabFail ? "재시험" : "통과" } },
         반별진도원본: { relation: [{ id: progressPage.id }] },
