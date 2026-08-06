@@ -115,7 +115,7 @@ export default function AssignClinicTaskForm() {
       <h2>조교 클리닉 지시 <span className="title-lab-tag">(실험실)</span></h2>
       <p className="muted">담당 조교에게 클리닉 시간에 봐야 할 학생과 지시사항을 전달합니다. "오늘의 일정"과 조교의 "오늘 할 일"에 표시됩니다.</p>
 
-      <StaffPicker value={assistant} onChange={setAssistant} label="담당 조교" />
+      <StaffPicker value={assistant} onChange={setAssistant} label="담당 조교" date={date} time={time} />
 
       <label>반 선택해서 일괄 추가</label>
       <select

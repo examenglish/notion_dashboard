@@ -530,7 +530,7 @@ function ScheduleEditModal({
               onChange={(e) => setTime(e.target.value)}
               placeholder="예: 16:00"
             />
-            <StaffPicker value={owner} onChange={setOwner} label="담당자" />
+            <StaffPicker value={owner} onChange={setOwner} label="담당자" date={todoDate} time={time} />
             {target.kind === "clinicTasks" && staffRole === "조교" ? (
               <>
                 <label htmlFor="editTodoNote">지시사항 (수정 불가)</label>
@@ -760,7 +760,7 @@ function ScheduleQuickAddModal({
               onChange={(e) => setTime(e.target.value)}
               placeholder="예: 16:00"
             />
-            <StaffPicker value={owner} onChange={setOwner} label="담당자" />
+            <StaffPicker value={owner} onChange={setOwner} label="담당자" date={todoDate} time={time} />
             <label htmlFor="quickTodoNote">메모</label>
             <textarea id="quickTodoNote" value={note} onChange={(e) => setNote(e.target.value)} />
           </>

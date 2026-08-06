@@ -7,6 +7,7 @@ import DailyBriefingPreviewModal from "./DailyBriefingPreviewModal";
 import AssistantClinicForm from "./AssistantClinicForm";
 import AttendanceCheckForm from "./AttendanceCheckForm";
 import ClassAssistantAssignForm from "./ClassAssistantAssignForm";
+import StaffScheduleForm from "./StaffScheduleForm";
 import ClassManageForm from "./ClassManageForm";
 import AssignClinicTaskForm from "./AssignClinicTaskForm";
 import { todayKST as todayStr } from "@/lib/date";
@@ -1041,6 +1042,7 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
       {isAdminLike && <StudentRegisterForm />}
       {isAdminLike && <ClassManageForm />}
       {isAdminLike && <ClassAssistantAssignForm />}
+      {isAdminLike && <StaffScheduleForm />}
       {!isAssistant && <AssignClinicTaskForm />}
       {(isAssistant || isAdminLike) && <AssistantClinicForm role={role} />}
       {(isAssistant || isAdminLike) && <AttendanceCheckForm />}

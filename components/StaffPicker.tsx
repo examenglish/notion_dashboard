@@ -2,16 +2,43 @@
 
 import { useEffect, useRef, useState } from "react";
 
-type StaffOption = { id: string; name: string };
+type StaffOption = { id: string; name: string; workDays?: string[]; workStart?: string; workEnd?: string };
+
+const DAY_LABELS = ["일", "월", "화", "수", "목", "금", "토"]; // Date#getDay(): 0=일 ... 6=토
+
+function dayLabelFor(dateStr: string): string | null {
+  if (!dateStr) return null;
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  return DAY_LABELS[d.getDay()];
+}
+
+// 근무요일/시간이 아예 설정 안 된 직원(대부분의 강사/원장/행정, 그리고 아직
+// 근무표를 등록 안 한 조교)은 제한 없이 항상 가능한 것으로 취급한다 —
+// 이 필터는 "근무표를 등록해둔 조교"에게만 실질적으로 적용된다.
+function isAvailable(s: StaffOption, date?: string, time?: string): boolean {
+  if (!s.workDays || s.workDays.length === 0) return true;
+  const day = date ? dayLabelFor(date) : null;
+  if (day && !s.workDays.includes(day)) return false;
+  if (time && s.workStart && s.workEnd && (time < s.workStart || time > s.workEnd)) return false;
+  return true;
+}
 
 export default function StaffPicker({
   value,
   onChange,
   label = "상담자",
+  date,
+  time,
 }: {
   value: string;
   onChange: (name: string) => void;
   label?: string;
+  // 보강/재시/클리닉처럼 "이 날짜·시간에 실제로 근무하는 담당자인지"가
+  // 중요한 화면에서만 넘겨준다 — 둘 다 없으면 지금까지처럼 아무 표시 없이
+  // 동작한다(다른 15곳 넘는 기존 사용처에 영향 없음).
+  date?: string;
+  time?: string;
 }) {
   const [text, setText] = useState(value);
   const [allStaff, setAllStaff] = useState<StaffOption[]>([]);
@@ -55,6 +82,8 @@ export default function StaffPicker({
   }, [open]);
 
   const options = allStaff.filter((s) => s.name.includes(text));
+  const selectedStaff = allStaff.find((s) => s.name === value);
+  const selectedUnavailable = !!selectedStaff && !!(date || time) && !isAvailable(selectedStaff, date, time);
 
   function openDropdown() {
     const rect = inputRef.current?.getBoundingClientRect();
@@ -102,6 +131,11 @@ export default function StaffPicker({
         onKeyDown={handleKeyDown}
         autoComplete="off"
       />
+      {selectedUnavailable && (
+        <p className="muted" style={{ color: "#b91c1c", fontSize: 12, margin: "4px 0 0" }}>
+          ⚠ {value}님은 이 날짜/시간에 근무 등록이 안 되어 있습니다 — 실제로 처리 가능한지 확인해주세요.
+        </p>
+      )}
       {open && options.length > 0 && dropdownPos && (
         <div
           className="autocomplete-list"
@@ -113,19 +147,25 @@ export default function StaffPicker({
             right: "auto",
           }}
         >
-          {options.map((s, i) => (
-            <div
-              key={s.id}
-              className={`autocomplete-item ${i === highlight ? "active" : ""}`}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                select(s);
-              }}
-              onMouseEnter={() => setHighlight(i)}
-            >
-              {s.name}
-            </div>
-          ))}
+          {options.map((s, i) => {
+            const available = isAvailable(s, date, time);
+            return (
+              <div
+                key={s.id}
+                className={`autocomplete-item ${i === highlight ? "active" : ""}`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  select(s);
+                }}
+                onMouseEnter={() => setHighlight(i)}
+              >
+                {s.name}
+                {(date || time) && !available && (
+                  <span style={{ color: "#b91c1c", fontSize: 12, marginLeft: 6 }}>⚠ 근무시간 아님</span>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

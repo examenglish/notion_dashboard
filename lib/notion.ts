@@ -155,6 +155,9 @@ const getCachedStaffList = unstable_cache(
       role: getSelect(p, "역할"),
       pin: getRichText(p, "PIN"),
       mustChangePin: getCheckbox(p, "비번변경필요"),
+      workDays: getMultiSelect(p, "근무요일"),
+      workStart: getRichText(p, "근무시작"),
+      workEnd: getRichText(p, "근무종료"),
     }));
   },
   ["staff-list"],
@@ -163,7 +166,33 @@ const getCachedStaffList = unstable_cache(
 
 export async function listStaff() {
   const all = await getCachedStaffList();
-  return all.map(({ id, name, role }) => ({ id, name, role }));
+  return all.map(({ id, name, role, workDays, workStart, workEnd }) => ({
+    id,
+    name,
+    role,
+    workDays,
+    workStart,
+    workEnd,
+  }));
+}
+
+// 조교(주로)의 근무 요일/시간을 설정한다 — 보강/재시/클리닉 배정 시 그 시간에
+// 실제로 근무하는 조교인지 확인하는 데 쓰인다. 근무요일을 비워두면(기본값)
+// 요일/시간 제한 없이 항상 가능한 것으로 취급한다(기존 강사/원장/행정 계정과
+// 호환 유지).
+export async function updateStaffSchedule(
+  staffId: string,
+  input: { workDays: string[]; workStart: string; workEnd: string }
+) {
+  await notion.pages.update({
+    page_id: staffId,
+    properties: {
+      근무요일: { multi_select: input.workDays.map((d) => ({ name: d })) },
+      근무시작: { rich_text: [{ text: { content: input.workStart } }] },
+      근무종료: { rich_text: [{ text: { content: input.workEnd } }] },
+    } as any,
+  });
+  revalidateTag(STAFF_CACHE_TAG);
 }
 
 export async function findStaffByNameAndPin(name: string, pin: string) {
