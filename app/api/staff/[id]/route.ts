@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateStaffSchedule } from "@/lib/notion";
 import { readStaffRole } from "@/lib/session";
+import type { WorkHours } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -12,11 +13,17 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: "원장/행정만 근무시간을 설정할 수 있습니다." }, { status: 403 });
   }
   const body = await req.json().catch(() => null);
-  const workDays = Array.isArray(body?.workDays) ? body.workDays : [];
-  const workStart = typeof body?.workStart === "string" ? body.workStart : "";
-  const workEnd = typeof body?.workEnd === "string" ? body.workEnd : "";
+  const raw = body?.workHours;
+  const workHours: WorkHours = {};
+  if (raw && typeof raw === "object") {
+    for (const [day, range] of Object.entries(raw as Record<string, any>)) {
+      const start = typeof range?.start === "string" ? range.start : "";
+      const end = typeof range?.end === "string" ? range.end : "";
+      if (start && end) workHours[day] = { start, end };
+    }
+  }
   try {
-    await updateStaffSchedule(params.id, { workDays, workStart, workEnd });
+    await updateStaffSchedule(params.id, workHours);
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("updateStaffSchedule failed", params.id, err);

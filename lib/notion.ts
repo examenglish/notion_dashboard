@@ -2,7 +2,7 @@ import { Client } from "@notionhq/client";
 import { unstable_cache, revalidateTag } from "next/cache";
 import { todayKST } from "./date";
 import { formatBriefingText } from "./briefingFormat";
-import { stripClassSuffix } from "./format";
+import { stripClassSuffix, parseWorkHours, serializeWorkHours, type WorkHours } from "./format";
 import {
   type ExamPrepData,
   type ExamPrepSheet,
@@ -155,9 +155,11 @@ const getCachedStaffList = unstable_cache(
       role: getSelect(p, "역할"),
       pin: getRichText(p, "PIN"),
       mustChangePin: getCheckbox(p, "비번변경필요"),
-      workDays: getMultiSelect(p, "근무요일"),
-      workStart: getRichText(p, "근무시작"),
-      workEnd: getRichText(p, "근무종료"),
+      // 요일마다 근무시간이 다를 수 있어(월 14~18시, 수 16~20시 등) 압축
+      // 문자열 하나(근무시간표)에 담아 저장 — parseWorkHours가 요일별
+      // {start,end} 맵으로 풀어준다. 예전에 쓰던 근무요일(멀티셀렉트)/
+      // 근무시작/근무종료(전체 요일 공통 한 세트)는 더는 쓰지 않는다.
+      workHours: parseWorkHours(getRichText(p, "근무시간표")),
     }));
   },
   ["staff-list"],
@@ -166,30 +168,24 @@ const getCachedStaffList = unstable_cache(
 
 export async function listStaff() {
   const all = await getCachedStaffList();
-  return all.map(({ id, name, role, workDays, workStart, workEnd }) => ({
+  return all.map(({ id, name, role, workHours }) => ({
     id,
     name,
     role,
-    workDays,
-    workStart,
-    workEnd,
+    workHours,
   }));
 }
 
-// 조교(주로)의 근무 요일/시간을 설정한다 — 보강/재시/클리닉 배정 시 그 시간에
-// 실제로 근무하는 조교인지 확인하는 데 쓰인다. 근무요일을 비워두면(기본값)
+// 조교(주로)의 요일별 근무시간을 설정한다 — 보강/재시/클리닉 배정 시 그
+// 날짜·시간에 실제로 근무하는 조교인지 확인하는 데 쓰인다. 비워두면(기본값)
 // 요일/시간 제한 없이 항상 가능한 것으로 취급한다(기존 강사/원장/행정 계정과
 // 호환 유지).
-export async function updateStaffSchedule(
-  staffId: string,
-  input: { workDays: string[]; workStart: string; workEnd: string }
-) {
+export async function updateStaffSchedule(staffId: string, workHours: WorkHours) {
   await notion.pages.update({
     page_id: staffId,
     properties: {
-      근무요일: { multi_select: input.workDays.map((d) => ({ name: d })) },
-      근무시작: { rich_text: [{ text: { content: input.workStart } }] },
-      근무종료: { rich_text: [{ text: { content: input.workEnd } }] },
+      근무시간표: { rich_text: [{ text: { content: serializeWorkHours(workHours) } }] },
+      근무요일: { multi_select: Object.keys(workHours).map((d) => ({ name: d })) },
     } as any,
   });
   revalidateTag(STAFF_CACHE_TAG);

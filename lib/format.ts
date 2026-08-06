@@ -17,6 +17,40 @@ export function classColor(name: string): string {
   return CLASS_COLORS[hash % CLASS_COLORS.length];
 }
 
+// 조교 근무시간이 요일마다 다를 수 있어(예: 월은 14~18시, 수는 16~20시),
+// Notion에 새 요일별 속성을 여러 개 만드는 대신 리치텍스트 한 필드에
+// "월=14:00-18:00;수=16:00-20:00" 형태로 압축해 저장한다. 서버(lib/notion.ts)와
+// 클라이언트(StaffPicker/StaffScheduleForm) 양쪽에서 그대로 쓸 수 있도록
+// 이 공용 파일에 둔다.
+export type WorkHours = Record<string, { start: string; end: string }>;
+
+export function parseWorkHours(raw: string): WorkHours {
+  const result: WorkHours = {};
+  if (!raw) return result;
+  for (const part of raw.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq < 0) continue;
+    const day = trimmed.slice(0, eq).trim();
+    const range = trimmed.slice(eq + 1).trim();
+    const dash = range.indexOf("-");
+    if (!day || dash < 0) continue;
+    const start = range.slice(0, dash).trim();
+    const end = range.slice(dash + 1).trim();
+    if (!start || !end) continue;
+    result[day] = { start, end };
+  }
+  return result;
+}
+
+export function serializeWorkHours(hours: WorkHours): string {
+  return Object.entries(hours)
+    .filter(([, v]) => v.start && v.end)
+    .map(([day, v]) => `${day}=${v.start}-${v.end}`)
+    .join(";");
+}
+
 // Muted, toned-down chart palette (slate blue / sage green / warm gray
 // family) shared by the dashboard's donut charts and the per-class summary
 // card, kept separate from classColor()'s saturated badge palette above.

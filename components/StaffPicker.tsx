@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { WorkHours } from "@/lib/format";
 
-type StaffOption = { id: string; name: string; workDays?: string[]; workStart?: string; workEnd?: string };
+type StaffOption = { id: string; name: string; workHours?: WorkHours };
 
 const DAY_LABELS = ["일", "월", "화", "수", "목", "금", "토"]; // Date#getDay(): 0=일 ... 6=토
 
@@ -13,14 +14,20 @@ function dayLabelFor(dateStr: string): string | null {
   return DAY_LABELS[d.getDay()];
 }
 
-// 근무요일/시간이 아예 설정 안 된 직원(대부분의 강사/원장/행정, 그리고 아직
+// 근무시간표가 아예 설정 안 된 직원(대부분의 강사/원장/행정, 그리고 아직
 // 근무표를 등록 안 한 조교)은 제한 없이 항상 가능한 것으로 취급한다 —
-// 이 필터는 "근무표를 등록해둔 조교"에게만 실질적으로 적용된다.
+// 이 필터는 "근무표를 등록해둔 조교"에게만 실질적으로 적용된다. 요일마다
+// 시간이 다를 수 있어(월 14~18시, 수 16~20시 등) 그 날짜의 요일에 해당하는
+// 시간대만 확인한다 — 날짜를 모르면(date 미지정) 어느 요일 기준인지 알 수
+// 없으므로 시간 검사를 건너뛴다.
 function isAvailable(s: StaffOption, date?: string, time?: string): boolean {
-  if (!s.workDays || s.workDays.length === 0) return true;
+  const hours = s.workHours;
+  if (!hours || Object.keys(hours).length === 0) return true;
   const day = date ? dayLabelFor(date) : null;
-  if (day && !s.workDays.includes(day)) return false;
-  if (time && s.workStart && s.workEnd && (time < s.workStart || time > s.workEnd)) return false;
+  if (!day) return true;
+  const range = hours[day];
+  if (!range) return false;
+  if (time && (time < range.start || time > range.end)) return false;
   return true;
 }
 

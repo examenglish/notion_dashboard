@@ -11,9 +11,7 @@ export async function GET() {
       id: s.id,
       name: s.name,
       role: s.role,
-      workDays: s.workDays,
-      workStart: s.workStart,
-      workEnd: s.workEnd,
+      workHours: s.workHours,
     }))
   );
 }
