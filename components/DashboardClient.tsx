@@ -23,6 +23,7 @@ import NaturalLanguageInput from "./NaturalLanguageInput";
 import TodayTicker from "./TodayTicker";
 import StudentHistoryModal from "./StudentHistoryModal";
 import MaterialTaskModal, { MaterialTaskRecord } from "./MaterialTaskModal";
+import AbsenceReviewModal, { AbsenceReviewItem } from "./AbsenceReviewModal";
 import { todayKST, shiftDate } from "@/lib/date";
 
 type AdminInboxItem = {
@@ -147,6 +148,46 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
   // 상단 시계 옆 화살표로 "오늘의 일정" 전체(모든 섹션 + 자재관리)를 같은
   // 날짜로 한 번에 옮긴다 — TodayScheduleCard의 globalDate prop으로 내려감.
   const [scheduleDate, setScheduleDate] = useState(todayKST());
+
+  // 어제 결석자 검토 — 행정/원장이 대시보드에 들어오면 자동으로 팝업을 띄운다.
+  // 서버가 조회 시점에 아직 없는 보강요청을 자동으로 만들어주므로(결석자
+  // 명단이 자동으로 보강 명단이 됨), 여기서는 결과를 보여주고 지각 정정/
+  // 보강 취소/담당자 지정만 처리한다. 같은 날 한 번 닫으면(localStorage)
+  // 다시 자동으로는 뜨지 않지만, 상단의 "어제 결석 검토" 버튼으로 언제든
+  // 다시 열어볼 수 있다.
+  const isAdminLike = staffRole === "행정" || staffRole === "원장";
+  const [absenceDate, setAbsenceDate] = useState<string | null>(null);
+  const [absenceItems, setAbsenceItems] = useState<AbsenceReviewItem[]>([]);
+  const [absenceModalOpen, setAbsenceModalOpen] = useState(false);
+
+  function reloadAbsenceReview() {
+    fetch("/api/absence-review")
+      .then((r) => r.json())
+      .then((data: { date: string | null; items: AbsenceReviewItem[] }) => {
+        setAbsenceDate(data.date);
+        setAbsenceItems(data.items ?? []);
+      });
+  }
+
+  useEffect(() => {
+    if (!isAdminLike) return;
+    fetch("/api/absence-review")
+      .then((r) => r.json())
+      .then((data: { date: string | null; items: AbsenceReviewItem[] }) => {
+        setAbsenceDate(data.date);
+        setAbsenceItems(data.items ?? []);
+        if (data.date && data.items?.length > 0) {
+          const dismissedKey = `absenceReviewDismissed:${data.date}`;
+          if (!localStorage.getItem(dismissedKey)) setAbsenceModalOpen(true);
+        }
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdminLike]);
+
+  function closeAbsenceModal() {
+    setAbsenceModalOpen(false);
+    if (absenceDate) localStorage.setItem(`absenceReviewDismissed:${absenceDate}`, "1");
+  }
 
   function reloadCounseling() {
     fetch("/api/counseling")
@@ -293,6 +334,15 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
         onShiftSchedule={(delta) => setScheduleDate((cur) => shiftDate(cur, delta))}
         onResetSchedule={() => setScheduleDate(todayKST())}
       />
+
+      {isAdminLike && absenceItems.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+          <button type="button" className="secondary" onClick={() => setAbsenceModalOpen(true)}>
+            어제 결석 검토 ({absenceItems.length})
+          </button>
+        </div>
+      )}
+
       <TodayScheduleCard
         staffName={staffName}
         staffRole={staffRole}
@@ -619,6 +669,18 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
           defaultDueDate={todayKST()}
           onClose={() => setMaterialCreating(false)}
           onSaved={reloadMaterialTasks}
+        />
+      )}
+
+      {absenceModalOpen && absenceDate && (
+        <AbsenceReviewModal
+          date={absenceDate}
+          items={absenceItems}
+          onClose={closeAbsenceModal}
+          onChanged={() => {
+            reloadAbsenceReview();
+            bumpSchedule();
+          }}
         />
       )}
     </div>

@@ -1798,7 +1798,7 @@ export async function promoteWaitlistedStudents(today: string): Promise<{ id: st
   return promoted;
 }
 
-async function findStaffIdByName(name: string): Promise<string | null> {
+export async function findStaffIdByName(name: string): Promise<string | null> {
   const res = await notion.dataSources.query({
     data_source_id: DB.STAFF,
     filter: { property: "이름", title: { equals: name } },
@@ -2575,4 +2575,164 @@ export async function createExamScore(input: {
       날짜: { date: { start: input.date } },
     } as any,
   });
+}
+
+// ---- 전날 결석자 → 보강 자동 요청 ----
+// 결석 처리된 학생을 "보강" 유형 DB⑱ 항목으로 자동 옮겨주되, 이미 만든 적
+// 있으면 다시 만들지 않는다. 제목에 결석일(YYYY-MM-DD)을 항상 박아 넣어서,
+// 그 문자열이 제목에 포함돼 있는지로 중복 여부를 판단한다 — 별도 relation/
+// checkbox 속성을 새로 만들지 않아도 되고(금정·사직 두 Notion 워크스페이스
+// 스키마를 똑같이 안 건드려도 됨), 항상 Notion의 실제 상태를 그대로 조회해
+// 판단하므로 별도로 "확인함" 플래그를 관리할 필요도 없다.
+function makeupRequestTitle(studentName: string, absenceDate: string) {
+  return `보강요청 - ${studentName} (${absenceDate} 결석)`;
+}
+
+async function findMakeupRequestForAbsence(studentId: string, absenceDate: string) {
+  const res = await notion.dataSources.query({
+    data_source_id: DB.TODO,
+    filter: {
+      and: [
+        { property: "유형", select: { equals: "보강" } },
+        { property: "관련학생", relation: { contains: studentId } },
+        { property: "제목", title: { contains: `(${absenceDate} 결석)` } },
+      ],
+    },
+    page_size: 1,
+  });
+  return (res.results[0] as any) ?? null;
+}
+
+// 주어진 날짜(보통 "어제")에 출결이 "결석"으로 기록된 DB④ 일일기록을 모두
+// 가져온다. 반/학생 relation만 뽑아 돌려주고, 이름 등 표시용 정보는 호출부가
+// 배치 조회해서 붙인다.
+async function getAbsentDailyRecords(date: string) {
+  const records = await queryAllPages({
+    data_source_id: DB.DAILY_RECORD,
+    filter: {
+      and: [
+        { property: "날짜", date: { equals: date } },
+        { property: "출결", select: { equals: "결석" } },
+      ],
+    },
+  });
+  return (records as any[])
+    .map((r) => ({
+      dailyRecordId: r.id as string,
+      studentId: getRelationIds(r, "학생")[0] as string | undefined,
+      classId: getRelationIds(r, "반")[0] as string | undefined,
+    }))
+    .filter((r): r is { dailyRecordId: string; studentId: string; classId: string | undefined } => !!r.studentId);
+}
+
+// 이미 그 학생의 그 결석일자 보강요청이 있으면 손대지 않고, 없으면 반의
+// 담당교사를 담당자로 지정해 새로 만든다 — 담당교사 이름이 직원 명단과
+// 정확히 일치하지 않으면(오타 등) 담당자 없이 생성된다(다른 자동생성
+// 경로들과 동일한 관대한 처리).
+async function ensureMakeupRequestForAbsence(input: {
+  studentId: string;
+  studentName: string;
+  classId?: string;
+  className: string;
+  teacherName: string;
+  absenceDate: string;
+}) {
+  const existing = await findMakeupRequestForAbsence(input.studentId, input.absenceDate);
+  if (existing) {
+    const ownerId = getRelationIds(existing, "담당자")[0];
+    return { id: existing.id as string, created: false, ownerAssigned: !!ownerId };
+  }
+  const ownerId = input.teacherName ? await findStaffIdByName(input.teacherName) : null;
+  const page = await notion.pages.create({
+    parent: { data_source_id: DB.TODO } as any,
+    properties: {
+      제목: { title: [{ text: { content: makeupRequestTitle(input.studentName, input.absenceDate) } }] },
+      유형: { select: { name: "보강" } },
+      관련학생: { relation: [{ id: input.studentId }] },
+      ...(input.classId ? { 관련반: { relation: [{ id: input.classId }] } } : {}),
+      ...(ownerId ? { 담당자: { relation: [{ id: ownerId }] } } : {}),
+      예정일: { date: { start: todayKST() } },
+      시간: { rich_text: [] },
+      메모: {
+        rich_text: [
+          {
+            text: {
+              content: `${input.absenceDate} ${input.className} 결석에 따라 자동 등록된 보강 요청입니다. 학생과 협의해 보강 일정(시간)을 확정해주세요.`,
+            },
+          },
+        ],
+      },
+      완료여부: { checkbox: false },
+      우선순위: { select: { name: "보통" } },
+    } as any,
+  });
+  return { id: page.id, created: true, ownerAssigned: !!ownerId };
+}
+
+export type AbsenceReviewItem = {
+  dailyRecordId: string;
+  studentId: string;
+  studentName: string;
+  school: string;
+  grade: string | null;
+  classId: string | undefined;
+  className: string;
+  date: string;
+  makeupRequestId: string;
+  ownerAssigned: boolean;
+};
+
+// 행정 로그인(대시보드 진입) 시 뜨는 "전일 결석자 검토" 팝업의 데이터 소스.
+// 조회하는 시점에 그날 결석자별 보강요청이 아직 없으면 그 자리에서 자동으로
+// 만들어(=ensureMakeupRequestForAbsence) "전날 결석자 명단이 자동으로 보강
+// 명단으로 옮겨진다"는 요구를 충족하고, 담당교사/조교가 이후 로그인해 "오늘의
+// 일정 > 보강"을 보면 이미 올라와 있는 상태가 된다.
+export async function getAbsenceReviewData(date: string): Promise<AbsenceReviewItem[]> {
+  const absences = await getAbsentDailyRecords(date);
+  if (absences.length === 0) return [];
+
+  const [students, classes] = await Promise.all([searchStudents(""), listClasses()]);
+  const studentMap = new Map(students.map((s) => [s.id, s]));
+  const classMap = new Map(classes.map((c) => [c.id, c]));
+
+  const items: AbsenceReviewItem[] = [];
+  for (const a of absences) {
+    const student = studentMap.get(a.studentId);
+    const cls = a.classId ? classMap.get(a.classId) : undefined;
+    const studentName = student?.name ?? "-";
+    const className = cls ? stripClassSuffix(cls.name) : "-";
+    const result = await ensureMakeupRequestForAbsence({
+      studentId: a.studentId,
+      studentName,
+      classId: a.classId,
+      className,
+      teacherName: cls?.teacher ?? "",
+      absenceDate: date,
+    });
+    items.push({
+      dailyRecordId: a.dailyRecordId,
+      studentId: a.studentId,
+      studentName,
+      school: student?.school ?? "",
+      grade: student?.grade ?? null,
+      classId: a.classId,
+      className,
+      date,
+      makeupRequestId: result.id,
+      ownerAssigned: result.ownerAssigned,
+    });
+  }
+  return items;
+}
+
+// 팝업에서 "결석이 아니라 지각이었어요" 정정 — 출결을 지각으로 바로잡고,
+// 그 결석을 근거로 자동 생성됐던 보강요청이 있다면 함께 취소한다(결석이
+// 아니게 됐는데 보강요청만 덩그러니 남는 것을 막기 위함).
+export async function correctAbsenceToLate(input: { dailyRecordId: string; studentId: string; date: string }) {
+  await notion.pages.update({
+    page_id: input.dailyRecordId,
+    properties: { 출결: { select: { name: "지각" } } } as any,
+  });
+  const existing = await findMakeupRequestForAbsence(input.studentId, input.date);
+  if (existing) await deleteScheduleEntry(existing.id);
 }
