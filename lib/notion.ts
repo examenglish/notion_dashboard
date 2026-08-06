@@ -2740,3 +2740,64 @@ export async function correctAbsenceToLate(input: { dailyRecordId: string; stude
   const existing = await findMakeupRequestForAbsence(input.studentId, input.date);
   if (existing) await deleteScheduleEntry(existing.id);
 }
+
+// ---- 보강/재시 시간 확정 현황 ----
+// "시간"이 비어있으면 아직 학생/학부모와 협의해 실제 보강·재시 시간을
+// 확정하지 못한 상태로 본다(예정일만 임시로 잡아둔 상태). 새 Notion
+// 속성을 추가하지 않고 이미 있는 시간 필드의 빈 값 자체를 "미확정" 신호로
+// 재사용한다 — 확정되면(예정일·시간을 실제 값으로 채우면) 그 날짜의
+// "오늘의 일정 > 보강/재시"에 자동으로 뜬다(getTodaySchedule이 예정일로만
+// 조회하므로 별도 처리가 필요 없음).
+export type MakeupScheduleItem = {
+  id: string;
+  type: string;
+  studentName: string;
+  className: string;
+  ownerName: string;
+  date: string | null;
+  time: string;
+  memo: string;
+  confirmed: boolean;
+};
+
+// staffId를 주면 그 담당자에게 배정된 것만, 안 주면(행정/원장 전체 현황)
+// 전체를 돌려준다.
+export async function getMakeupScheduleStatus(opts: { staffId?: string } = {}): Promise<MakeupScheduleItem[]> {
+  const filters: any[] = [
+    {
+      or: [
+        { property: "유형", select: { equals: "보강" } },
+        { property: "유형", select: { equals: "재시" } },
+      ],
+    },
+    { property: "완료여부", checkbox: { equals: false } },
+  ];
+  if (opts.staffId) filters.push({ property: "담당자", relation: { contains: opts.staffId } });
+
+  const records = await queryAllPages({ data_source_id: DB.TODO, filter: { and: filters } });
+  if (records.length === 0) return [];
+
+  const [students, classes, staffList] = await Promise.all([searchStudents(""), listClasses(), listStaff()]);
+  const studentMap = new Map(students.map((s) => [s.id, s]));
+  const classMap = new Map(classes.map((c) => [c.id, c]));
+  const staffMap = new Map(staffList.map((s) => [s.id, s.name]));
+
+  return (records as any[]).map((r) => {
+    const studentId = getRelationIds(r, "관련학생")[0];
+    const classId = getRelationIds(r, "관련반")[0];
+    const ownerId = getRelationIds(r, "담당자")[0];
+    const cls = classId ? classMap.get(classId) : undefined;
+    const time = getRichText(r, "시간");
+    return {
+      id: r.id as string,
+      type: getSelect(r, "유형") ?? "보강",
+      studentName: (studentId && studentMap.get(studentId)?.name) || "-",
+      className: cls ? stripClassSuffix(cls.name) : "-",
+      ownerName: (ownerId && staffMap.get(ownerId)) || "미배정",
+      date: getDate(r, "예정일"),
+      time,
+      memo: getRichText(r, "메모"),
+      confirmed: time.trim() !== "",
+    };
+  });
+}

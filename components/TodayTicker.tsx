@@ -1,7 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { todayKST } from "@/lib/date";
+
+// 트랙(.ticker-track)의 CSS 애니메이션 재생시간이 고정값이면, 항목이
+// 많아져 트랙 폭이 늘어날수록 같은 시간에 더 먼 거리를 이동해야 해서
+// 체감 속도가 빨라진다("글자가 많아지면 더 빨라짐"). 항목 수와 무관하게
+// 항상 같은 속도(px/초)로 흐르도록, 실제 렌더된 폭을 측정해 재생시간을
+// 그때그때 계산한다.
+const PIXELS_PER_SECOND = 55;
+const MIN_DURATION_SECONDS = 20;
 
 type StatusField = { status?: string | null };
 type AlarmItem = StatusField & { id: string; studentName: string; content: string };
@@ -38,6 +46,8 @@ function statusTag(status: string | null | undefined) {
 
 export default function TodayTicker({ refreshSignal }: { refreshSignal?: number } = {}) {
   const [items, setItems] = useState<TickerItem[]>([]);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [durationSec, setDurationSec] = useState(MIN_DURATION_SECONDS);
 
   useEffect(() => {
     fetch(`/api/today-schedule?date=${todayKST()}`)
@@ -92,11 +102,21 @@ export default function TodayTicker({ refreshSignal }: { refreshSignal?: number 
       .catch(() => setItems([]));
   }, [refreshSignal]);
 
+  // items가 그려진 뒤 실제 폭을 재서 속도를 다시 계산한다 — 트랙에는
+  // 항목이 두 벌 이어붙어 있으므로(seamless loop) 폭의 절반이 한 바퀴
+  // 이동 거리다.
+  useEffect(() => {
+    if (!trackRef.current) return;
+    const singleSetWidth = trackRef.current.scrollWidth / 2;
+    if (singleSetWidth <= 0) return;
+    setDurationSec(Math.max(singleSetWidth / PIXELS_PER_SECOND, MIN_DURATION_SECONDS));
+  }, [items]);
+
   if (items.length === 0) return null;
 
   return (
     <div className="ticker-bar">
-      <div className="ticker-track">
+      <div className="ticker-track" ref={trackRef} style={{ animationDuration: `${durationSec}s` }}>
         {items.map((it) => (
           <span key={it.id} className={`ticker-item${it.status && it.status !== "재원" ? " ticker-item-flag" : ""}`}>
             {it.text}

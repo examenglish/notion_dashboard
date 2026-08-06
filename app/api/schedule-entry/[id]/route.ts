@@ -18,8 +18,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
-  if (readStaffRole(req) !== "원장") {
-    return NextResponse.json({ error: "삭제는 원장만 할 수 있습니다." }, { status: 403 });
+  const role = readStaffRole(req);
+  if (role !== "원장" && role !== "행정") {
+    return NextResponse.json({ error: "삭제는 원장·행정만 할 수 있습니다." }, { status: 403 });
   }
   await deleteScheduleEntry(params.id);
   return NextResponse.json({ ok: true });

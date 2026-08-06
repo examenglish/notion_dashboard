@@ -103,7 +103,12 @@ export default function StudentHistoryModal({
   const [busyDeleteId, setBusyDeleteId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const canDelete = staffRole === "원장";
+  // 보강요청(kind="makeup") 삭제는 원장·행정 모두 가능(서버도 동일하게
+  // 완화됨). 그 외(수업기록/조치사항/복습 등) 삭제는 기존대로 원장 전용.
+  function canDeleteKind(kind: EditState["kind"] | "progress") {
+    if (kind === "makeup") return staffRole === "원장" || staffRole === "행정";
+    return staffRole === "원장";
+  }
   const canEditEntered = (enteredBy?: string) => !enteredBy || enteredBy === staffName || staffRole === "원장";
 
   function loadHistory() {
@@ -252,7 +257,7 @@ export default function StudentHistoryModal({
             수정
           </button>
         )}
-        {canDelete && (
+        {canDeleteKind(kind) && (
           <button
             type="button"
             className="secondary"
