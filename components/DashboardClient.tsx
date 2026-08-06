@@ -64,6 +64,17 @@ type ClinicItem = {
   checked: boolean;
 };
 
+type ClinicComplianceItem = {
+  id: string;
+  date: string | null;
+  studentName: string;
+  assistant: string;
+  instruction: string;
+  done: boolean;
+  report: { content: string; nextPrep: string } | null;
+  overdue: boolean;
+};
+
 type StudentListItem = StudentRow;
 
 type StudentDetail = {
@@ -93,6 +104,7 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
   const [adminInbox, setAdminInbox] = useState<AdminInboxItem[]>([]);
   const [counseling, setCounseling] = useState<CounselingItem[]>([]);
   const [clinicRecords, setClinicRecords] = useState<ClinicItem[]>([]);
+  const [clinicCompliance, setClinicCompliance] = useState<ClinicComplianceItem[]>([]);
   const [editingCounseling, setEditingCounseling] = useState<CounselingItem | null>(null);
   const [viewingAdminInbox, setViewingAdminInbox] = useState<AdminInboxItem | null>(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -138,6 +150,13 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
       .then(setClinicRecords);
   }
 
+  function reloadClinicCompliance() {
+    fetch("/api/clinic-compliance")
+      .then((r) => r.json())
+      .then((data) => setClinicCompliance(Array.isArray(data) ? data : []))
+      .catch(() => setClinicCompliance([]));
+  }
+
   function reloadMaterialTasks() {
     fetch("/api/material-tasks")
       .then((r) => r.json())
@@ -157,6 +176,7 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
     reloadAdminInbox();
     reloadCounseling();
     reloadClinicRecords();
+    reloadClinicCompliance();
     reloadMaterialTasks();
   }, []);
 
@@ -188,6 +208,14 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
       과제: r.homeworkDone ? 1 : 0,
     }));
   }, [selected]);
+
+  // 미이행(기한 지났는데 완료 안 됨)이 가장 먼저 보이도록, 그다음은 최신순.
+  const sortedClinicCompliance = useMemo(() => {
+    return [...clinicCompliance].sort((a, b) => {
+      if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
+      return (b.date ?? "").localeCompare(a.date ?? "");
+    });
+  }, [clinicCompliance]);
 
   const scoreData = useMemo(() => {
     if (!selected) return [];
@@ -230,7 +258,7 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
   return (
     <div className="page">
       <DateTimeHeader />
-      <TodayScheduleCard staffName={staffName} staffRole={staffRole} refreshSignal={scheduleVersion} onChanged={() => { reloadAdminInbox(); reloadCounseling(); }} />
+      <TodayScheduleCard staffName={staffName} staffRole={staffRole} refreshSignal={scheduleVersion} onChanged={() => { reloadAdminInbox(); reloadCounseling(); reloadClinicCompliance(); }} />
 
       <NaturalLanguageInput onSaved={() => { reloadAdminInbox(); reloadCounseling(); }} />
 
@@ -393,6 +421,40 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
               <strong>{i.studentNames.join(", ") || "-"}</strong> — {i.content || "-"}
             </div>
             {i.nextPrep && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>다음 준비사항: {i.nextPrep}</div>}
+          </>
+        )}
+      />
+
+      <RecentListCard
+        title="클리닉 지시 이행 확인"
+        items={sortedClinicCompliance}
+        keyOf={(i) => i.id}
+        emptyText="최근 2주 내 지시된 클리닉이 없습니다."
+        renderItem={(i) => (
+          <>
+            <div className="recent-list-meta">
+              {i.date ?? "-"} · 담당조교: <span className="badge">{i.assistant}</span>{" "}
+              {i.overdue ? (
+                <span className="badge" style={{ background: "#fee2e2", color: "#b91c1c" }}>미이행</span>
+              ) : (
+                <span className={i.done ? "badge badge-success" : "badge"}>{i.done ? "완료" : "진행 예정"}</span>
+              )}
+            </div>
+            <div className="compact-line">
+              <strong>{i.studentName}</strong> — 지시: {i.instruction || "-"}
+            </div>
+            {i.report ? (
+              <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                보고: {i.report.content || "-"}
+                {i.report.nextPrep && <> · 다음: {i.report.nextPrep}</>}
+              </div>
+            ) : (
+              i.done && (
+                <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                  연결된 보고 없이 완료 처리됨(체크박스로 바로 완료했거나 자율 기록으로 연결 안 함)
+                </div>
+              )
+            )}
           </>
         )}
       />

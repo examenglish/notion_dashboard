@@ -531,8 +531,23 @@ function ScheduleEditModal({
               placeholder="예: 16:00"
             />
             <StaffPicker value={owner} onChange={setOwner} label="담당자" />
-            <label htmlFor="editTodoNote">내용/메모</label>
-            <textarea id="editTodoNote" value={note} onChange={(e) => setNote(e.target.value)} />
+            {target.kind === "clinicTasks" && staffRole === "조교" ? (
+              <>
+                <label htmlFor="editTodoNote">지시사항 (수정 불가)</label>
+                <textarea id="editTodoNote" value={note} readOnly disabled style={{ background: "#f3f4f6" }} />
+                <p className="muted" style={{ fontSize: 12 }}>
+                  지시사항은 지시한 강사/원장/행정만 고칠 수 있습니다. 진행한 클리닉 내용은
+                  "클리닉 기록 작성"에서 이 할일과 연결해 남겨주세요.
+                </p>
+              </>
+            ) : (
+              <>
+                <label htmlFor="editTodoNote">
+                  {target.kind === "clinicTasks" ? "지시사항" : "내용/메모"}
+                </label>
+                <textarea id="editTodoNote" value={note} onChange={(e) => setNote(e.target.value)} />
+              </>
+            )}
           </>
         )}
 

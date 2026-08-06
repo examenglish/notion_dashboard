@@ -1896,6 +1896,7 @@ export async function createClinicRecord(input: {
   date: string;
   content: string;
   nextPrep: string;
+  relatedTaskId?: string;
 }) {
   // 학생 이름은 학생마다 notion.pages.retrieve를 개별 호출하지 않고
   // studentNameMap()(전체 학생을 한 번의 쿼리로 조회)에서 찾는다 — 조교가
@@ -1919,12 +1920,19 @@ export async function createClinicRecord(input: {
       조교: { relation: [{ id: input.assistantId }] },
       ...(input.studentIds.length > 0 ? { 담당학생: { relation: input.studentIds.map((id) => ({ id })) } } : {}),
       ...(input.teacherId ? { 담당강사: { relation: [{ id: input.teacherId }] } } : {}),
+      ...(input.relatedTaskId ? { 관련업무: { relation: [{ id: input.relatedTaskId }] } } : {}),
       날짜: { date: { start: input.date } },
       진행내용: { rich_text: [{ text: { content: input.content } }] },
       ...(input.nextPrep ? { 다음준비사항: { rich_text: [{ text: { content: input.nextPrep } }] } } : {}),
       확인완료: { checkbox: false },
     } as any,
   });
+  // 지시받은 할일을 보고로 연결했으면, 지시자가 "완료여부"만 보고도 이행됐다는
+  // 걸 바로 알 수 있게 그 할일을 자동으로 완료 처리한다. 지시사항(메모)
+  // 자체는 건드리지 않는다 — 원본이 남아 있어야 지시-보고 비교가 가능하다.
+  if (input.relatedTaskId) {
+    await completeScheduleEntry(input.relatedTaskId);
+  }
 }
 
 export async function updateClinicRecord(
@@ -1979,6 +1987,7 @@ export async function getAssistantBrief(assistantId: string, date: string) {
       title: getTitle(p, "제목"),
       type: getSelect(p, "유형"),
       time: getRichText(p, "시간"),
+      studentId: getRelationIds(p, "관련학생")[0] ?? null,
       studentName: firstRelationName(p, "관련학생", names),
       memo: getRichText(p, "메모"),
       done: getCheckbox(p, "완료여부"),
@@ -2030,6 +2039,56 @@ export async function getRecentClinicRecords() {
     nextPrep: getRichText(p, "다음준비사항"),
     checked: getCheckbox(p, "확인완료"),
   }));
+}
+
+// 강사/원장/행정이 "내가 지시한 클리닉이 실제로 이행됐는지"를 확인하는 뷰.
+// DB⑱할일관리(유형=클리닉)의 지시사항(메모)은 조교가 덮어쓰지 않으므로 그대로
+// 유지되고, 조교가 "클리닉 기록 작성"에서 이 할일과 연결해 남긴 보고는
+// DUAL relation의 역방향 프로퍼티("클리닉보고")로 같은 페이지에서 바로 읽힌다.
+export async function getClinicCompliance(sinceDays = 14) {
+  const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const tasks = await queryAllPages({
+    data_source_id: DB.TODO,
+    filter: {
+      and: [
+        { property: "유형", select: { equals: "클리닉" } },
+        { property: "예정일", date: { on_or_after: since } },
+      ],
+    },
+    sorts: [{ property: "예정일", direction: "descending" }],
+  });
+  const reportIds = Array.from(
+    new Set(tasks.flatMap((p: any) => getRelationIds(p, "클리닉보고")))
+  );
+  const [names, staffMap, reportPages] = await Promise.all([
+    studentNameMap(),
+    staffNameMap(),
+    Promise.all(reportIds.map((id) => notion.pages.retrieve({ page_id: id }))),
+  ]);
+  const reportById = new Map(
+    reportPages.map((p: any) => [
+      p.id,
+      { content: getRichText(p, "진행내용"), nextPrep: getRichText(p, "다음준비사항") },
+    ])
+  );
+  const today = todayKST();
+  return tasks.map((p: any) => {
+    const studentId = getRelationIds(p, "관련학생")[0];
+    const ownerId = getRelationIds(p, "담당자")[0];
+    const reportId = getRelationIds(p, "클리닉보고")[0];
+    const date = getDate(p, "예정일");
+    const done = getCheckbox(p, "완료여부");
+    return {
+      id: p.id,
+      date,
+      studentName: studentId ? names.get(studentId) ?? "-" : "-",
+      assistant: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
+      instruction: getRichText(p, "메모"),
+      done,
+      report: reportId ? reportById.get(reportId) ?? null : null,
+      overdue: !done && !!date && date < today,
+    };
+  });
 }
 
 export async function createCounselingEntry(input: {

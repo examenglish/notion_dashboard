@@ -10,6 +10,7 @@ type TodayTask = {
   title: string;
   type: string | null;
   time: string;
+  studentId: string | null;
   studentName: string;
   memo: string;
   done: boolean;
@@ -43,6 +44,10 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
   const [date, setDate] = useState(todayKST());
   const [content, setContent] = useState("");
   const [nextPrep, setNextPrep] = useState("");
+  // 강사/원장이 "조교 클리닉 지시"로 배정한 오늘의 할일 중 하나를 이 보고와
+  // 연결하면, 저장 시 그 할일이 자동 완료 처리되고 지시자가 지시-보고를
+  // 나란히 비교할 수 있게 된다. 비워두면 지시받지 않은 자율 클리닉으로 남는다.
+  const [relatedTaskId, setRelatedTaskId] = useState("");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -124,7 +129,7 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
       const res = await fetch("/api/clinic-records", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ studentIds, teacherId, date, content, nextPrep }),
+        body: JSON.stringify({ studentIds, teacherId, date, content, nextPrep, relatedTaskId: relatedTaskId || undefined }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -136,6 +141,7 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
       setStudentNames({});
       setContent("");
       setNextPrep("");
+      setRelatedTaskId("");
       loadBrief();
     } catch {
       setError("네트워크 오류가 발생했습니다.");
@@ -147,6 +153,14 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
   async function toggleTaskDone(taskId: string) {
     await fetch(`/api/schedule-entry/${taskId}`, { method: "PATCH" });
     loadBrief();
+  }
+
+  function linkTask(t: TodayTask) {
+    setRelatedTaskId(t.id);
+    if (t.studentId && !studentIds.includes(t.studentId)) {
+      setStudentIds((cur) => [...cur, t.studentId as string]);
+      setStudentNames((cur) => ({ ...cur, [t.studentId as string]: t.studentName }));
+    }
   }
 
   function startEdit(c: ClinicHistoryItem) {
@@ -232,6 +246,17 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
                   <span className="muted">{t.time || "시간 미정"}</span>
                   {t.memo && <span className="muted schedule-item-memo">· {t.memo}</span>}
                 </label>
+                {t.type === "클리닉" && !t.done && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    style={{ padding: "2px 8px", fontSize: 12, marginLeft: 28, marginTop: 4 }}
+                    disabled={relatedTaskId === t.id}
+                    onClick={() => linkTask(t)}
+                  >
+                    {relatedTaskId === t.id ? "아래에 연결됨" : "이 지시로 보고 작성"}
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -258,6 +283,19 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
       <form className="card" onSubmit={handleSubmit}>
         <h2>클리닉 기록 작성 <span className="title-lab-tag">(실험실)</span></h2>
         <p className="muted">이번 클리닉 시간에 지도한 학생, 진행 내용, 다음 준비사항을 남겨주세요.</p>
+
+        {relatedTaskId ? (
+          <p className="muted" style={{ marginBottom: 12 }}>
+            "오늘 할 일"의 지시사항과 연결됩니다 — 저장하면 그 할일도 자동으로 완료 처리됩니다.{" "}
+            <button type="button" className="secondary" style={{ padding: "0 6px", fontSize: 12 }} onClick={() => setRelatedTaskId("")}>
+              연결 해제
+            </button>
+          </p>
+        ) : (
+          <p className="muted" style={{ marginBottom: 12 }}>
+            지시받은 클리닉이 아니라면 그대로 두세요 — 자율적으로 진행한 클리닉으로 기록됩니다.
+          </p>
+        )}
 
         {brief && brief.myClasses.length > 0 && (
           <div style={{ marginBottom: 12 }}>

@@ -17,7 +17,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
-  const { studentIds, teacherId, date, content, nextPrep } = body ?? {};
+  const { studentIds, teacherId, date, content, nextPrep, relatedTaskId } = body ?? {};
   const assistantId = readStaffId(req);
   if (!assistantId) {
     return NextResponse.json({ error: "로그인이 필요합니다." }, { status: 401 });
@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
       date: date || todayKST(),
       content,
       nextPrep: nextPrep ?? "",
+      relatedTaskId: relatedTaskId || undefined,
     });
     return NextResponse.json({ ok: true });
   } catch (err) {
