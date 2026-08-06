@@ -25,9 +25,13 @@ function schoolGrade(school: string, grade: string | null) {
 function OwnerAssignRow({ item, onAssigned }: { item: AbsenceReviewItem; onAssigned: () => void }) {
   const [owner, setOwner] = useState("");
   const [saving, setSaving] = useState(false);
+  // 클릭한 순간 바로 "클릭했음"이 보이도록, 서버 응답을 기다리지 않고
+  // 먼저 이 폼을 접어 확인 배지로 바꾼다.
+  const [clicked, setClicked] = useState(false);
 
   async function assign() {
     if (!owner) return;
+    setClicked(true);
     setSaving(true);
     try {
       await fetch(`/api/schedule-entry/${item.makeupRequestId}`, {
@@ -41,13 +45,21 @@ function OwnerAssignRow({ item, onAssigned }: { item: AbsenceReviewItem; onAssig
     }
   }
 
+  if (clicked) {
+    return (
+      <p className="muted" style={{ marginTop: 6, fontSize: 13 }}>
+        ✓ 담당자 지정 처리함{saving ? " (저장 중...)" : ""}
+      </p>
+    );
+  }
+
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <StaffPicker value={owner} onChange={setOwner} label="" />
       </div>
-      <button type="button" className="secondary" disabled={!owner || saving} onClick={assign}>
-        {saving ? "지정 중..." : "담당자 지정"}
+      <button type="button" className="secondary" disabled={!owner} onClick={assign}>
+        담당자 지정
       </button>
     </div>
   );
@@ -70,9 +82,18 @@ export default function AbsenceReviewModal({
   onChanged: () => void;
 }) {
   const [busyId, setBusyId] = useState<string | null>(null);
+  // 요청이 끝나길 기다리지 않고 버튼을 누른 즉시 "클릭했음"을 보여주기 위한
+  // 표시 전용 상태 — 실제 처리 결과(성공/실패)는 onChanged로 이어지는
+  // 새로고침이 반영한다. 팝업을 새로 열면(재조회) 초기화된다.
+  const [clickedIds, setClickedIds] = useState<Set<string>>(new Set());
+
+  function markClicked(id: string) {
+    setClickedIds((cur) => new Set(cur).add(id));
+  }
 
   async function correctToLate(item: AbsenceReviewItem) {
     if (!window.confirm(`${item.studentName} 학생을 결석이 아닌 지각으로 정정할까요? 자동 생성된 보강요청도 함께 취소됩니다.`)) return;
+    markClicked(item.dailyRecordId);
     setBusyId(item.dailyRecordId);
     try {
       await fetch("/api/absence-review", {
@@ -93,6 +114,7 @@ export default function AbsenceReviewModal({
 
   async function cancelMakeup(item: AbsenceReviewItem) {
     if (!window.confirm(`${item.studentName} 학생의 보강요청을 취소할까요?`)) return;
+    markClicked(item.dailyRecordId);
     setBusyId(item.dailyRecordId);
     try {
       await fetch("/api/absence-review", {
@@ -122,31 +144,41 @@ export default function AbsenceReviewModal({
           <p className="muted">어제 결석자가 없습니다.</p>
         ) : (
           <ul className="schedule-list" style={{ marginTop: 12 }}>
-            {items.map((item) => (
-              <li key={item.dailyRecordId} className="modal-briefing-item">
-                <div className="schedule-item-row">
-                  <div>
-                    <strong>{item.studentName}</strong> <span className="muted">{schoolGrade(item.school, item.grade)}</span>
-                    {" · "}
-                    <span className="muted">{item.className}</span>
-                    <br />
-                    <span className="badge badge-success">보강요청 등록됨</span>
-                    {!item.ownerAssigned && (
-                      <span className="badge" style={{ marginLeft: 6 }}>담당강사 미지정</span>
+            {items.map((item) => {
+              const clicked = clickedIds.has(item.dailyRecordId);
+              return (
+                <li key={item.dailyRecordId} className="modal-briefing-item" style={clicked ? { opacity: 0.6 } : undefined}>
+                  <div className="schedule-item-row">
+                    <div>
+                      <strong>{item.studentName}</strong> <span className="muted">{schoolGrade(item.school, item.grade)}</span>
+                      {" · "}
+                      <span className="muted">{item.className}</span>
+                      <br />
+                      <span className="badge badge-success">보강요청 등록됨</span>
+                      {!item.ownerAssigned && (
+                        <span className="badge" style={{ marginLeft: 6 }}>담당강사 미지정</span>
+                      )}
+                      {clicked && (
+                        <span className="badge badge-success" style={{ marginLeft: 6 }}>
+                          ✓ 클릭함{busyId === item.dailyRecordId ? " (처리 중...)" : ""}
+                        </span>
+                      )}
+                    </div>
+                    {!clicked && (
+                      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                        <button type="button" className="secondary" onClick={() => correctToLate(item)}>
+                          지각으로 정정
+                        </button>
+                        <button type="button" className="secondary" onClick={() => cancelMakeup(item)}>
+                          보강 취소
+                        </button>
+                      </div>
                     )}
                   </div>
-                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                    <button type="button" className="secondary" disabled={busyId === item.dailyRecordId} onClick={() => correctToLate(item)}>
-                      지각으로 정정
-                    </button>
-                    <button type="button" className="secondary" disabled={busyId === item.dailyRecordId} onClick={() => cancelMakeup(item)}>
-                      보강 취소
-                    </button>
-                  </div>
-                </div>
-                {!item.ownerAssigned && <OwnerAssignRow item={item} onAssigned={onChanged} />}
-              </li>
-            ))}
+                  {!clicked && !item.ownerAssigned && <OwnerAssignRow item={item} onAssigned={onChanged} />}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
