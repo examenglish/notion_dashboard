@@ -385,7 +385,11 @@ export async function searchStudents(query: string, classId?: string) {
     classNameMap(),
   ]);
   let mapped = results.map((p: any) => mapStudentPage(p, examMap, classById));
-  if (classId) mapped = mapped.filter((s) => s.classIds.includes(classId));
+  // classId로 반 명단을 뽑을 때만 퇴원/휴원 학생을 걷어낸다 — 이름 검색
+  // (StudentPicker 등)은 관리자가 퇴원생을 다시 찾아야 할 수도 있어 그대로
+  // 전체 학생 대상으로 둔다. 오늘 수업 기록/클리닉 지시/보강 명단 불러오기처럼
+  // "이 반에 지금 다니는 학생"이 필요한 화면만 이 필터의 영향을 받는다.
+  if (classId) mapped = mapped.filter((s) => s.classIds.includes(classId) && s.status !== "퇴원" && s.status !== "휴원");
   return mapped;
 }
 
