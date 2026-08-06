@@ -13,3 +13,18 @@ const KST_FORMATTER = new Intl.DateTimeFormat("en-CA", {
 export function todayKST(): string {
   return KST_FORMATTER.format(new Date()); // en-CA => YYYY-MM-DD
 }
+
+const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
+
+// Pure calendar-date arithmetic (via Date.UTC) so this never depends on the
+// browser's or server's local timezone — only on the Y/M/D digits themselves.
+export function shiftDate(dateStr: string, delta: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
+}
+
+export function formatDateLabel(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return `${m}월 ${d}일(${weekday})`;
+}

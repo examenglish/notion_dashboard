@@ -23,7 +23,7 @@ import NaturalLanguageInput from "./NaturalLanguageInput";
 import TodayTicker from "./TodayTicker";
 import StudentHistoryModal from "./StudentHistoryModal";
 import MaterialTaskModal, { MaterialTaskRecord } from "./MaterialTaskModal";
-import { todayKST } from "@/lib/date";
+import { todayKST, shiftDate } from "@/lib/date";
 
 type AdminInboxItem = {
   id: string;
@@ -143,6 +143,10 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
   function bumpSchedule() {
     setScheduleVersion((v) => v + 1);
   }
+
+  // 상단 시계 옆 화살표로 "오늘의 일정" 전체(모든 섹션 + 자재관리)를 같은
+  // 날짜로 한 번에 옮긴다 — TodayScheduleCard의 globalDate prop으로 내려감.
+  const [scheduleDate, setScheduleDate] = useState(todayKST());
 
   function reloadCounseling() {
     fetch("/api/counseling")
@@ -284,8 +288,18 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
 
   return (
     <div className="page">
-      <DateTimeHeader />
-      <TodayScheduleCard staffName={staffName} staffRole={staffRole} refreshSignal={scheduleVersion} onChanged={() => { reloadAdminInbox(); reloadCounseling(); reloadClinicCompliance(); reloadClinicGaps(); }} />
+      <DateTimeHeader
+        scheduleDate={scheduleDate}
+        onShiftSchedule={(delta) => setScheduleDate((cur) => shiftDate(cur, delta))}
+        onResetSchedule={() => setScheduleDate(todayKST())}
+      />
+      <TodayScheduleCard
+        staffName={staffName}
+        staffRole={staffRole}
+        refreshSignal={scheduleVersion}
+        globalDate={scheduleDate}
+        onChanged={() => { reloadAdminInbox(); reloadCounseling(); reloadClinicCompliance(); reloadClinicGaps(); }}
+      />
 
       <NaturalLanguageInput onSaved={() => { reloadAdminInbox(); reloadCounseling(); }} />
 

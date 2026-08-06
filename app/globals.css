@@ -778,6 +778,29 @@ th, td {
   color: var(--primary-dark);
 }
 
+.datetime-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.datetime-header-row .date-nav-arrow {
+  font-size: 0.7em;
+  padding: 6px 10px;
+}
+
+.datetime-header-sub {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
 .history-log {
   list-style: none;
   margin: 0;

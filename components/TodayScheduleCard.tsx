@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { todayKST } from "@/lib/date";
+import { todayKST, shiftDate, formatDateLabel } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
 import StaffPicker from "./StaffPicker";
 import StudentPicker from "./StudentPicker";
@@ -101,26 +101,6 @@ const SECTION_META: { key: SectionKey; title: string; readOnly?: boolean }[] = [
   { key: "inquiries", title: "행정실 문의", readOnly: true },
 ];
 
-const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
-
-// Pure calendar-date arithmetic (via Date.UTC) so this never depends on the
-// browser's or server's local timezone — only on the Y/M/D digits themselves.
-function parts(dateStr: string) {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  return { y, m, d };
-}
-
-function formatLabel(dateStr: string) {
-  const { y, m, d } = parts(dateStr);
-  const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
-  return `${m}월 ${d}일(${weekday})`;
-}
-
-function shiftDate(dateStr: string, delta: number) {
-  const { y, m, d } = parts(dateStr);
-  return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
-}
-
 function schoolGrade(school: string, gradeNum: string) {
   const s = school || "학교미상";
   return gradeNum ? `${s}(${gradeNum})` : s;
@@ -174,7 +154,7 @@ function DateNav({ date, onShift, onToday }: { date: string; onShift: (delta: nu
   return (
     <div className="date-nav" style={{ margin: "6px 0", fontSize: 13 }}>
       <button type="button" className="secondary date-nav-arrow" onClick={() => onShift(-1)}>◀</button>
-      <strong>{formatLabel(date)}</strong>
+      <strong>{formatDateLabel(date)}</strong>
       <button type="button" className="secondary date-nav-arrow" onClick={() => onShift(1)}>▶</button>
       {date !== todayKST() && (
         <button type="button" className="secondary date-nav-today" onClick={onToday}>오늘</button>
@@ -641,11 +621,17 @@ export default function TodayScheduleCard({
   staffName,
   staffRole,
   refreshSignal,
+  globalDate,
   onChanged,
 }: {
   staffName: string | null;
   staffRole: string | null;
   refreshSignal?: number;
+  // 상단 DateTimeHeader의 좌우 화살표로 넘어오는 "전체 날짜" — 바뀔 때마다
+  // 아래 모든 섹션(자재관리 포함)의 날짜를 한 번에 같은 날로 맞춘다. 이후
+  // 각 섹션의 개별 ◀▶는 그대로 동작해서, 필요하면 특정 섹션만 다시 따로
+  // 옮겨볼 수 있다 — 헤더 화살표를 다시 누르면 다시 전체가 그 날짜로 맞춰진다.
+  globalDate?: string;
   onChanged?: () => void;
 }) {
   const { cache, ensureDate, refetchDate, markDone } = useScheduleCache();
@@ -696,6 +682,20 @@ export default function TodayScheduleCard({
     fetchMaterial(materialDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [materialDate]);
+
+  const prevGlobalDate = useRef(globalDate);
+  useEffect(() => {
+    if (globalDate === undefined) return;
+    if (prevGlobalDate.current === globalDate) return;
+    prevGlobalDate.current = globalDate;
+    setDates((cur) => {
+      const next = { ...cur };
+      for (const key of Object.keys(next) as SectionKey[]) next[key] = globalDate;
+      return next;
+    });
+    setMaterialDate(globalDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [globalDate]);
 
   useEffect(() => {
     Object.values(dates).forEach(ensureDate);
