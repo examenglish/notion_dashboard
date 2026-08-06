@@ -11,6 +11,7 @@ import StaffScheduleForm from "./StaffScheduleForm";
 import ClassManageForm from "./ClassManageForm";
 import AssignClinicTaskForm from "./AssignClinicTaskForm";
 import QuickScheduleForm from "./QuickScheduleForm";
+import MakeupStatusCard from "./MakeupStatusCard";
 import { todayKST as todayStr } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
 
@@ -1025,11 +1026,14 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
       </div>
 
       {activeTab === "schedule" && (
-        <div className="grid-3">
-          <QuickScheduleCard />
-          <CounselingForm />
-          <AdminInputForm />
-        </div>
+        <>
+          <div className="grid-3">
+            <QuickScheduleCard />
+            <CounselingForm />
+            <AdminInputForm />
+          </div>
+          <MakeupStatusCard />
+        </>
       )}
 
       {activeTab === "students" && showStudentsTab && (

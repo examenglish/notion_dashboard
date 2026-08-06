@@ -2644,7 +2644,11 @@ async function ensureMakeupRequestForAbsence(input: {
   const existing = await findMakeupRequestForAbsence(input.studentId, input.absenceDate);
   if (existing) {
     const ownerId = getRelationIds(existing, "담당자")[0];
-    return { id: existing.id as string, created: false, ownerAssigned: !!ownerId };
+    // 완료여부=true는 "취소(더 이상 보강 필요 없음)" 또는 이미 처리 완료를
+    // 뜻하고, 시간이 채워져 있으면 이미 확정된 것이다 — 둘 다 더는 결석
+    // 검토 팝업에 다시 이름이 뜨거나 재생성될 필요가 없는 "해결됨" 상태.
+    const resolved = getCheckbox(existing, "완료여부") || getRichText(existing, "시간").trim() !== "";
+    return { id: existing.id as string, created: false, ownerAssigned: !!ownerId, resolved };
   }
   const ownerId = input.teacherName ? await findStaffIdByName(input.teacherName) : null;
   const page = await notion.pages.create({
@@ -2670,7 +2674,7 @@ async function ensureMakeupRequestForAbsence(input: {
       우선순위: { select: { name: "보통" } },
     } as any,
   });
-  return { id: page.id, created: true, ownerAssigned: !!ownerId };
+  return { id: page.id, created: true, ownerAssigned: !!ownerId, resolved: false };
 }
 
 export type AbsenceReviewItem = {
@@ -2691,6 +2695,14 @@ export type AbsenceReviewItem = {
 // 만들어(=ensureMakeupRequestForAbsence) "전날 결석자 명단이 자동으로 보강
 // 명단으로 옮겨진다"는 요구를 충족하고, 담당교사/조교가 이후 로그인해 "오늘의
 // 일정 > 보강"을 보면 이미 올라와 있는 상태가 된다.
+//
+// 보강요청이 이미 취소(완료 처리)됐거나 확정된(시간이 채워진) 학생은
+// 목록에서 뺀다 — 그래야 "취소하면 팝업에 이름이 다시 안 뜨고, 처리할 게
+// 없어지면 팝업 자체가 닫히는" 동작이 된다. 취소를 완료여부=true로
+// 표시하는 이유: Notion에서 실제로 지우면(보관 처리) 다음 조회 때 "요청이
+// 없다"고 판단해 똑같은 요청을 즉시 다시 만들어버리기 때문에(같은 학생이
+// 여전히 결석으로 남아있으므로), 실제 삭제 대신 "완료" 처리로 재생성을
+// 막는다.
 export async function getAbsenceReviewData(date: string): Promise<AbsenceReviewItem[]> {
   const absences = await getAbsentDailyRecords(date);
   if (absences.length === 0) return [];
@@ -2713,6 +2725,7 @@ export async function getAbsenceReviewData(date: string): Promise<AbsenceReviewI
       teacherName: cls?.teacher ?? "",
       absenceDate: date,
     });
+    if (result.resolved) continue;
     items.push({
       dailyRecordId: a.dailyRecordId,
       studentId: a.studentId,

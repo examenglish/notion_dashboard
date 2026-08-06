@@ -171,6 +171,9 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
         setAbsenceDate(data.date);
         setAbsenceItems(data.items ?? []);
         if (autoOpenIfPending && data.items?.length > 0) setAbsenceModalOpen(true);
+        // 지각 정정/보강 취소로 처리할 항목이 더는 안 남으면(빈 목록) 팝업을
+        // 그대로 열어둘 이유가 없으므로 자동으로 닫는다.
+        if (data.items?.length === 0) setAbsenceModalOpen(false);
       });
   }
 
@@ -188,37 +191,29 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
   // 로그인 시 팝업으로 확정을 요청하고, 처리 안 하고 닫으면 55분마다 다시
   // 띄운다. 어제 결석 검토 팝업과 동시에 뜰 수 있는 경우(원장/행정이 담당
   // 보강도 있을 때) 겹치지 않도록, 결석 팝업이 열려있는 동안은 자동으로
-  // 띄우지 않고 결석 팝업을 닫을 때 이어서 띄운다.
-  const [makeupScope, setMakeupScope] = useState<"all" | "mine">("mine");
-  const [makeupItems, setMakeupItems] = useState<MakeupScheduleItem[]>([]);
-  // null이면 닫힌 상태. 자동 재알림(55분)은 항상 "내게 배정된 미확정"만
-  // 담고, 카드의 "미확정 N건 처리하기" 버튼은 지금 보이는 범위(전체 또는
-  // 내 것) 그대로를 담아서 연다.
+  // 띄우지 않고 결석 팝업을 닫을 때 이어서 띄운다. (상시 표시되는 카드
+  // 자체는 MakeupStatusCard가 자체적으로 /api/makeup-status를 불러오므로
+  // 여기서는 이 팝업 트리거용으로만 별도 조회한다.)
   const [confirmModalItems, setConfirmModalItems] = useState<MakeupScheduleItem[] | null>(null);
   const absenceModalOpenRef = useRef(false);
   useEffect(() => {
     absenceModalOpenRef.current = absenceModalOpen;
   }, [absenceModalOpen]);
 
-  const myUnconfirmed = makeupItems.filter((i) => !i.confirmed && i.ownerName === staffName);
-
-  function reloadMakeupStatus(autoOpenIfPending = false) {
+  function checkMakeupReminder() {
     fetch("/api/makeup-status")
       .then((r) => r.json())
-      .then((data: { scope: "all" | "mine"; items: MakeupScheduleItem[] }) => {
-        setMakeupScope(data.scope);
-        setMakeupItems(data.items ?? []);
-        if (autoOpenIfPending && !absenceModalOpenRef.current) {
-          const mine = (data.items ?? []).filter((i) => !i.confirmed && i.ownerName === staffName);
-          if (mine.length > 0) setConfirmModalItems(mine);
-        }
+      .then((data: { items: MakeupScheduleItem[] }) => {
+        if (absenceModalOpenRef.current) return;
+        const mine = (data.items ?? []).filter((i) => !i.confirmed && i.ownerName === staffName);
+        if (mine.length > 0) setConfirmModalItems(mine);
       });
   }
 
   useEffect(() => {
-    reloadMakeupStatus(true);
+    checkMakeupReminder();
     const REMIND_INTERVAL_MS = 55 * 60 * 1000;
-    const id = setInterval(() => reloadMakeupStatus(true), REMIND_INTERVAL_MS);
+    const id = setInterval(checkMakeupReminder, REMIND_INTERVAL_MS);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -229,7 +224,7 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
 
   function closeAbsenceModal() {
     setAbsenceModalOpen(false);
-    if (myUnconfirmed.length > 0) setConfirmModalItems(myUnconfirmed);
+    checkMakeupReminder();
   }
 
   function reloadCounseling() {
@@ -386,11 +381,7 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
         </div>
       )}
 
-      <MakeupStatusCard
-        scope={makeupScope}
-        items={makeupItems}
-        onOpenConfirm={() => setConfirmModalItems(makeupItems.filter((i) => !i.confirmed))}
-      />
+      <MakeupStatusCard onChanged={bumpSchedule} />
 
       <TodayScheduleCard
         staffName={staffName}
@@ -737,10 +728,7 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
         <ScheduleConfirmModal
           items={confirmModalItems}
           onClose={closeConfirmModal}
-          onChanged={() => {
-            reloadMakeupStatus();
-            bumpSchedule();
-          }}
+          onChanged={bumpSchedule}
         />
       )}
     </div>
