@@ -8,6 +8,7 @@ import StudentPicker from "./StudentPicker";
 import CounselingEditModal, { CounselingRecord } from "./CounselingEditModal";
 import AdminInboxDetailModal, { AdminInboxRecord } from "./AdminInboxDetailModal";
 import MaterialTaskModal, { MaterialTaskRecord } from "./MaterialTaskModal";
+import QuickScheduleForm, { QuickScheduleKind } from "./QuickScheduleForm";
 
 type AlarmItem = { id: string; studentName: string; school: string; content: string; counselor: string };
 type FirstDayItem = {
@@ -602,8 +603,9 @@ function ClinicTaskDetailModal({ item, onClose }: { item: TodoItem; onClose: () 
 type QuickAddTarget = { kind: SectionKey; date: string };
 
 // Lets staff add a new 오늘의 일정 item without leaving the dashboard for
-// the /input page — mirrors ScheduleEditModal's field layout per section
-// kind, but POSTs a new record instead of PATCHing an existing one.
+// the /input page — 필드/저장 로직은 QuickScheduleForm(입력 페이지의 "일정
+// 빠른등록" 카드와 완전히 동일한 컴포넌트)에 위임해서, 여기서 등록하든
+// 입력 페이지에서 등록하든 항상 같은 방식으로 동작하게 한다.
 function ScheduleQuickAddModal({
   target,
   onClose,
@@ -613,93 +615,6 @@ function ScheduleQuickAddModal({
   onClose: () => void;
   onSaved: (date: string) => void;
 }) {
-  const isAlarm = target.kind === "alarms";
-  const isFirstDay = target.kind === "firstDays";
-  const isNewStudentEvent = target.kind === "newStudentEvents";
-  const isPersonal = target.kind === "personalTodos";
-  const isTodo = !isAlarm && !isFirstDay && !isPersonal;
-
-  const [studentId, setStudentId] = useState("");
-  const [subType, setSubType] = useState("신입생상담");
-  const [content, setContent] = useState("");
-  const [counselor, setCounselor] = useState("");
-  const [alarmDate, setAlarmDate] = useState(target.date);
-  const [enrolledAt, setEnrolledAt] = useState(target.date);
-  const [todoDate, setTodoDate] = useState(target.date);
-  const [time, setTime] = useState("");
-  const [owner, setOwner] = useState("");
-  const [note, setNote] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const todoType = isNewStudentEvent
-    ? subType
-    : target.kind === "makeupClasses"
-    ? "보강"
-    : target.kind === "clinicTasks"
-    ? "클리닉"
-    : target.kind === "reviewTasks"
-    ? "복습"
-    : "재시";
-
-  async function handleSave() {
-    if ((isAlarm || isFirstDay) && !studentId) {
-      setError("학생을 선택해 주세요.");
-      return;
-    }
-    if (isPersonal && !content.trim()) {
-      setError("내용을 입력해 주세요.");
-      return;
-    }
-    if (!window.confirm("등록하시겠습니까?")) return;
-    setError(null);
-    setSaving(true);
-    try {
-      let res: Response;
-      let savedDate = target.date;
-      if (isAlarm) {
-        savedDate = alarmDate;
-        res = await fetch("/api/student-info", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ studentId, action: content, actionOwner: counselor, actionAlarmDate: alarmDate }),
-        });
-      } else if (isFirstDay) {
-        savedDate = enrolledAt;
-        res = await fetch("/api/student-info", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ studentId, enrolledAt }),
-        });
-      } else if (isPersonal) {
-        savedDate = todoDate;
-        res = await fetch("/api/personal-todo", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content, date: todoDate }),
-        });
-      } else {
-        savedDate = todoDate;
-        res = await fetch("/api/schedule-entry", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: todoType, studentId: studentId || null, date: todoDate, time, note, ownerName: owner }),
-        });
-      }
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setError(data.error ?? "저장에 실패했습니다.");
-        return;
-      }
-      onSaved(savedDate);
-      onClose();
-    } catch {
-      setError("네트워크 오류가 발생했습니다.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   const title = SECTION_META.find((m) => m.key === target.kind)?.title ?? "";
 
   return (
@@ -709,70 +624,14 @@ function ScheduleQuickAddModal({
           <h2>{title} 빠른 등록</h2>
           <button type="button" className="secondary" onClick={onClose}>닫기</button>
         </div>
-
-        {!isPersonal && <StudentPicker studentId={studentId} onChange={setStudentId} allowEmpty={isTodo} />}
-
-        {isPersonal && (
-          <>
-            <label htmlFor="quickPersonalContent">내용</label>
-            <textarea id="quickPersonalContent" value={content} onChange={(e) => setContent(e.target.value)} placeholder="예: 문법책 재고 주문하기" />
-            <label htmlFor="quickPersonalDate">날짜</label>
-            <input id="quickPersonalDate" type="date" value={todoDate} onChange={(e) => setTodoDate(e.target.value)} />
-          </>
-        )}
-
-        {isNewStudentEvent && (
-          <>
-            <label htmlFor="quickSubType">유형</label>
-            <select id="quickSubType" value={subType} onChange={(e) => setSubType(e.target.value)}>
-              <option value="신입생상담">신입생상담</option>
-              <option value="레벨체크">레벨체크</option>
-            </select>
-          </>
-        )}
-
-        {isAlarm && (
-          <>
-            <label htmlFor="quickAlarmContent">조치사항</label>
-            <textarea id="quickAlarmContent" value={content} onChange={(e) => setContent(e.target.value)} />
-            <StaffPicker value={counselor} onChange={setCounselor} label="담당자" />
-            <label htmlFor="quickAlarmDate">알람일</label>
-            <input id="quickAlarmDate" type="date" value={alarmDate} onChange={(e) => setAlarmDate(e.target.value)} />
-          </>
-        )}
-
-        {isFirstDay && (
-          <>
-            <label htmlFor="quickEnrolledAt">등원일</label>
-            <input id="quickEnrolledAt" type="date" value={enrolledAt} onChange={(e) => setEnrolledAt(e.target.value)} />
-          </>
-        )}
-
-        {isTodo && (
-          <>
-            <label htmlFor="quickTodoDate">예정일</label>
-            <input id="quickTodoDate" type="date" value={todoDate} onChange={(e) => setTodoDate(e.target.value)} />
-            <label htmlFor="quickTodoTime">시간</label>
-            <input
-              id="quickTodoTime"
-              type="text"
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-              placeholder="예: 16:00"
-            />
-            <StaffPicker value={owner} onChange={setOwner} label="담당자" date={todoDate} time={time} />
-            <label htmlFor="quickTodoNote">메모</label>
-            <textarea id="quickTodoNote" value={note} onChange={(e) => setNote(e.target.value)} />
-          </>
-        )}
-
-        {error && <p className="error-text">{error}</p>}
-
-        <div style={{ marginTop: 16 }}>
-          <button type="button" disabled={saving} onClick={handleSave}>
-            {saving ? "저장 중..." : "등록"}
-          </button>
-        </div>
+        <QuickScheduleForm
+          lockedKind={target.kind as QuickScheduleKind}
+          initialDate={target.date}
+          onSaved={(savedDate) => {
+            onSaved(savedDate);
+            onClose();
+          }}
+        />
       </div>
     </div>
   );

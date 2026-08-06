@@ -10,6 +10,7 @@ import ClassAssistantAssignForm from "./ClassAssistantAssignForm";
 import StaffScheduleForm from "./StaffScheduleForm";
 import ClassManageForm from "./ClassManageForm";
 import AssignClinicTaskForm from "./AssignClinicTaskForm";
+import QuickScheduleForm from "./QuickScheduleForm";
 import { todayKST as todayStr } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
 
@@ -515,82 +516,6 @@ function AdminInputForm() {
   );
 }
 
-function ScheduleEntryForm() {
-  const [type, setType] = useState("보강");
-  const [studentId, setStudentId] = useState("");
-  const [date, setDate] = useState(todayStr());
-  const [time, setTime] = useState("");
-  const [note, setNote] = useState("");
-  const [owner, setOwner] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [done, setDone] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!confirmSave()) return;
-    setError(null);
-    setSaving(true);
-    setDone(false);
-    try {
-      const res = await fetch("/api/schedule-entry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, studentId: studentId || null, date, time, note, ownerName: owner }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "저장에 실패했습니다.");
-        return;
-      }
-      setDone(true);
-      setTime("");
-      setNote("");
-    } catch {
-      setError("네트워크 오류가 발생했습니다.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <form className="card" onSubmit={handleSubmit}>
-      <h2>일정 등록 <span className="title-lab-tag">(실험실)</span></h2>
-      <p className="muted">보강 / 재시 / 신입생상담 / 레벨체크 — 오늘 날짜면 대시보드 "오늘의 일정"에 표시됩니다.</p>
-
-      <label htmlFor="scheduleType">유형</label>
-      <select id="scheduleType" value={type} onChange={(e) => setType(e.target.value)}>
-        <option value="보강">보강</option>
-        <option value="재시">재시</option>
-        <option value="신입생상담">신입생상담</option>
-        <option value="레벨체크">레벨체크</option>
-      </select>
-
-      <StudentPicker studentId={studentId} onChange={setStudentId} allowEmpty />
-
-      <label htmlFor="scheduleDate">날짜</label>
-      <input id="scheduleDate" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
-
-      <label htmlFor="scheduleTime">시간</label>
-      <input id="scheduleTime" type="text" placeholder="예: 16:30" value={time} onChange={(e) => setTime(e.target.value)} />
-
-      <StaffPicker value={owner} onChange={setOwner} label="담당자 (보강자/진행자)" />
-
-      <label htmlFor="scheduleNote">메모</label>
-      <textarea id="scheduleNote" value={note} onChange={(e) => setNote(e.target.value)} />
-
-      {error && <p className="error-text">{error}</p>}
-      {done && <p className="success-box" style={{ marginTop: 12 }}>저장됐습니다.</p>}
-
-      <div style={{ marginTop: 16 }}>
-        <button type="submit" disabled={saving}>
-          {saving ? "저장 중..." : "저장"}
-        </button>
-      </div>
-    </form>
-  );
-}
-
 function CounselingForm() {
   const [studentId, setStudentId] = useState("");
   const [counselor, setCounselor] = useState("");
@@ -1026,6 +951,21 @@ function StudentRegisterForm() {
   );
 }
 
+function QuickScheduleCard() {
+  return (
+    <div className="card">
+      <h2>일정 빠른등록 <span className="title-lab-tag">(실험실)</span></h2>
+      <p className="muted">
+        보강 · 재시 · 신입생상담/레벨체크 · 클리닉 · 신입생 첫등원 · 조치사항 · 개인 할일 — 대시보드
+        "오늘의 일정"의 빠른 등록과 완전히 같은 방식으로 저장되어 서로 그대로 동기화됩니다.
+      </p>
+      <QuickScheduleForm />
+    </div>
+  );
+}
+
+type TabKey = "schedule" | "students" | "ops" | "records";
+
 export default function InputClient({ role }: { role: string | null; staffId?: string | null }) {
   // 원장/행정은 강사·조교·행정 입력폼을 모두 볼 수 있어야 하므로, "행정 전용"
   // 폼들도 원장에게 함께 열어준다. 조교는 강사의 "오늘 수업 기록"이 아니라
@@ -1037,22 +977,71 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
   // 채워 저장하면 그 시점에 브리핑이 생성된다.
   const isAdminLike = role === "행정" || role === "원장";
   const isAssistant = role === "조교";
+
+  // 폼이 12개 가까이 한 페이지에 세로로 쌓여 있으면 원하는 폼을 찾으려고
+  // 계속 스크롤해야 했다. 성격이 비슷한 폼끼리 탭으로 묶어서, 탭 전환만으로
+  // 원하는 폼에 바로 도달하고 각 탭 안의 스크롤도 최소화되게 한다.
+  const showStudentsTab = isAdminLike;
+  const showOpsTab = isAdminLike || !isAssistant;
+
+  const tabs = (
+    [
+      { key: "schedule", label: "일정 등록", show: true },
+      { key: "students", label: "학생 관리", show: showStudentsTab },
+      { key: "ops", label: "반 · 조교 관리", show: showOpsTab },
+      { key: "records", label: "수업 · 코칭 기록", show: true },
+    ] as { key: TabKey; label: string; show: boolean }[]
+  ).filter((t) => t.show);
+
+  const [tab, setTab] = useState<TabKey>("schedule");
+  const activeTab = tabs.some((t) => t.key === tab) ? tab : tabs[0].key;
+
   return (
     <div className="page">
-      {isAdminLike && <StudentRegisterForm />}
-      {isAdminLike && <ClassManageForm />}
-      {isAdminLike && <ClassAssistantAssignForm />}
-      {isAdminLike && <StaffScheduleForm />}
-      {!isAssistant && <AssignClinicTaskForm />}
-      {(isAssistant || isAdminLike) && <AssistantClinicForm role={role} />}
-      {(isAssistant || isAdminLike) && <AttendanceCheckForm />}
-      {!isAssistant && <ClassRecordForm />}
-      <div className="grid-3">
-        <ScheduleEntryForm />
-        <CounselingForm />
-        <AdminInputForm />
-        {isAdminLike && <StudentInfoForm />}
+      <div className="input-tabbar">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            className={activeTab === t.key ? "" : "secondary"}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
+
+      {activeTab === "schedule" && (
+        <div className="grid-3">
+          <QuickScheduleCard />
+          <CounselingForm />
+          <AdminInputForm />
+        </div>
+      )}
+
+      {activeTab === "students" && showStudentsTab && (
+        <>
+          <StudentRegisterForm />
+          <StudentInfoForm />
+        </>
+      )}
+
+      {activeTab === "ops" && showOpsTab && (
+        <div className="grid-2">
+          {isAdminLike && <ClassManageForm />}
+          {isAdminLike && <ClassAssistantAssignForm />}
+          {isAdminLike && <StaffScheduleForm />}
+          {!isAssistant && <AssignClinicTaskForm />}
+        </div>
+      )}
+
+      {activeTab === "records" && (
+        <>
+          {!isAssistant && <ClassRecordForm />}
+          {(isAssistant || isAdminLike) && <AttendanceCheckForm />}
+          {(isAssistant || isAdminLike) && <AssistantClinicForm role={role} />}
+        </>
+      )}
     </div>
   );
 }

@@ -717,6 +717,18 @@ th, td {
   }
 }
 
+.input-tabbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  padding: 4px 0 12px;
+  z-index: 10;
+}
+
 .ticker-bar {
   overflow: hidden;
   white-space: nowrap;
