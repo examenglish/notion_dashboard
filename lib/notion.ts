@@ -2091,6 +2091,55 @@ export async function getClinicCompliance(sinceDays = 14) {
   });
 }
 
+// "누락된 학생관리" 파악용 — 재원생 중 최근 N일간 클리닉 케어(자율 기록
+// DB⑮ 또는 지시받아 완료한 DB⑱ 클리닉)가 전혀 없는 학생을 찾는다. 미이행
+// 지시(getClinicCompliance의 overdue)는 "지시했는데 안 함"이고, 이건 그보다
+// 넓은 "아예 아무도 이 학생을 안 챙겼다"를 잡기 위한 것이라 별도로 둔다.
+// 출결/과제/상담 등 클리닉 이외의 케어는 범위 밖 — 필요하면 추후 확장.
+export async function getClinicCoverageGaps(sinceDays = 14) {
+  const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const [activeStudents, recentRecords, recentTasks, classById] = await Promise.all([
+    queryAllPages({
+      data_source_id: DB.STUDENT,
+      filter: { property: "상태", select: { equals: "재원" } },
+    }),
+    queryAllPages({
+      data_source_id: DB.CLINIC,
+      filter: { property: "날짜", date: { on_or_after: since } },
+    }),
+    queryAllPages({
+      data_source_id: DB.TODO,
+      filter: {
+        and: [
+          { property: "유형", select: { equals: "클리닉" } },
+          { property: "완료여부", checkbox: { equals: true } },
+          { property: "예정일", date: { on_or_after: since } },
+        ],
+      },
+    }),
+    classNameMap(),
+  ]);
+
+  const coveredIds = new Set<string>();
+  for (const p of recentRecords as any[]) {
+    for (const id of getRelationIds(p, "담당학생")) coveredIds.add(id);
+  }
+  for (const p of recentTasks as any[]) {
+    for (const id of getRelationIds(p, "관련학생")) coveredIds.add(id);
+  }
+
+  return activeStudents
+    .map((p: any) => ({
+      id: p.id,
+      name: getTitle(p, "이름"),
+      school: getRichText(p, "학교"),
+      grade: getSelect(p, "학년"),
+      classNames: getRelationIds(p, "소속반").map((id) => classById.get(id) ?? "알수없음"),
+    }))
+    .filter((s) => !coveredIds.has(s.id))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export async function createCounselingEntry(input: {
   studentId: string;
   counselor: string;

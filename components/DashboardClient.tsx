@@ -75,6 +75,14 @@ type ClinicComplianceItem = {
   overdue: boolean;
 };
 
+type ClinicGapItem = {
+  id: string;
+  name: string;
+  school: string;
+  grade: string | null;
+  classNames: string[];
+};
+
 type StudentListItem = StudentRow;
 
 type StudentDetail = {
@@ -105,6 +113,12 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
   const [counseling, setCounseling] = useState<CounselingItem[]>([]);
   const [clinicRecords, setClinicRecords] = useState<ClinicItem[]>([]);
   const [clinicCompliance, setClinicCompliance] = useState<ClinicComplianceItem[]>([]);
+  const [clinicGaps, setClinicGaps] = useState<ClinicGapItem[]>([]);
+  // 강사 본인 로그인이면 기본으로 "나에게 검토 요청된 보고"만 보여준다 —
+  // 지금까지는 대시보드를 보는 모두에게 전체 조교 클리닉 기록이 통째로
+  // 노출돼서 "이 학생 담당 강사에게만 콕 집어 보고"되는 느낌이 없었다.
+  // 원장/행정은 전체 현황 파악이 목적이라 기본을 전체 보기로 둔다.
+  const [clinicMineOnly, setClinicMineOnly] = useState(staffRole === "강사");
   const [editingCounseling, setEditingCounseling] = useState<CounselingItem | null>(null);
   const [viewingAdminInbox, setViewingAdminInbox] = useState<AdminInboxItem | null>(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -157,6 +171,13 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
       .catch(() => setClinicCompliance([]));
   }
 
+  function reloadClinicGaps() {
+    fetch("/api/clinic-coverage-gaps")
+      .then((r) => r.json())
+      .then((data) => setClinicGaps(Array.isArray(data) ? data : []))
+      .catch(() => setClinicGaps([]));
+  }
+
   function reloadMaterialTasks() {
     fetch("/api/material-tasks")
       .then((r) => r.json())
@@ -177,6 +198,7 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
     reloadCounseling();
     reloadClinicRecords();
     reloadClinicCompliance();
+    reloadClinicGaps();
     reloadMaterialTasks();
   }, []);
 
@@ -208,6 +230,11 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
       과제: r.homeworkDone ? 1 : 0,
     }));
   }, [selected]);
+
+  const filteredClinicRecords = useMemo(() => {
+    if (!clinicMineOnly) return clinicRecords;
+    return clinicRecords.filter((i) => i.teacherName === staffName);
+  }, [clinicRecords, clinicMineOnly, staffName]);
 
   // 미이행(기한 지났는데 완료 안 됨)이 가장 먼저 보이도록, 그다음은 최신순.
   const sortedClinicCompliance = useMemo(() => {
@@ -258,7 +285,7 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
   return (
     <div className="page">
       <DateTimeHeader />
-      <TodayScheduleCard staffName={staffName} staffRole={staffRole} refreshSignal={scheduleVersion} onChanged={() => { reloadAdminInbox(); reloadCounseling(); reloadClinicCompliance(); }} />
+      <TodayScheduleCard staffName={staffName} staffRole={staffRole} refreshSignal={scheduleVersion} onChanged={() => { reloadAdminInbox(); reloadCounseling(); reloadClinicCompliance(); reloadClinicGaps(); }} />
 
       <NaturalLanguageInput onSaved={() => { reloadAdminInbox(); reloadCounseling(); }} />
 
@@ -400,9 +427,16 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
 
       <RecentListCard
         title="조교 클리닉 기록"
-        items={clinicRecords}
+        items={filteredClinicRecords}
+        totalCount={clinicRecords.length}
         keyOf={(i) => i.id}
-        emptyText="클리닉 기록이 없습니다."
+        emptyText={clinicMineOnly ? "나에게 검토 요청된 클리닉 기록이 없습니다." : "클리닉 기록이 없습니다."}
+        filters={
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+            <input type="checkbox" checked={clinicMineOnly} onChange={(e) => setClinicMineOnly(e.target.checked)} />
+            내게 검토 요청된 보고만 보기{staffName ? ` (담당강사: ${staffName})` : ""}
+          </label>
+        }
         renderItem={(i) => (
           <>
             <div className="recent-list-meta">
@@ -456,6 +490,22 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
               )
             )}
           </>
+        )}
+      />
+
+      <RecentListCard
+        title="클리닉 케어 공백 (최근 14일)"
+        items={clinicGaps}
+        keyOf={(i) => i.id}
+        emptyText="최근 14일간 클리닉 케어가 없는 재원생이 없습니다."
+        renderItem={(i) => (
+          <div className="compact-line">
+            <strong>{i.name}</strong> <span className="muted">{i.school || "학교미상"} {i.grade ?? ""}</span>
+            {i.classNames.length > 0 && <span className="muted"> · {i.classNames.join(", ")}</span>}
+            <span className="badge" style={{ background: "#fef3c7", color: "#92400e", marginLeft: 6 }}>
+              최근 14일 클리닉 기록 없음
+            </span>
+          </div>
         )}
       />
 
