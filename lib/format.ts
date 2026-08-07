@@ -1,3 +1,39 @@
+// 학년별 기본 Lv — 초1=0.1 ~ 초6=0.6, 중1=1 ~ 중3=3, 고1=4 ~ 고3=6.
+// 학생마스터의 "레벨Lv" 속성이 비어있으면(= 그 학년 평균 수준) 이 표의
+// 값을 그대로 쓰고, 실제 레벨이 학년보다 높거나 낮으면 그 학생만 "레벨Lv"에
+// override 값을 저장해 이 기본값을 벗어난다.
+export const GRADE_DEFAULT_LEVEL: Record<string, number> = {
+  초1: 0.1,
+  초2: 0.2,
+  초3: 0.3,
+  초4: 0.4,
+  초5: 0.5,
+  초6: 0.6,
+  중1: 1,
+  중2: 2,
+  중3: 3,
+  고1: 4,
+  고2: 5,
+  고3: 6,
+};
+
+export function defaultLevelForGrade(grade: string | null): number | null {
+  if (!grade) return null;
+  return GRADE_DEFAULT_LEVEL[grade] ?? null;
+}
+
+// 학생별로 실제 적용되는 Lv — 직접 설정한 override가 있으면 그 값, 없으면
+// 학년 기본값, 학년도 없으면 null(미분류).
+export function effectiveLevel(grade: string | null, levelOverride: number | null): number | null {
+  if (levelOverride !== null && levelOverride !== undefined) return levelOverride;
+  return defaultLevelForGrade(grade);
+}
+
+export function formatLevel(level: number | null): string {
+  if (level === null || level === undefined) return "-";
+  return `Lv${level}`;
+}
+
 // Seed data named classes like "중2 A반 (5)" to keep them unique; the
 // trailing "(n)" is bookkeeping only and shouldn't show up in the UI.
 export function stripClassSuffix(name: string): string {

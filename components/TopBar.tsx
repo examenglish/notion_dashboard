@@ -3,7 +3,11 @@ import Image from "next/image";
 import { getSession } from "@/lib/auth";
 import LogoutButton from "./LogoutButton";
 
-export default async function TopBar({ active }: { active: "dashboard" | "input" | "exam-prep" }) {
+export default async function TopBar({
+  active,
+}: {
+  active: "dashboard" | "input" | "exam-prep" | "student-levels";
+}) {
   const session = await getSession();
   return (
     <div className="topbar">
@@ -21,6 +25,11 @@ export default async function TopBar({ active }: { active: "dashboard" | "input"
         <Link href="/exam-prep" className={`navlink ${active === "exam-prep" ? "active" : ""}`}>
           시험대비
         </Link>
+        {session?.role === "원장" && (
+          <Link href="/student-levels" className={`navlink ${active === "student-levels" ? "active" : ""}`}>
+            학생레벨
+          </Link>
+        )}
         <span className="muted">{session?.name} ({session?.role})</span>
         <LogoutButton />
       </nav>

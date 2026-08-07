@@ -363,6 +363,7 @@ function mapStudentPage(p: any, examMap: Map<string, any>, classNameById: Map<st
     isNew: isWithinDays(enrolledAt, 30),
     tuitionDay: getNumber(p, "회비일"),
     learningLevel: getRichText(p, "학습레벨"),
+    levelOverride: getNumber(p, "레벨Lv"),
     memo: getRichText(p, "메모"),
     action: getRichText(p, "조치"),
     actionOwner: getRichText(p, "조치담당자"),
@@ -1741,6 +1742,9 @@ export async function updateStudentFull(
     enrolledAt?: string;
     tuitionDay?: number;
     learningLevel?: string;
+    // Lv를 학년 기본값에서 벗어나게 직접 지정할 때만 넘긴다. null이면
+    // override를 지워 다시 학년 기본값을 쓰게 한다(effectiveLevel 참고).
+    levelOverride?: number | null;
     classIds?: string[];
     memo?: string;
   }
@@ -1761,6 +1765,9 @@ export async function updateStudentFull(
   if (input.tuitionDay !== undefined) properties["회비일"] = { number: input.tuitionDay };
   if (input.learningLevel !== undefined) {
     properties["학습레벨"] = { rich_text: [{ text: { content: input.learningLevel } }] };
+  }
+  if (input.levelOverride !== undefined) {
+    properties["레벨Lv"] = { number: input.levelOverride };
   }
   if (input.classIds !== undefined) properties["소속반"] = { relation: input.classIds.map((id) => ({ id })) };
   if (input.memo !== undefined) properties["메모"] = { rich_text: [{ text: { content: input.memo } }] };

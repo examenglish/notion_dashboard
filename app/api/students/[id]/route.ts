@@ -17,7 +17,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!body) {
     return NextResponse.json({ error: "invalid body" }, { status: 400 });
   }
-  const { name, school, grade, status, phone, parentPhone, registeredAt, enrolledAt, tuitionDay, learningLevel, classIds, memo } = body;
+  const { name, school, grade, status, phone, parentPhone, registeredAt, enrolledAt, tuitionDay, learningLevel, levelOverride, classIds, memo } = body;
   await updateStudentFull(params.id, {
     name,
     school,
@@ -29,6 +29,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     enrolledAt,
     tuitionDay: tuitionDay === "" || tuitionDay === undefined ? undefined : Number(tuitionDay),
     learningLevel,
+    levelOverride: levelOverride === undefined ? undefined : levelOverride === null ? null : Number(levelOverride),
     classIds,
     memo,
   });
