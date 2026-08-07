@@ -74,10 +74,14 @@ export default function StaffPicker({
   // 늘어나면서 스크롤바가 나타났다 사라지고 본문이 흔들려 항목을 클릭하기
   // 어려웠다. 뷰포트 기준 position:fixed로 띄우면 어느 조상의 스크롤
   // 영역에도 포함되지 않아 이 흔들림이 아예 생기지 않는다. 대신 스크롤이
-  // 시작되면(모달이든 페이지든) 입력창과 어긋나므로 그냥 목록을 닫는다.
+  // 시작되면(모달이든 페이지든) 입력창과 어긋나므로 목록을 닫는다 — 단,
+  // 목록 자체가 길어서 그 안에서 스크롤하는 경우(이름을 찾으려고 목록을
+  // 내리는 것)까지 닫아버리면 원하는 이름을 클릭하기 전에 목록이 사라지므로,
+  // 이 컴포넌트 내부에서 일어난 스크롤은 무시한다.
   useEffect(() => {
     if (!open) return;
-    function close() {
+    function close(e: Event) {
+      if (wrapRef.current && e.target instanceof Node && wrapRef.current.contains(e.target)) return;
       setOpen(false);
     }
     window.addEventListener("scroll", close, true);

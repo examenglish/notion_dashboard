@@ -1032,7 +1032,7 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
             <CounselingForm />
             <AdminInputForm />
           </div>
-          <MakeupStatusCard />
+          <MakeupStatusCard role={role} />
         </>
       )}
 

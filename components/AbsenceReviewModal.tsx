@@ -25,21 +25,32 @@ function schoolGrade(school: string, grade: string | null) {
 function OwnerAssignRow({ item, onAssigned }: { item: AbsenceReviewItem; onAssigned: () => void }) {
   const [owner, setOwner] = useState("");
   const [saving, setSaving] = useState(false);
-  // 클릭한 순간 바로 "클릭했음"이 보이도록, 서버 응답을 기다리지 않고
-  // 먼저 이 폼을 접어 확인 배지로 바꾼다.
   const [clicked, setClicked] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function assign() {
     if (!owner) return;
-    setClicked(true);
+    setError(null);
     setSaving(true);
     try {
-      await fetch(`/api/schedule-entry/${item.makeupRequestId}`, {
+      const res = await fetch(`/api/schedule-entry/${item.makeupRequestId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ownerName: owner }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // 실패했는데도 "처리함"으로 표시해버리면, 팝업을 다시 열었을 때
+        // 여전히 "담당강사 미지정"으로 남아 있어도 사용자는 왜 그런지 알
+        // 방법이 없었다 — 이제 실패는 실패로 보여주고 폼을 그대로 남겨
+        // 다시 시도할 수 있게 한다.
+        setError(data.error ?? "담당자 지정에 실패했습니다.");
+        return;
+      }
+      setClicked(true);
       onAssigned();
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
     } finally {
       setSaving(false);
     }
@@ -48,19 +59,26 @@ function OwnerAssignRow({ item, onAssigned }: { item: AbsenceReviewItem; onAssig
   if (clicked) {
     return (
       <p className="muted" style={{ marginTop: 6, fontSize: 13 }}>
-        ✓ 담당자 지정 처리함{saving ? " (저장 중...)" : ""}
+        ✓ 담당자 지정 처리함
       </p>
     );
   }
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <StaffPicker value={owner} onChange={setOwner} label="" />
+    <div style={{ marginTop: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <StaffPicker value={owner} onChange={setOwner} label="" />
+        </div>
+        <button type="button" className="secondary" disabled={!owner || saving} onClick={assign}>
+          {saving ? "저장 중..." : "담당자 지정"}
+        </button>
       </div>
-      <button type="button" className="secondary" disabled={!owner} onClick={assign}>
-        담당자 지정
-      </button>
+      {error && (
+        <p className="error-text" style={{ marginTop: 4, fontSize: 12 }}>
+          {error}
+        </p>
+      )}
     </div>
   );
 }

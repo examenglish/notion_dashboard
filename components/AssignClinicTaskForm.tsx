@@ -44,10 +44,15 @@ export default function AssignClinicTaskForm() {
     }
     fetch(`/api/students/${id}`)
       .then((r) => r.json())
-      .then((data: { student: { id: string; name: string } }) => {
-        setStudentIds((cur) => [...cur, data.student.id]);
-        setStudentNames((cur) => ({ ...cur, [data.student.id]: data.student.name }));
-      });
+      .then((data: { student?: { id: string; name: string }; error?: string }) => {
+        if (!data.student) {
+          setError(data.error ?? "학생을 불러오지 못했습니다. 다시 시도해주세요.");
+          return;
+        }
+        setStudentIds((cur) => [...cur, data.student!.id]);
+        setStudentNames((cur) => ({ ...cur, [data.student!.id]: data.student!.name }));
+      })
+      .catch(() => setError("네트워크 오류로 학생을 추가하지 못했습니다."));
     setStudentPickerId("");
   }
 

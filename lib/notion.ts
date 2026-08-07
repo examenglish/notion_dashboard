@@ -1860,6 +1860,13 @@ export async function updateScheduleEntry(
   if (input.title !== undefined) properties["제목"] = { title: [{ text: { content: input.title } }] };
   if (input.ownerName !== undefined) {
     const ownerId = input.ownerName ? await findStaffIdByName(input.ownerName) : null;
+    // 이름이 목록과 정확히 일치하지 않으면(오타, 드롭다운을 못 고르고 텍스트만
+    // 남은 경우 등) 조용히 "담당자 없음"으로 저장하지 않고 여기서 걸러
+    // 알려준다 — 예전에는 이 경우 그냥 relation을 비워 저장해, 사용자에게는
+    // "지정했는데 처리 후에도 계속 미지정으로 남는" 원인 모를 실패로 보였다.
+    if (input.ownerName && !ownerId) {
+      throw new Error(`"${input.ownerName}" 이름을 직원 목록에서 찾을 수 없습니다. 검색 결과에서 선택해주세요.`);
+    }
     properties["담당자"] = { relation: ownerId ? [{ id: ownerId }] : [] };
   }
   await notion.pages.update({ page_id: id, properties });

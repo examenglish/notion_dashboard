@@ -639,8 +639,12 @@ export default function TodayScheduleCard({
   const [viewingInquiry, setViewingInquiry] = useState<{ item: InquiryBrief; date: string } | null>(null);
   const [viewingClinicTask, setViewingClinicTask] = useState<TodoItem | null>(null);
 
+  // 서버(app/api/admin-inbox/[id]/route.ts, /api/counseling/[id]/route.ts)는
+  // 입력자 본인 또는 원장이면 수정/삭제를 허용하는데, 여기서 원장 예외를
+  // 빼먹으면 원장이 남이 입력한 항목(미등록 학생 문의 등)을 지우고 싶어도
+  // 삭제 버튼 자체가 안 보이는 불일치가 생긴다.
   function canEdit(enteredBy?: string) {
-    return !enteredBy || enteredBy === staffName;
+    return !enteredBy || enteredBy === staffName || staffRole === "원장";
   }
   const [dates, setDates] = useState<Record<SectionKey, string>>(() => {
     const t = todayKST();

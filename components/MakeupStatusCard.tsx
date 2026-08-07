@@ -22,36 +22,68 @@ export type MakeupScheduleItem = {
 function MakeupRow({
   item,
   showOwner,
+  canDelete,
   onChanged,
 }: {
   item: MakeupScheduleItem;
   showOwner: boolean;
+  canDelete: boolean;
   onChanged: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [date, setDate] = useState(item.date ?? todayKST());
   const [time, setTime] = useState(item.time);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   function startEdit() {
     setDate(item.date ?? todayKST());
     setTime(item.time);
+    setError(null);
     setEditing(true);
   }
 
   async function save() {
     if (!date || !time.trim()) return;
     setSaving(true);
+    setError(null);
     try {
-      await fetch(`/api/schedule-entry/${item.id}`, {
+      const res = await fetch(`/api/schedule-entry/${item.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ date, time }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error ?? "저장에 실패했습니다.");
+        return;
+      }
       setEditing(false);
       onChanged();
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm(`${item.studentName} 학생의 ${item.type} 항목을 삭제하시겠습니까?`)) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/schedule-entry/${item.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error ?? "삭제에 실패했습니다.");
+        return;
+      }
+      onChanged();
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -85,11 +117,23 @@ function MakeupRow({
         ) : (
           <span className="badge badge-urgent">미확정{item.date ? ` (임시 ${item.date})` : ""}</span>
         )}
+        {error && (
+          <p className="error-text" style={{ marginTop: 4, fontSize: 12 }}>
+            {error}
+          </p>
+        )}
       </div>
       {!editing && (
-        <button type="button" className="secondary" onClick={startEdit}>
-          {item.confirmed ? "수정" : "지금 확정"}
-        </button>
+        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+          <button type="button" className="secondary" onClick={startEdit}>
+            {item.confirmed ? "수정" : "지금 확정"}
+          </button>
+          {canDelete && (
+            <button type="button" className="secondary" disabled={deleting} onClick={remove}>
+              {deleting ? "삭제 중..." : "삭제"}
+            </button>
+          )}
+        </div>
       )}
     </li>
   );
@@ -100,7 +144,16 @@ function MakeupRow({
 // 그대로 쓰므로 두 화면이 항상 동기화된다. 행정/원장에게는 전체 현황
 // (scope="all")을, 강사·조교에게는 본인 담당 건만(scope="mine") 보여주는데,
 // 이 구분도 서버가 역할에 따라 이미 걸러서 내려준 결과를 그대로 반영한 것.
-export default function MakeupStatusCard({ onChanged }: { onChanged?: () => void } = {}) {
+export default function MakeupStatusCard({
+  role,
+  onChanged,
+}: {
+  role?: string | null;
+  onChanged?: () => void;
+} = {}) {
+  // 삭제는 서버(app/api/schedule-entry/[id]/route.ts DELETE)도 원장·행정만
+  // 허용한다 — 여기서도 같은 기준으로 버튼을 보여준다.
+  const canDelete = role === "원장" || role === "행정";
   const [scope, setScope] = useState<"all" | "mine">("mine");
   const [items, setItems] = useState<MakeupScheduleItem[]>([]);
   const [confirmModalItems, setConfirmModalItems] = useState<MakeupScheduleItem[] | null>(null);
@@ -142,7 +195,7 @@ export default function MakeupStatusCard({ onChanged }: { onChanged?: () => void
       )}
       <ul className="schedule-list" style={{ marginTop: 12 }}>
         {sorted.map((item) => (
-          <MakeupRow key={item.id} item={item} showOwner={scope === "all"} onChanged={handleChanged} />
+          <MakeupRow key={item.id} item={item} showOwner={scope === "all"} canDelete={canDelete} onChanged={handleChanged} />
         ))}
       </ul>
 

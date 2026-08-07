@@ -6,15 +6,21 @@ export const dynamic = "force-dynamic";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const body = await req.json().catch(() => null);
-  if (
-    body &&
-    (body.date || body.time !== undefined || body.ownerName !== undefined || body.note !== undefined || body.title !== undefined)
-  ) {
-    await updateScheduleEntry(params.id, body);
+  try {
+    if (
+      body &&
+      (body.date || body.time !== undefined || body.ownerName !== undefined || body.note !== undefined || body.title !== undefined)
+    ) {
+      await updateScheduleEntry(params.id, body);
+      return NextResponse.json({ ok: true });
+    }
+    await completeScheduleEntry(params.id);
     return NextResponse.json({ ok: true });
+  } catch (err) {
+    console.error("updateScheduleEntry/completeScheduleEntry failed", params.id, body, err);
+    const message = err instanceof Error ? err.message : "저장에 실패했습니다.";
+    return NextResponse.json({ error: message }, { status: 400 });
   }
-  await completeScheduleEntry(params.id);
-  return NextResponse.json({ ok: true });
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
