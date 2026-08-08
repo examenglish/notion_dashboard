@@ -2651,6 +2651,30 @@ async function getAbsentDailyRecords(date: string) {
     .filter((r): r is { dailyRecordId: string; studentId: string; classId: string | undefined } => !!r.studentId);
 }
 
+// 결석 학생의 보강요청에 "그날 수업한 내용"을 함께 담아 보강 담당자가
+// 무엇을 가르쳐야 하는지 바로 알 수 있게 한다. 담당교사가 이미 그날 진도
+// (DB③)를 저장해뒀으면 수업과목/진도/과제/다음시간테스트까지 모두 가져오고,
+// 아직 저장 전(조교가 결석 체크인만 해둔 상태)이면 일일기록(DB④) 자체에
+// 남아있는 진도내용만이라도 쓴다.
+async function getDailyRecordLessonContent(dailyRecordId: string): Promise<string> {
+  const daily: any = await notion.pages.retrieve({ page_id: dailyRecordId });
+  const progressId = getRelationIds(daily, "반별진도원본")[0];
+  if (progressId) {
+    const progress: any = await notion.pages.retrieve({ page_id: progressId });
+    const parts: string[] = [];
+    const subjects = getMultiSelect(progress, "수업과목");
+    if (subjects.length > 0) parts.push(`[수업과목] ${subjects.join(", ")}`);
+    const progressText = getRichText(progress, "진도내용");
+    if (progressText) parts.push(`[진도] ${progressText}`);
+    const homework = getRichText(progress, "과제내용");
+    if (homework) parts.push(`[과제] ${homework}`);
+    const nextAssignment = getRichText(progress, "다음시간테스트");
+    if (nextAssignment) parts.push(`[다음시간 테스트] ${nextAssignment}`);
+    if (parts.length > 0) return parts.join("\n");
+  }
+  return getRichText(daily, "진도내용");
+}
+
 // 이미 그 학생의 그 결석일자 보강요청이 있으면 손대지 않고, 없으면 반의
 // 담당교사를 담당자로 지정해 새로 만든다 — 담당교사 이름이 직원 명단과
 // 정확히 일치하지 않으면(오타 등) 담당자 없이 생성된다(다른 자동생성
@@ -2662,6 +2686,7 @@ async function ensureMakeupRequestForAbsence(input: {
   className: string;
   teacherName: string;
   absenceDate: string;
+  lessonContent?: string;
 }) {
   const existing = await findMakeupRequestForAbsence(input.studentId, input.absenceDate);
   if (existing) {
@@ -2670,6 +2695,15 @@ async function ensureMakeupRequestForAbsence(input: {
     // 뜻하고, 시간이 채워져 있으면 이미 확정된 것이다 — 둘 다 더는 결석
     // 검토 팝업에 다시 이름이 뜨거나 재생성될 필요가 없는 "해결됨" 상태.
     const resolved = getCheckbox(existing, "완료여부") || getRichText(existing, "시간").trim() !== "";
+    // 이미 만들어진 요청에 수업내용이 아직 비어있으면(이 기능이 생기기
+    // 전에 만들어졌거나, 그때는 교사가 진도를 아직 저장하기 전이었던
+    // 경우) 지금 값이 있으면 채워 넣는다 — 다른 필드는 건드리지 않는다.
+    if (input.lessonContent && !getRichText(existing, "결석수업내용").trim()) {
+      await notion.pages.update({
+        page_id: existing.id,
+        properties: { 결석수업내용: { rich_text: [{ text: { content: input.lessonContent } }] } } as any,
+      });
+    }
     return { id: existing.id as string, created: false, ownerAssigned: !!ownerId, resolved };
   }
   const ownerId = input.teacherName ? await findStaffIdByName(input.teacherName) : null;
@@ -2692,6 +2726,7 @@ async function ensureMakeupRequestForAbsence(input: {
           },
         ],
       },
+      ...(input.lessonContent ? { 결석수업내용: { rich_text: [{ text: { content: input.lessonContent } }] } } : {}),
       완료여부: { checkbox: false },
       우선순위: { select: { name: "보통" } },
     } as any,
@@ -2739,6 +2774,7 @@ export async function getAbsenceReviewData(date: string): Promise<AbsenceReviewI
     const cls = a.classId ? classMap.get(a.classId) : undefined;
     const studentName = student?.name ?? "-";
     const className = cls ? stripClassSuffix(cls.name) : "-";
+    const lessonContent = await getDailyRecordLessonContent(a.dailyRecordId);
     const result = await ensureMakeupRequestForAbsence({
       studentId: a.studentId,
       studentName,
@@ -2746,6 +2782,7 @@ export async function getAbsenceReviewData(date: string): Promise<AbsenceReviewI
       className,
       teacherName: cls?.teacher ?? "",
       absenceDate: date,
+      lessonContent,
     });
     if (result.resolved) continue;
     items.push({
@@ -2792,6 +2829,9 @@ export type MakeupScheduleItem = {
   date: string | null;
   time: string;
   memo: string;
+  // 결석 당시 그 반에서 수업한 내용(수업과목/진도/과제/다음시간테스트) —
+  // "보강" 유형에서만 채워지고, 없으면 빈 문자열.
+  lessonContent: string;
   confirmed: boolean;
 };
 
@@ -2832,6 +2872,7 @@ export async function getMakeupScheduleStatus(opts: { staffId?: string } = {}): 
       date: getDate(r, "예정일"),
       time,
       memo: getRichText(r, "메모"),
+      lessonContent: getRichText(r, "결석수업내용"),
       confirmed: time.trim() !== "",
     };
   });

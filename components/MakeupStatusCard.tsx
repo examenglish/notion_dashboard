@@ -13,6 +13,7 @@ export type MakeupScheduleItem = {
   date: string | null;
   time: string;
   memo: string;
+  lessonContent: string;
   confirmed: boolean;
 };
 
@@ -36,6 +37,7 @@ function MakeupRow({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showLesson, setShowLesson] = useState(false);
 
   function startEdit() {
     setDate(item.date ?? todayKST());
@@ -116,6 +118,27 @@ function MakeupRow({
           <span className="badge badge-success">확정 · {item.date} {item.time}</span>
         ) : (
           <span className="badge badge-urgent">미확정{item.date ? ` (임시 ${item.date})` : ""}</span>
+        )}
+        {item.lessonContent && (
+          <>
+            {" "}
+            <button
+              type="button"
+              className="secondary"
+              style={{ fontSize: 12, padding: "2px 8px" }}
+              onClick={() => setShowLesson((v) => !v)}
+            >
+              {showLesson ? "결석 당일 수업내용 접기" : "결석 당일 수업내용 보기"}
+            </button>
+            {showLesson && (
+              <p
+                className="muted"
+                style={{ marginTop: 6, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 13 }}
+              >
+                {item.lessonContent}
+              </p>
+            )}
+          </>
         )}
         {error && (
           <p className="error-text" style={{ marginTop: 4, fontSize: 12 }}>

@@ -11,6 +11,7 @@ export type UnconfirmedScheduleItem = {
   date: string | null;
   time: string;
   memo: string;
+  lessonContent?: string;
 };
 
 function ConfirmRow({ item, onConfirmed }: { item: UnconfirmedScheduleItem; onConfirmed: () => void }) {
@@ -62,6 +63,42 @@ function ConfirmRow({ item, onConfirmed }: { item: UnconfirmedScheduleItem; onCo
   );
 }
 
+function ConfirmListItem({ item, onConfirmed }: { item: UnconfirmedScheduleItem; onConfirmed: () => void }) {
+  const [showLesson, setShowLesson] = useState(false);
+  return (
+    <li className="modal-briefing-item">
+      <strong>{item.studentName}</strong> <span className="muted">{item.className}</span>
+      {" · "}
+      <span className="badge">{item.type}</span>
+      {item.memo && (
+        <>
+          <br />
+          <span className="muted">{item.memo}</span>
+        </>
+      )}
+      {item.lessonContent && (
+        <>
+          {" "}
+          <button
+            type="button"
+            className="secondary"
+            style={{ fontSize: 12, padding: "2px 8px" }}
+            onClick={() => setShowLesson((v) => !v)}
+          >
+            {showLesson ? "결석 당일 수업내용 접기" : "결석 당일 수업내용 보기"}
+          </button>
+          {showLesson && (
+            <p className="muted" style={{ marginTop: 6, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 13 }}>
+              {item.lessonContent}
+            </p>
+          )}
+        </>
+      )}
+      <ConfirmRow item={item} onConfirmed={onConfirmed} />
+    </li>
+  );
+}
+
 // 담당 강사·조교(또는 배정된 원장/행정)에게 배정된, 아직 학생/학부모와
 // 실제 시간을 확정하지 못한 보강·재시 항목을 보여주는 팝업. 여기서 날짜·
 // 시간을 입력해 저장하면 그 즉시 확정 처리되어(예정일·시간 갱신) 그 날의
@@ -92,18 +129,7 @@ export default function ScheduleConfirmModal({
         ) : (
           <ul className="schedule-list" style={{ marginTop: 12 }}>
             {items.map((item) => (
-              <li key={item.id} className="modal-briefing-item">
-                <strong>{item.studentName}</strong> <span className="muted">{item.className}</span>
-                {" · "}
-                <span className="badge">{item.type}</span>
-                {item.memo && (
-                  <>
-                    <br />
-                    <span className="muted">{item.memo}</span>
-                  </>
-                )}
-                <ConfirmRow item={item} onConfirmed={onChanged} />
-              </li>
+              <ConfirmListItem key={item.id} item={item} onConfirmed={onChanged} />
             ))}
           </ul>
         )}
