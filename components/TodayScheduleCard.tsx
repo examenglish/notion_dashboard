@@ -16,7 +16,6 @@ type FirstDayItem = {
   studentName: string;
   school: string;
   gradeNum: string;
-  classDays: string[];
   classTime: string;
   status: string | null;
 };
@@ -809,9 +808,7 @@ export default function TodayScheduleCard({
               {" · "}
               <span className={f.status === "대기생" ? "badge" : "badge badge-success"}>{f.status ?? "-"}</span>
               {", "}
-              <span className="muted">
-                {f.classDays.length > 0 ? f.classDays.join("·") : "요일 미정"} {f.classTime || ""}
-              </span>
+              <span className="muted">{f.classTime || "요일/시간 미정"}</span>
             </div>
             {editBtn(f)}
           </div>

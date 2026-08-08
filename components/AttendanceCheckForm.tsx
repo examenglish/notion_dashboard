@@ -22,6 +22,7 @@ export default function AttendanceCheckForm() {
   const [classes, setClasses] = useState<ClassOption[]>([]);
   const [classId, setClassId] = useState("");
   const [date, setDate] = useState(todayStr());
+  const [period, setPeriod] = useState("");
   const [roster, setRoster] = useState<RosterStudent[]>([]);
   const [loadingRoster, setLoadingRoster] = useState(false);
   const [perStudent, setPerStudent] = useState<Record<string, Flags>>({});
@@ -43,9 +44,10 @@ export default function AttendanceCheckForm() {
     let cancelled = false;
     setLoadingRoster(true);
     setDone(false);
+    const periodQuery = period ? `&period=${encodeURIComponent(period)}` : "";
     Promise.all([
       fetch(`/api/students?classId=${classId}`).then((r) => r.json()),
-      fetch(`/api/class-record?classId=${classId}&date=${date}`).then((r) => r.json()),
+      fetch(`/api/class-record?classId=${classId}&date=${date}${periodQuery}`).then((r) => r.json()),
     ])
       .then(([list, data]: [RosterStudent[], { existing: any; plannedAbsentIds: string[] }]) => {
         if (cancelled) return;
@@ -71,7 +73,7 @@ export default function AttendanceCheckForm() {
     return () => {
       cancelled = true;
     };
-  }, [classId, date]);
+  }, [classId, date, period]);
 
   function toggleFlag(studentId: string, key: "vocabFail" | "absent") {
     setPerStudent((cur) => ({ ...cur, [studentId]: { ...cur[studentId], [key]: !cur[studentId]?.[key] } }));
@@ -86,7 +88,7 @@ export default function AttendanceCheckForm() {
       const res = await fetch("/api/attendance-check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ classId, date, perStudent }),
+        body: JSON.stringify({ classId, date, period: period || undefined, perStudent }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -121,6 +123,15 @@ export default function AttendanceCheckForm() {
             {classes.map((c) => (
               <option key={c.id} value={c.id}>{stripClassSuffix(c.name)}</option>
             ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="acPeriod">교시 (교시로 나뉜 반만)</label>
+          <select id="acPeriod" value={period} onChange={(e) => setPeriod(e.target.value)}>
+            <option value="">교시 구분 없음</option>
+            <option value="1교시">1교시</option>
+            <option value="2교시">2교시</option>
+            <option value="3교시">3교시</option>
           </select>
         </div>
       </div>

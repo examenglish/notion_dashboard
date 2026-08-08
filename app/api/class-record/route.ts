@@ -12,9 +12,10 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const classId = req.nextUrl.searchParams.get("classId");
   const date = req.nextUrl.searchParams.get("date");
+  const period = req.nextUrl.searchParams.get("period") || undefined;
   if (!classId || !date) return NextResponse.json({ existing: null, plannedAbsentIds: [] });
   const [existing, plannedAbsentIds] = await Promise.all([
-    getClassProgressForEdit(classId, date),
+    getClassProgressForEdit(classId, date, period),
     getPlannedAbsentStudentIds(date),
   ]);
   return NextResponse.json({ existing, plannedAbsentIds });
@@ -73,6 +74,7 @@ export async function POST(req: NextRequest) {
     briefingTexts,
     extraStudentIds,
     reviewDays,
+    period,
   } = body ?? {};
 
   if ((!classId && !manualClassName) || !date || !progress) {
@@ -93,6 +95,7 @@ export async function POST(req: NextRequest) {
     briefingTexts: briefingTexts ?? undefined,
     extraStudentIds: Array.isArray(extraStudentIds) ? extraStudentIds : [],
     reviewDays: reviewDays ? Number(reviewDays) : undefined,
+    period: period || undefined,
   });
 
   return NextResponse.json({ ok: true, ...result });

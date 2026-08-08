@@ -2,7 +2,7 @@ import { Client } from "@notionhq/client";
 import { unstable_cache, revalidateTag } from "next/cache";
 import { todayKST } from "./date";
 import { formatBriefingText } from "./briefingFormat";
-import { stripClassSuffix, parseWorkHours, serializeWorkHours, type WorkHours } from "./format";
+import { stripClassSuffix, parseWorkHours, serializeWorkHours, formatClassSchedule, type WorkHours } from "./format";
 import {
   type ExamPrepData,
   type ExamPrepSheet,
@@ -881,8 +881,7 @@ export async function getTodaySchedule(today: string, viewerStaffId?: string) {
       studentName: getTitle(p, "이름"),
       school: getRichText(p, "학교"),
       gradeNum: gradeDigits(getSelect(p, "학년")),
-      classDays: cls?.days ?? [],
-      classTime: cls?.time ?? "",
+      classTime: cls ? formatClassSchedule(cls.days, cls.time) : "",
       status: getSelect(p, "상태"),
     };
   });
@@ -1039,6 +1038,10 @@ export async function createClassProgress(input: {
   // 학생 복습 자동화: 0/undefined면 생성하지 않고, N이면 오늘 배운 내용을
   // N일 뒤 "복습" 할일로 자동 예약해 "오늘의 일정"에 뜨게 한다.
   reviewDays?: number;
+  // 같은 반을 같은 날 여러 선생님이 교시를 나눠 들어갈 때, 각 교시의 진도
+  // 기록이 서로 덮어쓰지 않도록 구분하는 값("1교시"/"2교시" 등). 대부분의
+  // 반(교시를 나누지 않는)은 비워두면 기존과 동일하게 동작한다.
+  period?: string;
 }) {
   const classPage: any = await notion.pages.retrieve({ page_id: input.classId });
   const className = getTitle(classPage, "반이름");
@@ -1048,7 +1051,7 @@ export async function createClassProgress(input: {
   const progressPage = await notion.pages.create({
     parent: { data_source_id: DB.CLASS_PROGRESS } as any,
     properties: {
-      제목: { title: [{ text: { content: `${input.date} ${className} 진도` } }] },
+      제목: { title: [{ text: { content: `${input.date} ${className}${input.period ? ` ${input.period}` : ""} 진도` } }] },
       반: { relation: [{ id: input.classId }] },
       날짜: { date: { start: input.date } },
       수업과목: { multi_select: input.subjects.map((name) => ({ name })) },
@@ -1056,6 +1059,7 @@ export async function createClassProgress(input: {
       과제내용: { rich_text: [{ text: { content: input.homework } }] },
       다음시간테스트: { rich_text: [{ text: { content: input.nextAssignment } }] },
       전달사항: { rich_text: [{ text: { content: input.notice } }] },
+      ...(input.period ? { 교시: { select: { name: input.period } } } : {}),
     } as any,
   });
 
@@ -1142,13 +1146,17 @@ export async function createClassProgress(input: {
 // Looks up an already-saved 오늘 수업 기록 for a class+date so the input
 // form can load it back in for editing instead of only ever creating new
 // (and duplicate) records for a class that's already been logged that day.
-export async function getClassProgressForEdit(classId: string, date: string) {
+// period가 있으면 그 교시 기록만, 없으면(교시를 나누지 않는 반) 교시가
+// 비어있는 기록만 찾는다 — 그래야 1교시/2교시로 나뉜 반의 기록이 서로
+// 섞이지 않는다.
+export async function getClassProgressForEdit(classId: string, date: string, period?: string) {
   const res = await notion.dataSources.query({
     data_source_id: DB.CLASS_PROGRESS,
     filter: {
       and: [
         { property: "반", relation: { contains: classId } },
         { property: "날짜", date: { equals: date } },
+        period ? { property: "교시", select: { equals: period } } : { property: "교시", select: { is_empty: true } },
       ],
     },
     page_size: 1,
@@ -1177,6 +1185,7 @@ export async function getClassProgressForEdit(classId: string, date: string) {
 
   return {
     progressId: page.id,
+    period: getSelect(page, "교시"),
     subjects: getMultiSelect(page, "수업과목"),
     progress: getRichText(page, "진도내용"),
     homework: getRichText(page, "과제내용"),
@@ -1324,8 +1333,10 @@ export async function checkInAttendance(input: {
   date: string;
   perStudent: Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean; late?: boolean }>;
   extraStudentIds?: string[];
+  // createClassProgress 참고 — 같은 반이 교시로 나뉜 경우에만 지정.
+  period?: string;
 }): Promise<{ progressId: string; created: boolean }> {
-  const existing = await getClassProgressForEdit(input.classId, input.date);
+  const existing = await getClassProgressForEdit(input.classId, input.date, input.period);
   if (existing) {
     await updateClassProgress({
       progressId: existing.progressId,
@@ -1345,9 +1356,10 @@ export async function checkInAttendance(input: {
   const progressPage = await notion.pages.create({
     parent: { data_source_id: DB.CLASS_PROGRESS } as any,
     properties: {
-      제목: { title: [{ text: { content: `${input.date} ${className} 진도` } }] },
+      제목: { title: [{ text: { content: `${input.date} ${className}${input.period ? ` ${input.period}` : ""} 진도` } }] },
       반: { relation: [{ id: input.classId }] },
       날짜: { date: { start: input.date } },
+      ...(input.period ? { 교시: { select: { name: input.period } } } : {}),
     } as any,
   });
 

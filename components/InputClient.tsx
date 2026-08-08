@@ -31,6 +31,7 @@ function ClassRecordForm() {
   const [classId, setClassId] = useState("");
   const [manualClassName, setManualClassName] = useState("");
   const [date, setDate] = useState(todayStr());
+  const [period, setPeriod] = useState("");
   const [subjects, setSubjects] = useState<string[]>([]);
   const [progress, setProgress] = useState("");
   const [homework, setHomework] = useState("");
@@ -85,8 +86,9 @@ function ClassRecordForm() {
       return;
     }
     let cancelled = false;
+    const periodQuery = period ? `&period=${encodeURIComponent(period)}` : "";
     Promise.all([
-      fetch(`/api/class-record?classId=${classId}&date=${date}`).then((r) => r.json()),
+      fetch(`/api/class-record?classId=${classId}&date=${date}${periodQuery}`).then((r) => r.json()),
       fetch(`/api/students?classId=${classId}`).then((r) => r.json()),
     ]).then(([data, rosterList]: [{ existing: any; plannedAbsentIds: string[] }, RosterStudent[]]) => {
       if (cancelled) return;
@@ -138,7 +140,7 @@ function ClassRecordForm() {
     return () => {
       cancelled = true;
     };
-  }, [classId, date]);
+  }, [classId, date, period]);
 
   const fullRoster = [...roster, ...extraStudents];
 
@@ -198,6 +200,7 @@ function ClassRecordForm() {
           classId: classId || undefined,
           manualClassName: classId ? undefined : manualClassName.trim() || undefined,
           date,
+          period: period || undefined,
           subjects,
           progress,
           homework,
@@ -285,6 +288,14 @@ function ClassRecordForm() {
               }}
               placeholder="예: 고3 E반"
             />
+
+            <label htmlFor="period">교시 (같은 반을 같은 날 여러 선생님이 교시로 나눠 들어갈 때만 선택)</label>
+            <select id="period" value={period} onChange={(e) => setPeriod(e.target.value)}>
+              <option value="">교시 구분 없음</option>
+              <option value="1교시">1교시</option>
+              <option value="2교시">2교시</option>
+              <option value="3교시">3교시</option>
+            </select>
 
             <label>수업과목</label>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 4 }}>

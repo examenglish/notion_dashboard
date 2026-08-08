@@ -87,6 +87,23 @@ export function serializeWorkHours(hours: WorkHours): string {
     .join(";");
 }
 
+export const WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"];
+
+// 반도 조교 근무시간과 같은 이유로 요일별 시간이 다를 수 있어(월 16~18시,
+// 수 18~20시 등) "시간" 필드를 WorkHours 포맷으로 저장한다. 아직 이 포맷으로
+// 저장되지 않은(=모든 요일에 공통 시간 하나였던 옛) 반은 parseWorkHours가
+// 빈 맵을 돌려주므로, 그 경우엔 기존처럼 "요일 시간" 한 줄로 보여준다.
+export function formatClassSchedule(days: string[], rawTime: string): string {
+  const hours = parseWorkHours(rawTime);
+  const structuredDays = WEEKDAYS.filter((d) => hours[d]);
+  if (structuredDays.length > 0) {
+    return structuredDays.map((d) => `${d} ${hours[d].start}-${hours[d].end}`).join(" · ");
+  }
+  if (days.length > 0 && rawTime) return `${days.join("·")} ${rawTime}`;
+  if (days.length > 0) return days.join("·");
+  return rawTime;
+}
+
 // Muted, toned-down chart palette (slate blue / sage green / warm gray
 // family) shared by the dashboard's donut charts and the per-class summary
 // card, kept separate from classColor()'s saturated badge palette above.

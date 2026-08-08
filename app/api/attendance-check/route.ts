@@ -18,6 +18,7 @@ export async function POST(req: NextRequest) {
     date,
     perStudent: body?.perStudent ?? {},
     extraStudentIds: Array.isArray(body?.extraStudentIds) ? body.extraStudentIds : [],
+    period: typeof body?.period === "string" && body.period ? body.period : undefined,
   });
   return NextResponse.json({ ok: true, ...result });
 }

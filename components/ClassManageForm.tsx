@@ -1,15 +1,34 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { stripClassSuffix } from "@/lib/format";
+import { stripClassSuffix, parseWorkHours, WEEKDAYS, type WorkHours } from "@/lib/format";
 
 type ClassFull = { id: string; name: string; teacher: string; days: string[]; time: string; level: string | null };
 
-const DAY_OPTIONS = ["월", "화", "수", "목", "금", "토", "일"];
 const LEVEL_OPTIONS = ["초등", "중등", "고등"];
 
 function confirmSave() {
   return window.confirm("저장하시겠습니까?");
+}
+
+// "17:00-19:00" 같은 옛 방식(요일 전체 공통 시간) 문자열을 시작/종료로 쪼갠다.
+function splitFlatTime(raw: string): { start: string; end: string } {
+  const dash = raw.indexOf("-");
+  if (dash < 0) return { start: raw.trim(), end: "" };
+  return { start: raw.slice(0, dash).trim(), end: raw.slice(dash + 1).trim() };
+}
+
+// 반의 "시간"을 요일별 WorkHours로 풀어준다. 이미 요일별 포맷("월=17:00-19:00;...")
+// 이면 그대로 파싱하고, 아직 옛 방식(요일 전체 공통 시간 하나)이면 등록된
+// 요일마다 같은 시간을 채워 넣어 편집 화면에서 이어서 요일별로 나눠 쓸 수 있게 한다.
+function dayHoursFromClass(cls: ClassFull): WorkHours {
+  const structured = parseWorkHours(cls.time);
+  if (Object.keys(structured).length > 0) return structured;
+  if (!cls.time) return {};
+  const flat = splitFlatTime(cls.time);
+  const seeded: WorkHours = {};
+  for (const d of cls.days) seeded[d] = { ...flat };
+  return seeded;
 }
 
 // 반 신설과 반명 변경(및 담당교사/요일/시간/레벨 수정)을 한 화면에서 처리.
@@ -21,8 +40,7 @@ export default function ClassManageForm() {
   const [selectedId, setSelectedId] = useState("");
   const [name, setName] = useState("");
   const [teacher, setTeacher] = useState("");
-  const [days, setDays] = useState<string[]>([]);
-  const [time, setTime] = useState("");
+  const [dayHours, setDayHours] = useState<WorkHours>({});
   const [level, setLevel] = useState("");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
@@ -42,8 +60,7 @@ export default function ClassManageForm() {
     if (!selectedId) {
       setName("");
       setTeacher("");
-      setDays([]);
-      setTime("");
+      setDayHours({});
       setLevel("");
       setDone(false);
       return;
@@ -52,8 +69,7 @@ export default function ClassManageForm() {
     if (cls) {
       setName(stripClassSuffix(cls.name));
       setTeacher(cls.teacher);
-      setDays(cls.days);
-      setTime(cls.time);
+      setDayHours(dayHoursFromClass(cls));
       setLevel(cls.level ?? "");
     }
     setDone(false);
@@ -61,7 +77,18 @@ export default function ClassManageForm() {
   }, [selectedId]);
 
   function toggleDay(d: string) {
-    setDays((cur) => (cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d]));
+    setDayHours((cur) => {
+      if (cur[d]) {
+        const next = { ...cur };
+        delete next[d];
+        return next;
+      }
+      return { ...cur, [d]: { start: "", end: "" } };
+    });
+  }
+
+  function setDayField(d: string, field: "start" | "end", value: string) {
+    setDayHours((cur) => ({ ...cur, [d]: { ...cur[d], [field]: value } }));
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -75,7 +102,7 @@ export default function ClassManageForm() {
       const res = await fetch(isEdit ? `/api/classes/${selectedId}` : "/api/classes", {
         method: isEdit ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, teacher, days, time, level }),
+        body: JSON.stringify({ name, teacher, dayHours, level }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -128,24 +155,42 @@ export default function ClassManageForm() {
         </div>
       </div>
 
-      <label>요일</label>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 4 }}>
-        {DAY_OPTIONS.map((d) => (
-          <label key={d} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, margin: 0 }}>
-            <input type="checkbox" checked={days.includes(d)} onChange={() => toggleDay(d)} />
-            {d}
-          </label>
-        ))}
+      <label>요일별 시간</label>
+      <p className="muted" style={{ marginTop: 2 }}>
+        같은 반이라도 요일마다 시간이 다르면(예: 월 16~18시, 수 18~20시) 요일별로 따로 입력하세요.
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+        {WEEKDAYS.map((d) => {
+          const enabled = !!dayHours[d];
+          return (
+            <div key={d} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, margin: 0, width: 48 }}>
+                <input type="checkbox" checked={enabled} onChange={() => toggleDay(d)} />
+                {d}
+              </label>
+              {enabled && (
+                <>
+                  <input
+                    type="text"
+                    value={dayHours[d]?.start ?? ""}
+                    onChange={(e) => setDayField(d, "start", e.target.value)}
+                    placeholder="시작 예: 17:00"
+                    style={{ maxWidth: 120 }}
+                  />
+                  <span className="muted">~</span>
+                  <input
+                    type="text"
+                    value={dayHours[d]?.end ?? ""}
+                    onChange={(e) => setDayField(d, "end", e.target.value)}
+                    placeholder="종료 예: 19:00"
+                    style={{ maxWidth: 120 }}
+                  />
+                </>
+              )}
+            </div>
+          );
+        })}
       </div>
-
-      <label htmlFor="classTime">시간</label>
-      <input
-        id="classTime"
-        type="text"
-        value={time}
-        onChange={(e) => setTime(e.target.value)}
-        placeholder="예: 17:00-19:00"
-      />
 
       {error && <p className="error-text">{error}</p>}
       {done && <p className="success-box" style={{ marginTop: 12 }}>저장됐습니다.</p>}
