@@ -83,18 +83,18 @@ function OwnerAssignRow({ item, onAssigned }: { item: AbsenceReviewItem; onAssig
   );
 }
 
-// 대시보드 진입 시(행정/원장) 뜨는 "어제 결석자 검토" 팝업. 조회 시점에 이미
-// 서버가 보강요청을 자동 생성해둔 상태로 items가 내려오므로, 여기서는
-// (1) 사실 결석이 아니라 지각이었던 경우 정정, (2) 잘못/불필요하게 자동
-// 생성된 보강요청 취소, (3) 담당교사가 자동 매칭되지 않은 건에 담당자를
-// 직접 지정하는 세 가지만 다룬다.
+// 결석 체크 직후(당일 포함) 또는 대시보드 진입 시(행정/원장) 뜨는 "결석자
+// 검토" 팝업. 조회 시점에 이미 서버가 보강요청을 자동 생성해둔 상태로 items가
+// 내려오고, 담당교사가 이미 지정된 건은 서버에서 걸러져 내려오지 않으므로,
+// 여기서는 (1) 사실 결석이 아니라 지각이었던 경우 정정, (2) 잘못/불필요하게
+// 자동 생성된 보강요청 취소, (3) 담당교사가 자동 매칭되지 않은 건에 담당자를
+// 직접 지정하는 세 가지만 다룬다. items는 날짜가 섞여 있을 수 있어(오늘+어제,
+// 또는 결석 체크 직후엔 그 날짜 하나) 항목별로 날짜를 표시한다.
 export default function AbsenceReviewModal({
-  date,
   items,
   onClose,
   onChanged,
 }: {
-  date: string;
   items: AbsenceReviewItem[];
   onClose: () => void;
   onChanged: () => void;
@@ -150,7 +150,7 @@ export default function AbsenceReviewModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>어제({formatDateLabel(date)}) 결석자 검토 <span className="muted">({items.length})</span></h2>
+          <h2>결석자 검토 <span className="muted">({items.length})</span></h2>
           <button type="button" className="secondary" onClick={onClose}>닫기</button>
         </div>
         <p className="muted">
@@ -159,7 +159,7 @@ export default function AbsenceReviewModal({
         </p>
 
         {items.length === 0 ? (
-          <p className="muted">어제 결석자가 없습니다.</p>
+          <p className="muted">결석자가 없습니다.</p>
         ) : (
           <ul className="schedule-list" style={{ marginTop: 12 }}>
             {items.map((item) => {
@@ -171,6 +171,8 @@ export default function AbsenceReviewModal({
                       <strong>{item.studentName}</strong> <span className="muted">{schoolGrade(item.school, item.grade)}</span>
                       {" · "}
                       <span className="muted">{item.className}</span>
+                      {" · "}
+                      <span className="muted">{formatDateLabel(item.date)}</span>
                       <br />
                       <span className="badge badge-success">보강요청 등록됨</span>
                       {!item.ownerAssigned && (

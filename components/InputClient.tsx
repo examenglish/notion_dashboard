@@ -12,6 +12,7 @@ import ClassManageForm from "./ClassManageForm";
 import AssignClinicTaskForm from "./AssignClinicTaskForm";
 import QuickScheduleForm from "./QuickScheduleForm";
 import MakeupStatusCard from "./MakeupStatusCard";
+import AbsenceReviewModal, { AbsenceReviewItem } from "./AbsenceReviewModal";
 import { todayKST as todayStr } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
 
@@ -50,6 +51,21 @@ function ClassRecordForm() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [existingProgressId, setExistingProgressId] = useState<string | null>(null);
+  const [reviewItems, setReviewItems] = useState<AbsenceReviewItem[] | null>(null);
+
+  // 결석 체크 후 그 날짜(당일 포함)의 결석 검토 팝업을 바로 띄운다 — 담당교사가
+  // 이미 지정된 건은 서버가 걸러서 내려주므로, 항목이 남아있으면 실제로
+  // 처리(지각 정정/보강 취소/담당자 지정)가 필요한 경우다. 행정/원장이 아니면
+  // 서버가 빈 목록을 내려줘 자연히 아무 일도 일어나지 않는다.
+  function maybeOpenReview() {
+    const hasAbsent = Object.values(perStudent).some((f) => f.absent);
+    if (!hasAbsent) return;
+    fetch(`/api/absence-review?date=${encodeURIComponent(date)}`)
+      .then((r) => r.json())
+      .then((data: { items: AbsenceReviewItem[] }) => {
+        if (data.items?.length > 0) setReviewItems(data.items);
+      });
+  }
 
   useEffect(() => {
     fetch("/api/classes")
@@ -214,6 +230,7 @@ function ClassRecordForm() {
       const data = await res.json();
       if (!res.ok) return { ok: false, error: data.error ?? "저장에 실패했습니다." };
       setDone(true);
+      maybeOpenReview();
       if (!isEdit) {
         setProgress("");
         setHomework("");
@@ -441,6 +458,18 @@ function ClassRecordForm() {
           classes={classes}
           onClose={() => setShowPreview(false)}
           onSave={actuallySave}
+        />
+      )}
+
+      {reviewItems && (
+        <AbsenceReviewModal
+          items={reviewItems}
+          onClose={() => setReviewItems(null)}
+          onChanged={() => {
+            fetch(`/api/absence-review?date=${encodeURIComponent(date)}`)
+              .then((r) => r.json())
+              .then((data: { items: AbsenceReviewItem[] }) => setReviewItems(data.items ?? []));
+          }}
         />
       )}
     </>

@@ -9,16 +9,27 @@ function isAdminLike(role: string) {
   return role === "행정" || role === "원장";
 }
 
-// 어제 결석자 검토 팝업의 데이터 — 조회하는 순간 아직 없는 보강요청은
-// getAbsenceReviewData 안에서 자동으로 만들어진다("전날 결석자 명단이
-// 자동으로 보강 명단으로 이동" 요구사항).
+// 결석자 검토 팝업의 데이터 — 조회하는 순간 아직 없는 보강요청은
+// getAbsenceReviewData 안에서 자동으로 만들어진다("결석자 명단이 자동으로
+// 보강 명단으로 이동" 요구사항). ?date=로 특정 날짜 하나만 조회할 수 있고
+// (결석 체크 직후 그 날짜만 즉시 확인할 때 씀), 지정하지 않으면 오늘+어제를
+// 합쳐서 돌려준다("당일포함" 요구사항 — 대시보드 진입/주기 알림용).
 export async function GET(req: NextRequest) {
   if (!isAdminLike(readStaffRole(req))) {
-    return NextResponse.json({ date: null, items: [] });
+    return NextResponse.json({ items: [] });
   }
-  const date = shiftDate(todayKST(), -1);
-  const items = await getAbsenceReviewData(date);
-  return NextResponse.json({ date, items });
+  const dateParam = req.nextUrl.searchParams.get("date");
+  if (dateParam) {
+    const items = await getAbsenceReviewData(dateParam);
+    return NextResponse.json({ items });
+  }
+  const today = todayKST();
+  const yesterday = shiftDate(today, -1);
+  const [todayItems, yesterdayItems] = await Promise.all([
+    getAbsenceReviewData(today),
+    getAbsenceReviewData(yesterday),
+  ]);
+  return NextResponse.json({ items: [...todayItems, ...yesterdayItems] });
 }
 
 export async function POST(req: NextRequest) {

@@ -155,24 +155,22 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
   // 날짜로 한 번에 옮긴다 — TodayScheduleCard의 globalDate prop으로 내려감.
   const [scheduleDate, setScheduleDate] = useState(todayKST());
 
-  // 어제 결석자 검토 — 행정/원장이 대시보드에 들어오면 자동으로 팝업을 띄운다.
-  // 서버가 조회 시점에 아직 없는 보강요청을 자동으로 만들어주므로(결석자
-  // 명단이 자동으로 보강 명단이 됨), 여기서는 결과를 보여주고 지각 정정/
-  // 보강 취소/담당자 지정만 처리한다. "닫기"로 그냥 넘기고 처리하지 않은
+  // 결석자 검토(오늘+어제) — 행정/원장이 대시보드에 들어오면 자동으로 팝업을
+  // 띄운다. 서버가 조회 시점에 아직 없는 보강요청을 자동으로 만들어주므로
+  // (결석자 명단이 자동으로 보강 명단이 됨), 여기서는 결과를 보여주고 지각
+  // 정정/보강 취소/담당자 지정만 처리한다. "닫기"로 그냥 넘기고 처리하지 않은
   // 항목이 남아있으면(localStorage 등으로 하루 종일 숨기지 않고) 55분마다
   // 다시 자동으로 띄워서 다 처리될 때까지 계속 알려준다 — 브라우저에
   // "오늘은 그만 보기" 상태를 저장하면 같은 기기에서 다른 직원이 로그인해도
   // 안 뜨는 문제가 있어(행정이 닫으면 원장 로그인에도 적용됨) 완전히 없앴다.
   const isAdminLike = staffRole === "행정" || staffRole === "원장";
-  const [absenceDate, setAbsenceDate] = useState<string | null>(null);
   const [absenceItems, setAbsenceItems] = useState<AbsenceReviewItem[]>([]);
   const [absenceModalOpen, setAbsenceModalOpen] = useState(false);
 
   function reloadAbsenceReview(autoOpenIfPending = false) {
     fetch("/api/absence-review")
       .then((r) => r.json())
-      .then((data: { date: string | null; items: AbsenceReviewItem[] }) => {
-        setAbsenceDate(data.date);
+      .then((data: { items: AbsenceReviewItem[] }) => {
         setAbsenceItems(data.items ?? []);
         if (autoOpenIfPending && data.items?.length > 0) setAbsenceModalOpen(true);
         // 지각 정정/보강 취소로 처리할 항목이 더는 안 남으면(빈 목록) 팝업을
@@ -716,9 +714,8 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
         />
       )}
 
-      {absenceModalOpen && absenceDate && (
+      {absenceModalOpen && (
         <AbsenceReviewModal
-          date={absenceDate}
           items={absenceItems}
           onClose={closeAbsenceModal}
           onChanged={() => {

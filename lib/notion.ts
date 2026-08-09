@@ -2801,15 +2801,17 @@ export type AbsenceReviewItem = {
   ownerAssigned: boolean;
 };
 
-// 행정 로그인(대시보드 진입) 시 뜨는 "전일 결석자 검토" 팝업의 데이터 소스.
-// 조회하는 시점에 그날 결석자별 보강요청이 아직 없으면 그 자리에서 자동으로
-// 만들어(=ensureMakeupRequestForAbsence) "전날 결석자 명단이 자동으로 보강
-// 명단으로 옮겨진다"는 요구를 충족하고, 담당교사/조교가 이후 로그인해 "오늘의
-// 일정 > 보강"을 보면 이미 올라와 있는 상태가 된다.
+// 결석 체크 즉시(당일 포함) 또는 행정 로그인(대시보드 진입) 시 뜨는 "결석자
+// 검토" 팝업의 데이터 소스. 조회하는 시점에 그날 결석자별 보강요청이 아직
+// 없으면 그 자리에서 자동으로 만들어(=ensureMakeupRequestForAbsence) "결석자
+// 명단이 자동으로 보강 명단으로 옮겨진다"는 요구를 충족하고, 담당교사/조교가
+// 이후 로그인해 "오늘의 일정 > 보강"을 보면 이미 올라와 있는 상태가 된다.
 //
-// 보강요청이 이미 취소(완료 처리)됐거나 확정된(시간이 채워진) 학생은
-// 목록에서 뺀다 — 그래야 "취소하면 팝업에 이름이 다시 안 뜨고, 처리할 게
-// 없어지면 팝업 자체가 닫히는" 동작이 된다. 취소를 완료여부=true로
+// 보강요청이 이미 취소(완료 처리)됐거나 확정된(시간이 채워진) 학생, 그리고
+// 담당교사가 이미 자동/수동으로 지정된 학생은 목록에서 뺀다 — 담당자가 이미
+// 정해졌으면 더 검토할 게 없으므로, 팝업은 "담당자 미지정"처럼 실제 조치가
+// 필요한 건만 계속 보여준다. 그래야 "취소하면 팝업에 이름이 다시 안 뜨고,
+// 처리할 게 없어지면 팝업 자체가 닫히는" 동작이 된다. 취소를 완료여부=true로
 // 표시하는 이유: Notion에서 실제로 지우면(보관 처리) 다음 조회 때 "요청이
 // 없다"고 판단해 똑같은 요청을 즉시 다시 만들어버리기 때문에(같은 학생이
 // 여전히 결석으로 남아있으므로), 실제 삭제 대신 "완료" 처리로 재생성을
@@ -2859,7 +2861,7 @@ export async function getAbsenceReviewData(date: string): Promise<AbsenceReviewI
       absenceDate: date,
       lessonContent,
     });
-    if (result.resolved) continue;
+    if (result.resolved || result.ownerAssigned) continue;
     items.push({
       dailyRecordId: a.dailyRecordId,
       studentId: a.studentId,

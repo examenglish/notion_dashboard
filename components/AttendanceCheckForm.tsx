@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { todayKST as todayStr } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
+import AbsenceReviewModal, { AbsenceReviewItem } from "./AbsenceReviewModal";
 
 type ClassOption = { id: string; name: string };
 type RosterStudent = { id: string; name: string };
@@ -29,6 +30,21 @@ export default function AttendanceCheckForm() {
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reviewItems, setReviewItems] = useState<AbsenceReviewItem[] | null>(null);
+
+  // 결석 체크 후 그 날짜(당일 포함)의 결석 검토 팝업을 바로 띄운다 —
+  // 담당교사가 이미 지정된 건은 서버가 걸러서 내려주므로, 항목이 남아있으면
+  // 실제로 처리(지각 정정/보강 취소/담당자 지정)가 필요한 경우다. 행정/원장이
+  // 아니면 서버가 빈 목록을 내려줘 자연히 아무 일도 일어나지 않는다.
+  function maybeOpenReview() {
+    const hasAbsent = Object.values(perStudent).some((f) => f.absent);
+    if (!hasAbsent) return;
+    fetch(`/api/absence-review?date=${encodeURIComponent(date)}`)
+      .then((r) => r.json())
+      .then((data: { items: AbsenceReviewItem[] }) => {
+        if (data.items?.length > 0) setReviewItems(data.items);
+      });
+  }
 
   useEffect(() => {
     fetch("/api/classes")
@@ -96,6 +112,7 @@ export default function AttendanceCheckForm() {
         return;
       }
       setDone(true);
+      maybeOpenReview();
     } catch {
       setError("네트워크 오류가 발생했습니다.");
     } finally {
@@ -104,6 +121,7 @@ export default function AttendanceCheckForm() {
   }
 
   return (
+    <>
     <form className="card" onSubmit={(e) => e.preventDefault()}>
       <h2>결석 · 단어테스트 체크 <span className="title-lab-tag">(실험실)</span></h2>
       <p className="muted" style={{ marginTop: 0 }}>
@@ -164,5 +182,17 @@ export default function AttendanceCheckForm() {
         </button>
       </div>
     </form>
+    {reviewItems && (
+      <AbsenceReviewModal
+        items={reviewItems}
+        onClose={() => setReviewItems(null)}
+        onChanged={() => {
+          fetch(`/api/absence-review?date=${encodeURIComponent(date)}`)
+            .then((r) => r.json())
+            .then((data: { items: AbsenceReviewItem[] }) => setReviewItems(data.items ?? []));
+        }}
+      />
+    )}
+    </>
   );
 }
