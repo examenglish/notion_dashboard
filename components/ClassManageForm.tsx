@@ -115,36 +115,40 @@ export default function ClassManageForm() {
     setDayHours((cur) => ({ ...cur, [d]: { ...cur[d], [field]: value } }));
   }
 
-  // 반 전체 담당교사 목록이 바뀌면(예: 3명 중 1명을 뺌), 요일별 지정에만
+  // 반 전체 담당교사 목록이 바뀌면(예: 3명 중 1명을 뺌), 요일·교시별 지정에만
   // 남아있는 이름을 함께 정리한다 — 더는 반 담당교사가 아닌 사람이 특정
-  // 요일 담당자로 남아있는 상태를 막기 위함.
+  // 교시 담당자로 남아있는 상태를 막기 위함.
   useEffect(() => {
     setDayTeachers((cur) => {
       let changed = false;
       const next: DayTeachers = {};
-      for (const [day, names] of Object.entries(cur)) {
-        const kept = names.filter((n) => teachers.includes(n));
-        if (kept.length !== names.length) changed = true;
-        if (kept.length > 0) next[day] = kept;
-        else changed = true;
+      for (const [day, periods] of Object.entries(cur)) {
+        const kept: Record<string, string> = {};
+        for (const [period, name] of Object.entries(periods)) {
+          if (teachers.includes(name)) kept[period] = name;
+          else changed = true;
+        }
+        if (Object.keys(kept).length > 0) next[day] = kept;
+        else if (Object.keys(periods).length > 0) changed = true;
       }
       return changed ? next : cur;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teachers]);
 
-  function toggleDayTeacher(day: string, teacherName: string) {
+  // period: "1"|"2"|"3" (1~3교시). teacherName이 빈 문자열이면 "미지정"으로
+  // 처리해 그 교시 지정을 지운다.
+  function setDayPeriodTeacher(day: string, period: string, teacherName: string) {
     setDayTeachers((cur) => {
-      const current = cur[day] ?? [];
-      const next = current.includes(teacherName)
-        ? current.filter((n) => n !== teacherName)
-        : [...current, teacherName];
-      if (next.length === 0) {
+      const periods = { ...(cur[day] ?? {}) };
+      if (teacherName) periods[period] = teacherName;
+      else delete periods[period];
+      if (Object.keys(periods).length === 0) {
         const copy = { ...cur };
         delete copy[day];
         return copy;
       }
-      return { ...cur, [day]: next };
+      return { ...cur, [day]: periods };
     });
   }
 
@@ -234,7 +238,8 @@ export default function ClassManageForm() {
       <label>요일별 시간</label>
       <p className="muted" style={{ marginTop: 2 }}>
         같은 반이라도 요일마다 시간이 다르면(예: 월 16~18시, 수 18~20시) 요일별로 따로 입력하세요.
-        {teachers.length > 1 && " 담당교사가 요일마다 다르면 시간 아래에서 그 요일 담당교사도 골라주세요(비워두면 전체 담당교사 모두로 처리)."}
+        {teachers.length > 1 &&
+          " 같은 요일 안에서도 1·2·3교시마다 담당교사가 다르면 시간 아래에서 교시별로 골라주세요(비워두면 전체 담당교사 모두로 처리)."}
       </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
         {WEEKDAYS.map((d) => {
@@ -267,35 +272,24 @@ export default function ClassManageForm() {
                 )}
               </div>
               {enabled && teachers.length > 1 && (
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginLeft: 58 }}>
-                  {teachers.map((t) => {
-                    const active = (dayTeachers[d] ?? []).includes(t);
-                    return (
-                      <label
-                        key={t}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 4,
-                          fontSize: 12,
-                          border: "1px solid var(--border)",
-                          borderRadius: 6,
-                          padding: "2px 8px",
-                          cursor: "pointer",
-                          background: active ? "var(--primary)" : "transparent",
-                          color: active ? "#fff" : "inherit",
-                        }}
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginLeft: 58 }}>
+                  {["1", "2", "3"].map((period) => (
+                    <label key={period} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, margin: 0 }}>
+                      {period}교시
+                      <select
+                        value={dayTeachers[d]?.[period] ?? ""}
+                        onChange={(e) => setDayPeriodTeacher(d, period, e.target.value)}
+                        style={{ fontSize: 12, padding: "2px 4px" }}
                       >
-                        <input
-                          type="checkbox"
-                          checked={active}
-                          onChange={() => toggleDayTeacher(d, t)}
-                          style={{ display: "none" }}
-                        />
-                        {t}
-                      </label>
-                    );
-                  })}
+                        <option value="">미지정</option>
+                        {teachers.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
                 </div>
               )}
             </div>

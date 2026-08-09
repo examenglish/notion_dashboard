@@ -2826,7 +2826,13 @@ function weekdayLabel(dateStr: string): string {
 function teacherNameForAbsence(cls: { teachers: string[]; dayTeachers: DayTeachers } | undefined, absenceDate: string): string {
   if (!cls) return "";
   const day = weekdayLabel(absenceDate);
-  return cls.dayTeachers[day]?.[0] ?? cls.teachers[0] ?? "";
+  const periods = cls.dayTeachers[day];
+  // 결석기록엔 몇 교시였는지가 없어 특정할 수 없으니, 그 요일에 지정된 교시들
+  // 중 가장 이른 교시(1교시부터) 담당자를 대표로 쓴다.
+  const firstPeriodTeacher = periods
+    ? Object.entries(periods).sort((a, b) => Number(a[0]) - Number(b[0]))[0]?.[1]
+    : undefined;
+  return firstPeriodTeacher ?? cls.teachers[0] ?? "";
 }
 
 export async function getAbsenceReviewData(date: string): Promise<AbsenceReviewItem[]> {

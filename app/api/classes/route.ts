@@ -29,17 +29,19 @@ function resolveDaysAndTime(body: any): { days?: string[]; time?: string } {
   };
 }
 
-// 요일별 담당교사(day -> 이름 배열)를 받아 빈 배열/빈 이름을 걸러낸다.
-// 지정 안 한 요일은 반 전체 담당교사(teachers)를 따르는 것으로 취급.
+// 요일별·교시별 담당교사(day -> {교시: 이름})를 받아 빈 값을 걸러낸다.
+// 지정 안 한 요일/교시는 반 전체 담당교사(teachers)를 따르는 것으로 취급.
 function resolveDayTeachers(body: any): DayTeachers | undefined {
   const raw = body?.dayTeachers;
   if (!raw || typeof raw !== "object") return undefined;
   const dayTeachers: DayTeachers = {};
-  for (const [day, names] of Object.entries(raw as Record<string, any>)) {
-    if (Array.isArray(names)) {
-      const cleaned = names.filter((n) => typeof n === "string" && n.trim()).map((n) => n.trim());
-      if (cleaned.length > 0) dayTeachers[day] = cleaned;
+  for (const [day, periods] of Object.entries(raw as Record<string, any>)) {
+    if (!periods || typeof periods !== "object") continue;
+    const cleaned: Record<string, string> = {};
+    for (const [period, name] of Object.entries(periods as Record<string, any>)) {
+      if (typeof name === "string" && name.trim()) cleaned[period] = name.trim();
     }
+    if (Object.keys(cleaned).length > 0) dayTeachers[day] = cleaned;
   }
   return dayTeachers;
 }

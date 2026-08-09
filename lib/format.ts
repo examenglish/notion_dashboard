@@ -89,12 +89,14 @@ export function serializeWorkHours(hours: WorkHours): string {
 
 export const WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"];
 
-// 반의 담당교사가 요일마다 다를 수 있어(예: 월·수는 김선생, 화·목은 이선생),
-// WorkHours와 같은 방식으로 "월=김선생,이선생;수=박선생" 형태로 압축해
-// 저장한다. 지정하지 않은 요일은 반 전체 담당교사(담당교사 필드, teachers)를
-// 그대로 따르는 것으로 취급한다 — 모든 요일이 같은 교사면 굳이 이 필드를
-// 채우지 않아도 된다.
-export type DayTeachers = Record<string, string[]>;
+// 반의 담당교사가 요일마다, 심지어 같은 날 안에서도 교시마다 다를 수 있어
+// (예: 월요일 1교시는 김선생, 2교시는 이선생, 3교시는 박선생),
+// "월=1:김선생,2:이선생,3:박선생;수=1:김선생" 형태로 압축해 저장한다.
+// 지정하지 않은 요일/교시는 반 전체 담당교사(담당교사 필드, teachers)를
+// 그대로 따르는 것으로 취급한다 — 모든 교시가 같은 교사면 굳이 이 필드를
+// 채우지 않아도 된다. 교시 번호는 문자열 키("1","2","3")로 둬 순서 상관없이
+// 특정 교시만 지정(예: 2교시만)할 수 있게 한다.
+export type DayTeachers = Record<string, Record<string, string>>;
 
 export function parseDayTeachers(raw: string): DayTeachers {
   const result: DayTeachers = {};
@@ -105,20 +107,30 @@ export function parseDayTeachers(raw: string): DayTeachers {
     const eq = trimmed.indexOf("=");
     if (eq < 0) continue;
     const day = trimmed.slice(0, eq).trim();
-    const names = trimmed
-      .slice(eq + 1)
-      .split(",")
-      .map((n) => n.trim())
-      .filter(Boolean);
-    if (day && names.length > 0) result[day] = names;
+    const periods: Record<string, string> = {};
+    for (const entry of trimmed.slice(eq + 1).split(",")) {
+      const colon = entry.indexOf(":");
+      if (colon < 0) continue;
+      const period = entry.slice(0, colon).trim();
+      const teacher = entry.slice(colon + 1).trim();
+      if (period && teacher) periods[period] = teacher;
+    }
+    if (day && Object.keys(periods).length > 0) result[day] = periods;
   }
   return result;
 }
 
 export function serializeDayTeachers(dayTeachers: DayTeachers): string {
   return Object.entries(dayTeachers)
-    .filter(([, names]) => names.length > 0)
-    .map(([day, names]) => `${day}=${names.join(",")}`)
+    .map(([day, periods]) => {
+      const entries = Object.entries(periods)
+        .filter(([, name]) => name)
+        .sort((a, b) => Number(a[0]) - Number(b[0]))
+        .map(([period, name]) => `${period}:${name}`)
+        .join(",");
+      return entries ? `${day}=${entries}` : "";
+    })
+    .filter(Boolean)
     .join(";");
 }
 
