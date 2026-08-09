@@ -2,7 +2,16 @@ import { Client } from "@notionhq/client";
 import { unstable_cache, revalidateTag } from "next/cache";
 import { todayKST } from "./date";
 import { formatBriefingText } from "./briefingFormat";
-import { stripClassSuffix, parseWorkHours, serializeWorkHours, formatClassSchedule, type WorkHours } from "./format";
+import {
+  stripClassSuffix,
+  parseWorkHours,
+  serializeWorkHours,
+  formatClassSchedule,
+  parseDayTeachers,
+  serializeDayTeachers,
+  type WorkHours,
+  type DayTeachers,
+} from "./format";
 import {
   type ExamPrepData,
   type ExamPrepSheet,
@@ -221,6 +230,7 @@ export async function listClasses() {
     id: p.id,
     name: getTitle(p, "반이름"),
     teachers: splitTeachers(getRichText(p, "담당교사")),
+    dayTeachers: parseDayTeachers(getRichText(p, "요일별담당교사")),
     days: getMultiSelect(p, "요일"),
     time: getRichText(p, "시간"),
     level: getSelect(p, "레벨"),
@@ -242,6 +252,7 @@ export async function assignClassAssistants(classId: string, assistantIds: strin
 export async function createClass(input: {
   name: string;
   teachers?: string[];
+  dayTeachers?: DayTeachers;
   days?: string[];
   time?: string;
   level?: string;
@@ -252,6 +263,9 @@ export async function createClass(input: {
       반이름: { title: [{ text: { content: input.name } }] },
       ...(input.teachers && input.teachers.length > 0
         ? { 담당교사: { rich_text: [{ text: { content: joinTeachers(input.teachers) } }] } }
+        : {}),
+      ...(input.dayTeachers && Object.keys(input.dayTeachers).length > 0
+        ? { 요일별담당교사: { rich_text: [{ text: { content: serializeDayTeachers(input.dayTeachers) } }] } }
         : {}),
       ...(input.days && input.days.length > 0 ? { 요일: { multi_select: input.days.map((d) => ({ name: d })) } } : {}),
       ...(input.time ? { 시간: { rich_text: [{ text: { content: input.time } }] } } : {}),
@@ -266,16 +280,41 @@ export async function createClass(input: {
 // Notion relation은 페이지 id로 연결되므로 제목만 바뀌어도 관계는 그대로 유지됨.
 export async function updateClass(
   classId: string,
-  input: { name?: string; teachers?: string[]; days?: string[]; time?: string; level?: string }
+  input: {
+    name?: string;
+    teachers?: string[];
+    dayTeachers?: DayTeachers;
+    days?: string[];
+    time?: string;
+    level?: string;
+  }
 ) {
   const properties: any = {};
   if (input.name) properties["반이름"] = { title: [{ text: { content: input.name } }] };
   if (input.teachers !== undefined)
     properties["담당교사"] = { rich_text: [{ text: { content: joinTeachers(input.teachers) } }] };
+  if (input.dayTeachers !== undefined)
+    properties["요일별담당교사"] = { rich_text: [{ text: { content: serializeDayTeachers(input.dayTeachers) } }] };
   if (input.days !== undefined) properties["요일"] = { multi_select: input.days.map((d) => ({ name: d })) };
   if (input.time !== undefined) properties["시간"] = { rich_text: [{ text: { content: input.time } }] };
   if (input.level !== undefined) properties["레벨"] = input.level ? { select: { name: input.level } } : { select: null };
   await notion.pages.update({ page_id: classId, properties });
+}
+
+// 반 삭제(보관 처리) — 학생이 한 명도 등록되지 않은 반을 정리할 때 쓴다.
+// 소속학생/진도기록 등이 이미 있는 반을 실수로 지우는 걸 막기 위해 호출
+// 전에 studentIds가 비어있는지 라우트에서 확인한다.
+export async function deleteClass(classId: string) {
+  await notion.pages.update({ page_id: classId, archived: true });
+}
+
+// 반이름 중복 생성/개명을 막을 때 쓴다 — "(숫자)" seed-data 접미사를 떼고
+// 비교해 "파닉스"와 "파닉스 (2)"도 같은 이름으로 취급한다. excludeId를 주면
+// (수정 중인 반 자기 자신) 비교에서 제외한다.
+export async function findClassByName(name: string, excludeId?: string) {
+  const trimmed = stripClassSuffix(name).trim();
+  const classes = await listClasses();
+  return classes.find((c) => c.id !== excludeId && stripClassSuffix(c.name).trim() === trimmed) ?? null;
 }
 
 // Used when a staff member types a class name directly instead of picking
@@ -1820,6 +1859,18 @@ export async function promoteWaitlistedStudents(today: string): Promise<{ id: st
   return promoted;
 }
 
+// 학생등록 시 동명이인 중복 등록을 막는 데 쓴다 — 이름이 정확히 같은 학생이
+// 이미 있는지(재원/퇴원 등 상태와 무관하게) 확인한다.
+export async function findStudentByName(name: string): Promise<{ id: string; name: string } | null> {
+  const res = await notion.dataSources.query({
+    data_source_id: DB.STUDENT,
+    filter: { property: "이름", title: { equals: name } },
+    page_size: 1,
+  });
+  const page = res.results[0] as any;
+  return page ? { id: page.id, name: getTitle(page, "이름") } : null;
+}
+
 export async function findStaffIdByName(name: string): Promise<string | null> {
   const res = await notion.dataSources.query({
     data_source_id: DB.STAFF,
@@ -2763,6 +2814,21 @@ export type AbsenceReviewItem = {
 // 없다"고 판단해 똑같은 요청을 즉시 다시 만들어버리기 때문에(같은 학생이
 // 여전히 결석으로 남아있으므로), 실제 삭제 대신 "완료" 처리로 재생성을
 // 막는다.
+// 결석일자(YYYY-MM-DD)의 요일을 WEEKDAYS(["월",...,"일"]) 라벨로 변환.
+function weekdayLabel(dateStr: string): string {
+  const WEEKDAYS_KO = ["월", "화", "수", "목", "금", "토", "일"];
+  const jsDay = new Date(`${dateStr}T00:00:00+09:00`).getDay(); // 0=일 ... 6=토
+  return WEEKDAYS_KO[(jsDay + 6) % 7];
+}
+
+// 반 담당교사가 요일마다 다르면(dayTeachers) 그 결석일의 요일 담당교사를,
+// 아니면 반 전체 담당교사(teachers) 중 첫 번째를 보강요청 담당자 후보로 쓴다.
+function teacherNameForAbsence(cls: { teachers: string[]; dayTeachers: DayTeachers } | undefined, absenceDate: string): string {
+  if (!cls) return "";
+  const day = weekdayLabel(absenceDate);
+  return cls.dayTeachers[day]?.[0] ?? cls.teachers[0] ?? "";
+}
+
 export async function getAbsenceReviewData(date: string): Promise<AbsenceReviewItem[]> {
   const absences = await getAbsentDailyRecords(date);
   if (absences.length === 0) return [];
@@ -2783,7 +2849,7 @@ export async function getAbsenceReviewData(date: string): Promise<AbsenceReviewI
       studentName,
       classId: a.classId,
       className,
-      teacherName: cls?.teachers?.[0] ?? "",
+      teacherName: teacherNameForAbsence(cls, date),
       absenceDate: date,
       lessonContent,
     });

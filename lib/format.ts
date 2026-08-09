@@ -89,6 +89,39 @@ export function serializeWorkHours(hours: WorkHours): string {
 
 export const WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"];
 
+// 반의 담당교사가 요일마다 다를 수 있어(예: 월·수는 김선생, 화·목은 이선생),
+// WorkHours와 같은 방식으로 "월=김선생,이선생;수=박선생" 형태로 압축해
+// 저장한다. 지정하지 않은 요일은 반 전체 담당교사(담당교사 필드, teachers)를
+// 그대로 따르는 것으로 취급한다 — 모든 요일이 같은 교사면 굳이 이 필드를
+// 채우지 않아도 된다.
+export type DayTeachers = Record<string, string[]>;
+
+export function parseDayTeachers(raw: string): DayTeachers {
+  const result: DayTeachers = {};
+  if (!raw) return result;
+  for (const part of raw.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq < 0) continue;
+    const day = trimmed.slice(0, eq).trim();
+    const names = trimmed
+      .slice(eq + 1)
+      .split(",")
+      .map((n) => n.trim())
+      .filter(Boolean);
+    if (day && names.length > 0) result[day] = names;
+  }
+  return result;
+}
+
+export function serializeDayTeachers(dayTeachers: DayTeachers): string {
+  return Object.entries(dayTeachers)
+    .filter(([, names]) => names.length > 0)
+    .map(([day, names]) => `${day}=${names.join(",")}`)
+    .join(";");
+}
+
 // 반도 조교 근무시간과 같은 이유로 요일별 시간이 다를 수 있어(월 16~18시,
 // 수 18~20시 등) "시간" 필드를 WorkHours 포맷으로 저장한다. 아직 이 포맷으로
 // 저장되지 않은(=모든 요일에 공통 시간 하나였던 옛) 반은 parseWorkHours가

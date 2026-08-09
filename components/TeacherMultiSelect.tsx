@@ -15,7 +15,7 @@ export default function TeacherMultiSelect({
   selected: string[];
   onChange: (names: string[]) => void;
   max?: number;
-  roleFilter?: string;
+  roleFilter?: string[];
 }) {
   const [allStaff, setAllStaff] = useState<StaffOption[]>([]);
   const [query, setQuery] = useState("");
@@ -35,7 +35,7 @@ export default function TeacherMultiSelect({
     onChange([...selected, name]);
   }
 
-  const byRole = roleFilter ? allStaff.filter((s) => s.role === roleFilter) : allStaff;
+  const byRole = roleFilter ? allStaff.filter((s) => s.role && roleFilter.includes(s.role)) : allStaff;
   const filtered = byRole.filter((s) => s.name.includes(query));
   const atMax = !!max && selected.length >= max;
 

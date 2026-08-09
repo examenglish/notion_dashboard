@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createStudent, searchStudents } from "@/lib/notion";
+import { createStudent, findStudentByName, searchStudents } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +16,9 @@ export async function POST(req: NextRequest) {
   const name = (body?.name ?? "").trim();
   if (!name) {
     return NextResponse.json({ error: "이름을 입력해 주세요." }, { status: 400 });
+  }
+  if (await findStudentByName(name)) {
+    return NextResponse.json({ error: "이미 같은 이름의 학생이 등록되어 있습니다." }, { status: 400 });
   }
   const studentId = await createStudent({
     name,
