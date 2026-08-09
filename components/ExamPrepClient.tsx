@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import StudentPicker from "./StudentPicker";
+import TeacherMultiSelect from "./TeacherMultiSelect";
 import { todayKST } from "@/lib/date";
 import {
   type CategoryBreakdown,
@@ -36,7 +37,6 @@ type OverviewRow = {
 };
 
 type ExamScore = { date: string | null; examName: string; subject: string | null; score: number | null };
-type StaffOption = { id: string; name: string; role: string | null };
 
 function categoryColor(done: number, total: number): string {
   if (total === 0) return "#94a3b8";
@@ -240,63 +240,6 @@ function LessonList({ lessons, onChange }: { lessons: LessonItem[]; onChange: (l
           </button>
         </div>
       ))}
-    </div>
-  );
-}
-
-// 담당교사 복수선택 — 태그 클릭으로 토글, 검색으로 좁혀볼 수 있다.
-function TeacherMultiSelect({ selected, onChange }: { selected: string[]; onChange: (names: string[]) => void }) {
-  const [allStaff, setAllStaff] = useState<StaffOption[]>([]);
-  const [query, setQuery] = useState("");
-
-  useEffect(() => {
-    fetch("/api/staff")
-      .then((r) => r.json())
-      .then(setAllStaff);
-  }, []);
-
-  function toggle(name: string) {
-    onChange(selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
-  }
-
-  const filtered = allStaff.filter((s) => s.name.includes(query));
-
-  return (
-    <div>
-      <label>담당교사 (복수선택 가능)</label>
-      <input
-        type="text"
-        placeholder="이름으로 검색"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        style={{ marginBottom: 6 }}
-      />
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {filtered.map((s) => {
-          const active = selected.includes(s.name);
-          return (
-            <label
-              key={s.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 4,
-                fontSize: 13,
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-                padding: "4px 10px",
-                cursor: "pointer",
-                background: active ? "var(--primary)" : "transparent",
-                color: active ? "#fff" : "inherit",
-              }}
-            >
-              <input type="checkbox" checked={active} onChange={() => toggle(s.name)} style={{ display: "none" }} />
-              {s.name}
-            </label>
-          );
-        })}
-        {filtered.length === 0 && <span className="muted" style={{ fontSize: 12 }}>검색 결과가 없습니다.</span>}
-      </div>
     </div>
   );
 }

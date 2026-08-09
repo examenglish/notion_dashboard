@@ -2,8 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { stripClassSuffix, parseWorkHours, WEEKDAYS, type WorkHours } from "@/lib/format";
+import TeacherMultiSelect from "./TeacherMultiSelect";
 
-type ClassFull = { id: string; name: string; teacher: string; days: string[]; time: string; level: string | null };
+type ClassFull = { id: string; name: string; teachers: string[]; days: string[]; time: string; level: string | null };
+
+const MAX_TEACHERS = 3;
 
 const LEVEL_OPTIONS = ["초등", "중등", "고등"];
 
@@ -39,7 +42,7 @@ export default function ClassManageForm() {
   const [classes, setClasses] = useState<ClassFull[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [name, setName] = useState("");
-  const [teacher, setTeacher] = useState("");
+  const [teachers, setTeachers] = useState<string[]>([]);
   const [dayHours, setDayHours] = useState<WorkHours>({});
   const [level, setLevel] = useState("");
   const [saving, setSaving] = useState(false);
@@ -59,7 +62,7 @@ export default function ClassManageForm() {
   useEffect(() => {
     if (!selectedId) {
       setName("");
-      setTeacher("");
+      setTeachers([]);
       setDayHours({});
       setLevel("");
       setDone(false);
@@ -68,7 +71,7 @@ export default function ClassManageForm() {
     const cls = classes.find((c) => c.id === selectedId);
     if (cls) {
       setName(stripClassSuffix(cls.name));
-      setTeacher(cls.teacher);
+      setTeachers(cls.teachers);
       setDayHours(dayHoursFromClass(cls));
       setLevel(cls.level ?? "");
     }
@@ -102,7 +105,7 @@ export default function ClassManageForm() {
       const res = await fetch(isEdit ? `/api/classes/${selectedId}` : "/api/classes", {
         method: isEdit ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, teacher, dayHours, level }),
+        body: JSON.stringify({ name, teachers, dayHours, level }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -137,23 +140,17 @@ export default function ClassManageForm() {
       <label htmlFor="className">반이름</label>
       <input id="className" type="text" value={name} onChange={(e) => setName(e.target.value)} required />
 
-      <div className="field-row">
-        <div>
-          <label htmlFor="classTeacher">담당교사</label>
-          <input id="classTeacher" type="text" value={teacher} onChange={(e) => setTeacher(e.target.value)} />
-        </div>
-        <div>
-          <label htmlFor="classLevel">레벨</label>
-          <select id="classLevel" value={level} onChange={(e) => setLevel(e.target.value)}>
-            <option value="">선택 안 함</option>
-            {LEVEL_OPTIONS.map((l) => (
-              <option key={l} value={l}>
-                {l}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
+      <TeacherMultiSelect selected={teachers} onChange={setTeachers} max={MAX_TEACHERS} roleFilter="강사" />
+
+      <label htmlFor="classLevel">레벨</label>
+      <select id="classLevel" value={level} onChange={(e) => setLevel(e.target.value)}>
+        <option value="">선택 안 함</option>
+        {LEVEL_OPTIONS.map((l) => (
+          <option key={l} value={l}>
+            {l}
+          </option>
+        ))}
+      </select>
 
       <label>요일별 시간</label>
       <p className="muted" style={{ marginTop: 2 }}>

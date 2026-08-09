@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
   const { days, time } = resolveDaysAndTime(body);
   const classId = await createClass({
     name,
-    teacher: body?.teacher || undefined,
+    teachers: Array.isArray(body?.teachers) ? body.teachers : undefined,
     days,
     time,
     level: body?.level || undefined,

@@ -220,7 +220,7 @@ export async function listClasses() {
   return results.map((p: any) => ({
     id: p.id,
     name: getTitle(p, "반이름"),
-    teacher: getRichText(p, "담당교사"),
+    teachers: splitTeachers(getRichText(p, "담당교사")),
     days: getMultiSelect(p, "요일"),
     time: getRichText(p, "시간"),
     level: getSelect(p, "레벨"),
@@ -241,7 +241,7 @@ export async function assignClassAssistants(classId: string, assistantIds: strin
 
 export async function createClass(input: {
   name: string;
-  teacher?: string;
+  teachers?: string[];
   days?: string[];
   time?: string;
   level?: string;
@@ -250,7 +250,9 @@ export async function createClass(input: {
     parent: { data_source_id: DB.CLASS } as any,
     properties: {
       반이름: { title: [{ text: { content: input.name } }] },
-      ...(input.teacher ? { 담당교사: { rich_text: [{ text: { content: input.teacher } }] } } : {}),
+      ...(input.teachers && input.teachers.length > 0
+        ? { 담당교사: { rich_text: [{ text: { content: joinTeachers(input.teachers) } }] } }
+        : {}),
       ...(input.days && input.days.length > 0 ? { 요일: { multi_select: input.days.map((d) => ({ name: d })) } } : {}),
       ...(input.time ? { 시간: { rich_text: [{ text: { content: input.time } }] } } : {}),
       ...(input.level ? { 레벨: { select: { name: input.level } } } : {}),
@@ -264,11 +266,12 @@ export async function createClass(input: {
 // Notion relation은 페이지 id로 연결되므로 제목만 바뀌어도 관계는 그대로 유지됨.
 export async function updateClass(
   classId: string,
-  input: { name?: string; teacher?: string; days?: string[]; time?: string; level?: string }
+  input: { name?: string; teachers?: string[]; days?: string[]; time?: string; level?: string }
 ) {
   const properties: any = {};
   if (input.name) properties["반이름"] = { title: [{ text: { content: input.name } }] };
-  if (input.teacher !== undefined) properties["담당교사"] = { rich_text: [{ text: { content: input.teacher } }] };
+  if (input.teachers !== undefined)
+    properties["담당교사"] = { rich_text: [{ text: { content: joinTeachers(input.teachers) } }] };
   if (input.days !== undefined) properties["요일"] = { multi_select: input.days.map((d) => ({ name: d })) };
   if (input.time !== undefined) properties["시간"] = { rich_text: [{ text: { content: input.time } }] };
   if (input.level !== undefined) properties["레벨"] = input.level ? { select: { name: input.level } } : { select: null };
@@ -2676,8 +2679,8 @@ async function getDailyRecordLessonContent(dailyRecordId: string): Promise<strin
 }
 
 // 이미 그 학생의 그 결석일자 보강요청이 있으면 손대지 않고, 없으면 반의
-// 담당교사를 담당자로 지정해 새로 만든다 — 담당교사 이름이 직원 명단과
-// 정확히 일치하지 않으면(오타 등) 담당자 없이 생성된다(다른 자동생성
+// 담당교사(여러 명이면 그중 첫 번째)를 담당자로 지정해 새로 만든다 — 담당교사
+// 이름이 직원 명단과 정확히 일치하지 않으면(오타 등) 담당자 없이 생성된다(다른 자동생성
 // 경로들과 동일한 관대한 처리).
 async function ensureMakeupRequestForAbsence(input: {
   studentId: string;
@@ -2780,7 +2783,7 @@ export async function getAbsenceReviewData(date: string): Promise<AbsenceReviewI
       studentName,
       classId: a.classId,
       className,
-      teacherName: cls?.teacher ?? "",
+      teacherName: cls?.teachers?.[0] ?? "",
       absenceDate: date,
       lessonContent,
     });
