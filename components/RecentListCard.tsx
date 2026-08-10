@@ -2,6 +2,14 @@
 
 import { useEffect, useState } from "react";
 
+// 랜딩페이지 스크롤을 줄이기 위해 카드 본문에는 최근 5건만 인라인으로
+// 보여주고, 나머지(페이지네이션 포함 전체 목록)는 "더보기" 클릭 시 팝업으로만
+// 노출한다 — TodayScheduleCard의 ScheduleSectionCard/SchedulePopup과 동일한
+// 패턴. 필터 컨트롤은 카드에 한 번만 두고(팝업에도 같은 items가 이미
+// 필터링되어 들어오므로 중복 렌더 불필요) 그 결과가 미리보기·팝업 둘 다에
+// 반영되게 한다.
+const PREVIEW_SIZE = 5;
+
 export default function RecentListCard<T>({
   title,
   items,
@@ -30,6 +38,7 @@ export default function RecentListCard<T>({
   // items.length (no filtering).
   totalCount?: number;
 }) {
+  const [popupOpen, setPopupOpen] = useState(false);
   const [page, setPage] = useState(0);
   const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
 
@@ -38,8 +47,21 @@ export default function RecentListCard<T>({
     if (page > pageCount - 1) setPage(0);
   }, [pageCount, page]);
 
+  const previewItems = items.slice(0, PREVIEW_SIZE);
   const start = page * pageSize;
-  const visible = items.slice(start, start + pageSize);
+  const popupItems = items.slice(start, start + pageSize);
+
+  function renderRow(item: T) {
+    return (
+      <div
+        key={keyOf(item)}
+        className={onItemClick ? "recent-list-row clickable" : "recent-list-row"}
+        onClick={onItemClick ? () => onItemClick(item) : undefined}
+      >
+        {renderItem(item)}
+      </div>
+    );
+  }
 
   return (
     <div className="card">
@@ -57,40 +79,57 @@ export default function RecentListCard<T>({
       {items.length === 0 ? (
         <p className="muted">{emptyText}</p>
       ) : (
-        <div className="recent-list">
-          {visible.map((item) => (
-            <div
-              key={keyOf(item)}
-              className={onItemClick ? "recent-list-row clickable" : "recent-list-row"}
-              onClick={onItemClick ? () => onItemClick(item) : undefined}
-            >
-              {renderItem(item)}
-            </div>
-          ))}
-        </div>
+        <div className="recent-list">{previewItems.map(renderRow)}</div>
       )}
 
-      {items.length > pageSize && (
-        <div className="pager">
-          <button
-            type="button"
-            className="secondary"
-            disabled={page === 0}
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-          >
-            이전
-          </button>
-          <span className="muted">
-            {page + 1} / {pageCount} 페이지
-          </span>
-          <button
-            type="button"
-            className="secondary"
-            disabled={page >= pageCount - 1}
-            onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-          >
-            다음
-          </button>
+      {items.length > PREVIEW_SIZE && (
+        <button type="button" className="secondary schedule-more-btn" onClick={() => setPopupOpen(true)}>
+          더보기
+        </button>
+      )}
+
+      {popupOpen && (
+        <div className="modal-backdrop" onClick={() => setPopupOpen(false)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>
+                {title} <span className="muted">(전체 {items.length}건)</span>
+              </h2>
+              <button type="button" className="secondary" onClick={() => setPopupOpen(false)}>
+                닫기
+              </button>
+            </div>
+
+            {items.length === 0 ? (
+              <p className="muted">{emptyText}</p>
+            ) : (
+              <div className="recent-list">{popupItems.map(renderRow)}</div>
+            )}
+
+            {items.length > pageSize && (
+              <div className="pager">
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={page === 0}
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                >
+                  이전
+                </button>
+                <span className="muted">
+                  {page + 1} / {pageCount} 페이지
+                </span>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={page >= pageCount - 1}
+                  onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                >
+                  다음
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
