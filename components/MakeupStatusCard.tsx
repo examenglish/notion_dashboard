@@ -167,6 +167,12 @@ function MakeupRow({
 // 그대로 쓰므로 두 화면이 항상 동기화된다. 행정/원장에게는 전체 현황
 // (scope="all")을, 강사·조교에게는 본인 담당 건만(scope="mine") 보여주는데,
 // 이 구분도 서버가 역할에 따라 이미 걸러서 내려준 결과를 그대로 반영한 것.
+// 전체(scope="all") 보기는 학원 전체 보강/재시 건이 다 쌓여서 항목 수가
+// 제한 없이 늘어나면 카드 하나가 페이지 전체 레이아웃을 밀어버린다 — 다른
+// 카드들(오늘의 일정, 행정실 등)과 동일하게 최근 5건만 인라인으로 보여주고
+// 나머지는 "더보기" 팝업에서만 스크롤하도록 제한한다.
+const PREVIEW_SIZE = 5;
+
 export default function MakeupStatusCard({
   role,
   onChanged,
@@ -180,6 +186,7 @@ export default function MakeupStatusCard({
   const [scope, setScope] = useState<"all" | "mine">("mine");
   const [items, setItems] = useState<MakeupScheduleItem[]>([]);
   const [confirmModalItems, setConfirmModalItems] = useState<MakeupScheduleItem[] | null>(null);
+  const [popupOpen, setPopupOpen] = useState(false);
 
   function reload() {
     fetch("/api/makeup-status")
@@ -204,6 +211,7 @@ export default function MakeupStatusCard({
   const unconfirmed = items.filter((i) => !i.confirmed);
   const confirmed = items.filter((i) => i.confirmed);
   const sorted = [...unconfirmed, ...confirmed];
+  const preview = sorted.slice(0, PREVIEW_SIZE);
 
   return (
     <div className="card">
@@ -217,10 +225,36 @@ export default function MakeupStatusCard({
         </button>
       )}
       <ul className="schedule-list" style={{ marginTop: 12 }}>
-        {sorted.map((item) => (
+        {preview.map((item) => (
           <MakeupRow key={item.id} item={item} showOwner={scope === "all"} canDelete={canDelete} onChanged={handleChanged} />
         ))}
       </ul>
+      {sorted.length > PREVIEW_SIZE && (
+        <button type="button" className="secondary schedule-more-btn" onClick={() => setPopupOpen(true)}>
+          더보기
+        </button>
+      )}
+
+      {popupOpen && (
+        <div className="modal-backdrop" onClick={() => setPopupOpen(false)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>
+                {scope === "all" ? "보강·재시 확정 현황 (전체)" : "내 보강·재시 확정 현황"}{" "}
+                <span className="muted">(전체 {sorted.length}건)</span>
+              </h2>
+              <button type="button" className="secondary" onClick={() => setPopupOpen(false)}>
+                닫기
+              </button>
+            </div>
+            <ul className="schedule-list">
+              {sorted.map((item) => (
+                <MakeupRow key={item.id} item={item} showOwner={scope === "all"} canDelete={canDelete} onChanged={handleChanged} />
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
 
       {confirmModalItems && (
         <ScheduleConfirmModal
