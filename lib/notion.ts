@@ -414,7 +414,7 @@ function mapStudentPage(p: any, examMap: Map<string, any>, classNameById: Map<st
   };
 }
 
-export async function searchStudents(query: string, classId?: string) {
+export async function searchStudents(query: string, classId?: string, includeInactive = false) {
   const [results, examMap, classById] = await Promise.all([
     queryAllPages({
       data_source_id: DB.STUDENT,
@@ -424,11 +424,13 @@ export async function searchStudents(query: string, classId?: string) {
     classNameMap(),
   ]);
   let mapped = results.map((p: any) => mapStudentPage(p, examMap, classById));
-  // classId로 반 명단을 뽑을 때만 퇴원/휴원 학생을 걷어낸다 — 이름 검색
-  // (StudentPicker 등)은 관리자가 퇴원생을 다시 찾아야 할 수도 있어 그대로
-  // 전체 학생 대상으로 둔다. 오늘 수업 기록/클리닉 지시/보강 명단 불러오기처럼
-  // "이 반에 지금 다니는 학생"이 필요한 화면만 이 필터의 영향을 받는다.
-  if (classId) mapped = mapped.filter((s) => s.classIds.includes(classId) && s.status !== "퇴원" && s.status !== "휴원");
+  // 퇴원/휴원 학생은 검색/명단/피커 등 모든 노출 화면에서 제외한다. 학습
+  // 기록(DB④일일기록·성적 등)은 학생 페이지 자체를 지우지 않는 한 그대로
+  // 보존되므로 데이터 손실은 없다. 예외적으로 학생 정보수정 화면처럼
+  // 상태를 되돌리기 위해 퇴원/휴원 학생 본인을 찾아야 하는 곳만
+  // includeInactive=true로 이 필터를 건너뛴다.
+  if (!includeInactive) mapped = mapped.filter((s) => s.status !== "퇴원" && s.status !== "휴원");
+  if (classId) mapped = mapped.filter((s) => s.classIds.includes(classId));
   return mapped;
 }
 

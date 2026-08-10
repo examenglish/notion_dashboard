@@ -391,11 +391,18 @@ function ClassRecordForm() {
               <p className="muted">이 반에 등록된 학생이 없습니다.</p>
             )}
             {!loadingRoster &&
-              fullRoster.map((s) => {
+              fullRoster.map((s, idx) => {
                 const isExtra = extraStudents.some((e) => e.id === s.id);
                 return (
-                  <div key={s.id} className="roster-check-row">
+                  <div
+                    key={s.id}
+                    className={`roster-check-row ${idx % 2 === 0 ? "roster-check-row-even" : "roster-check-row-odd"}`}
+                  >
                     <div className="roster-check-left">
+                      <div className="roster-check-name">
+                        {s.name}
+                        {isExtra && <span className="badge" style={{ marginLeft: 6 }}>다른반</span>}
+                      </div>
                       <div className="roster-check-flags">
                         <label>
                           <input
@@ -429,10 +436,6 @@ function ClassRecordForm() {
                           />
                           과제미완료
                         </label>
-                      </div>
-                      <div className="roster-check-name">
-                        {s.name}
-                        {isExtra && <span className="badge" style={{ marginLeft: 6 }}>다른반</span>}
                       </div>
                     </div>
                     <textarea
@@ -917,7 +920,12 @@ function StudentRegisterForm() {
       <h2>학생 등록 <span className="title-lab-tag">(실험실)</span></h2>
       <p className="muted">이름으로 검색하면 기존 학생 정보를 불러와 수정할 수 있고, 검색 결과가 없으면 새로 등록됩니다.</p>
 
-      <StudentPicker studentId={searchPickerId} onChange={handlePickExisting} label="학생 검색 (있으면 불러오기, 없으면 새로 등록)" />
+      <StudentPicker
+        studentId={searchPickerId}
+        onChange={handlePickExisting}
+        label="학생 검색 (있으면 불러오기, 없으면 새로 등록)"
+        includeInactive
+      />
       {loadingStudent && <p className="muted">불러오는 중...</p>}
       {editingStudentId && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 12px" }}>

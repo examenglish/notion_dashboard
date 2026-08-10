@@ -428,9 +428,15 @@ th, td {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 6px 0;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border);
+  border-radius: 6px;
   font-size: 13px;
+}
+
+/* 학생별로 홀/짝 행을 구분하기 쉽도록 옅은 배경을 엇갈려 준다. */
+.roster-check-row-odd {
+  background: var(--bg);
 }
 
 .roster-check-row label {
@@ -442,7 +448,7 @@ th, td {
   color: var(--muted);
 }
 
-/* 학생별 체크 목록 — 왼쪽에 결석/지각 등 체크박스와 학생명(아래쪽)을
+/* 학생별 체크 목록 — 왼쪽에 학생명(위쪽)과 결석/지각 등 체크박스를
    세로로 쌓고, 오른쪽에 개별 안내사항 텍스트창을 배치한다. 텍스트창을
    작게(2줄) 시작해 목록 전체가 길어지지 않게 하되, resize로 필요할 때만
    늘릴 수 있게 한다 — class-record-layout 오른쪽 패널 자체가 이미

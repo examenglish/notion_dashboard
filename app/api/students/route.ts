@@ -7,7 +7,8 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q") ?? "";
   const classId = req.nextUrl.searchParams.get("classId") ?? undefined;
-  const students = await searchStudents(q, classId);
+  const includeInactive = req.nextUrl.searchParams.get("includeInactive") === "1";
+  const students = await searchStudents(q, classId, includeInactive);
   return NextResponse.json(students);
 }
 

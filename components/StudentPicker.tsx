@@ -13,11 +13,16 @@ export default function StudentPicker({
   onChange,
   label = "학생 검색",
   allowEmpty = false,
+  includeInactive = false,
 }: {
   studentId: string;
   onChange: (id: string) => void;
   label?: string;
   allowEmpty?: boolean;
+  // 퇴원/휴원 학생도 검색되게 한다 — 상태를 되돌려야 하는 학생 정보수정
+  // 화면에서만 켠다. 기본은 꺼져 있어(모든 노출에서 제외) 다른 모든
+  // StudentPicker는 자동으로 재원/대기생만 보여준다.
+  includeInactive?: boolean;
 }) {
   const [text, setText] = useState("");
   const [options, setOptions] = useState<StudentOption[]>([]);
@@ -32,7 +37,7 @@ export default function StudentPicker({
 
   useEffect(() => {
     const handle = setTimeout(() => {
-      fetch(`/api/students?q=${encodeURIComponent(text)}`)
+      fetch(`/api/students?q=${encodeURIComponent(text)}${includeInactive ? "&includeInactive=1" : ""}`)
         .then((r) => r.json())
         .then((list: StudentOption[]) => {
           setOptions(list);
@@ -40,7 +45,7 @@ export default function StudentPicker({
         });
     }, 200);
     return () => clearTimeout(handle);
-  }, [text]);
+  }, [text, includeInactive]);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
