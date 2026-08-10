@@ -44,7 +44,10 @@ function ClassRecordForm() {
   const [extraPickerId, setExtraPickerId] = useState("");
   const [loadingRoster, setLoadingRoster] = useState(false);
   const [perStudent, setPerStudent] = useState<
-    Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean; late: boolean }>
+    Record<
+      string,
+      { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean; late: boolean; individualNotice: string }
+    >
   >({});
   const [showPreview, setShowPreview] = useState(false);
   const [done, setDone] = useState(false);
@@ -85,7 +88,7 @@ function ClassRecordForm() {
         setExtraStudents([]); // switching class clears any manually-called-up guests
         setPerStudent(
           Object.fromEntries(
-            list.map((s) => [s.id, { vocabFail: false, homeworkIncomplete: false, absent: false, late: false }])
+            list.map((s) => [s.id, { vocabFail: false, homeworkIncomplete: false, absent: false, late: false, individualNotice: "" }])
           )
         );
       })
@@ -136,7 +139,7 @@ function ClassRecordForm() {
       setPerStudent((cur) => {
         const next = { ...cur };
         for (const sid of rec.studentIds ?? []) {
-          next[sid] = rec.perStudent[sid] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
+          next[sid] = rec.perStudent[sid] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false, individualNotice: "" };
         }
         return next;
       });
@@ -169,7 +172,7 @@ function ClassRecordForm() {
       .then((r) => r.json())
       .then((data: { student: { id: string; name: string } }) => {
         setExtraStudents((cur) => [...cur, { id: data.student.id, name: data.student.name }]);
-        setPerStudent((cur) => ({ ...cur, [id]: { vocabFail: false, homeworkIncomplete: false, absent: false, late: false } }));
+        setPerStudent((cur) => ({ ...cur, [id]: { vocabFail: false, homeworkIncomplete: false, absent: false, late: false, individualNotice: "" } }));
       });
     setExtraPickerId("");
   }
@@ -197,6 +200,10 @@ function ClassRecordForm() {
       if (nextValue && key === "late") next.absent = false;
       return { ...cur, [studentId]: next };
     });
+  }
+
+  function setIndividualNotice(studentId: string, value: string) {
+    setPerStudent((cur) => ({ ...cur, [studentId]: { ...cur[studentId], individualNotice: value } }));
   }
 
   function handleOpenPreview() {
@@ -388,49 +395,63 @@ function ClassRecordForm() {
                 const isExtra = extraStudents.some((e) => e.id === s.id);
                 return (
                   <div key={s.id} className="roster-check-row">
-                    <span>
-                      {s.name}
-                      {isExtra && <span className="badge" style={{ marginLeft: 6 }}>다른반</span>}
-                    </span>
-                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={perStudent[s.id]?.absent ?? false}
-                          onChange={() => toggleFlag(s.id, "absent")}
-                        />
-                        결석
-                      </label>
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={perStudent[s.id]?.late ?? false}
-                          onChange={() => toggleFlag(s.id, "late")}
-                        />
-                        지각
-                      </label>
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={perStudent[s.id]?.vocabFail ?? false}
-                          onChange={() => toggleFlag(s.id, "vocabFail")}
-                        />
-                        단어미통과
-                      </label>
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={perStudent[s.id]?.homeworkIncomplete ?? false}
-                          onChange={() => toggleFlag(s.id, "homeworkIncomplete")}
-                        />
-                        과제미완료
-                      </label>
-                      {isExtra && (
-                        <button type="button" className="secondary" onClick={() => removeExtraStudent(s.id)}>
-                          제거
-                        </button>
-                      )}
+                    <div className="roster-check-left">
+                      <div className="roster-check-flags">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={perStudent[s.id]?.absent ?? false}
+                            onChange={() => toggleFlag(s.id, "absent")}
+                          />
+                          결석
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={perStudent[s.id]?.late ?? false}
+                            onChange={() => toggleFlag(s.id, "late")}
+                          />
+                          지각
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={perStudent[s.id]?.vocabFail ?? false}
+                            onChange={() => toggleFlag(s.id, "vocabFail")}
+                          />
+                          단어미통과
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={perStudent[s.id]?.homeworkIncomplete ?? false}
+                            onChange={() => toggleFlag(s.id, "homeworkIncomplete")}
+                          />
+                          과제미완료
+                        </label>
+                      </div>
+                      <div className="roster-check-name">
+                        {s.name}
+                        {isExtra && <span className="badge" style={{ marginLeft: 6 }}>다른반</span>}
+                      </div>
                     </div>
+                    <textarea
+                      className="roster-check-notice"
+                      rows={2}
+                      placeholder="개별 안내사항"
+                      value={perStudent[s.id]?.individualNotice ?? ""}
+                      onChange={(e) => setIndividualNotice(s.id, e.target.value)}
+                    />
+                    {isExtra && (
+                      <button
+                        type="button"
+                        className="secondary"
+                        style={{ alignSelf: "flex-start" }}
+                        onClick={() => removeExtraStudent(s.id)}
+                      >
+                        제거
+                      </button>
+                    )}
                   </div>
                 );
               })}
