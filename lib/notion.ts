@@ -1146,6 +1146,7 @@ export async function createClassProgress(input: {
         notice: input.notice,
         vocabFail: flags.vocabFail,
         homeworkIncomplete: flags.homeworkIncomplete,
+        individualNotice: flags.individualNotice,
       });
     const briefing = await notion.pages.create({
       parent: { data_source_id: DB.BRIEFING } as any,
@@ -1363,6 +1364,7 @@ export async function updateClassProgress(input: {
           notice: input.notice ?? "",
           vocabFail: flags.vocabFail,
           homeworkIncomplete: flags.homeworkIncomplete,
+          individualNotice: flags.individualNotice,
         });
         await notion.pages.create({
           parent: { data_source_id: DB.BRIEFING } as any,

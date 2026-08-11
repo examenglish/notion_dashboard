@@ -12,6 +12,7 @@ export function formatBriefingText(input: {
   notice: string;
   vocabFail: boolean;
   homeworkIncomplete: boolean;
+  individualNotice?: string;
 }): string {
   const [y, m, d] = input.date.split("-").map(Number);
   const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
@@ -27,5 +28,6 @@ export function formatBriefingText(input: {
     `- 과제 수행: ${input.homeworkIncomplete ? "미완료" : "완료"}`
   );
   if (input.notice) lines.push(`- 전달사항: ${input.notice}`);
+  if (input.individualNotice) lines.push(`- 개별 안내사항: ${input.individualNotice}`);
   return lines.join("\n");
 }
