@@ -19,15 +19,21 @@ export function formatBriefingText(input: {
   const lines = [
     `안녕하세요. 이그잼영어학원입니다. ${m}/${d}(${weekday}) ${input.className} ${input.studentName} 학생 데일리브리핑입니다.`,
     "",
-    `- 진도: ${input.progress || "-"}`,
-    `- 과제: ${input.homework || "-"}`,
+    "【진도】",
+    input.progress || "-",
+    "",
+    "【과제】",
+    input.homework || "-",
   ];
-  if (input.nextAssignment) lines.push(`- 다음시간 테스트: ${input.nextAssignment}`);
+  if (input.nextAssignment) {
+    lines.push("", "【다음시간 테스트】", input.nextAssignment);
+  }
   lines.push(
-    `- 단어테스트: ${input.vocabFail ? "미통과 (재시험 필요)" : "통과"}`,
-    `- 과제 수행: ${input.homeworkIncomplete ? "미완료" : "완료"}`
+    "",
+    `단어테스트: ${input.vocabFail ? "미통과 (재시험 필요)" : "통과"}`,
+    `과제 수행: ${input.homeworkIncomplete ? "미완료" : "완료"}`
   );
-  if (input.notice) lines.push(`- 전달사항: ${input.notice}`);
-  if (input.individualNotice) lines.push(`- 개별 안내사항: ${input.individualNotice}`);
+  if (input.notice) lines.push(`전달사항: ${input.notice}`);
+  if (input.individualNotice) lines.push(`개별 안내사항: ${input.individualNotice}`);
   return lines.join("\n");
 }
