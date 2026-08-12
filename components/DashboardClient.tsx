@@ -124,6 +124,8 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
   const [clinicMineOnly, setClinicMineOnly] = useState(staffRole === "강사");
   const [editingCounseling, setEditingCounseling] = useState<CounselingItem | null>(null);
   const [viewingAdminInbox, setViewingAdminInbox] = useState<AdminInboxItem | null>(null);
+  const [viewingClinicRecord, setViewingClinicRecord] = useState<ClinicItem | null>(null);
+  const [viewingClinicCompliance, setViewingClinicCompliance] = useState<ClinicComplianceItem | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [inboxQuery, setInboxQuery] = useState("");
   const [inboxType, setInboxType] = useState("");
@@ -536,6 +538,7 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
         items={filteredClinicRecords}
         totalCount={clinicRecords.length}
         keyOf={(i) => i.id}
+        onItemClick={(i) => setViewingClinicRecord(i)}
         emptyText={clinicMineOnly ? "나에게 검토 요청된 클리닉 기록이 없습니다." : "클리닉 기록이 없습니다."}
         filters={
           <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
@@ -569,6 +572,7 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
         title="클리닉 지시 이행 확인"
         items={sortedClinicCompliance}
         keyOf={(i) => i.id}
+        onItemClick={(i) => setViewingClinicCompliance(i)}
         emptyText="최근 2주 내 지시된 클리닉이 없습니다."
         renderItem={(i) => (
           <>
@@ -664,6 +668,62 @@ export default function DashboardClient({ staffName, staffRole }: { staffName: s
           onClose={() => setEditingCounseling(null)}
           onSaved={reloadCounseling}
         />
+      )}
+
+      {viewingClinicRecord && (
+        <div className="modal-backdrop" onClick={() => setViewingClinicRecord(null)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>조교 클리닉 기록</h2>
+              <button type="button" className="secondary" onClick={() => setViewingClinicRecord(null)}>
+                닫기
+              </button>
+            </div>
+            <p className="muted">
+              {viewingClinicRecord.date ?? "-"} · 조교: {viewingClinicRecord.assistantName}
+              {viewingClinicRecord.teacherName !== "-" && <> · 담당강사: {viewingClinicRecord.teacherName}</>}
+              {" · "}
+              {viewingClinicRecord.checked ? "확인완료" : "미확인"}
+            </p>
+            <p><strong>학생</strong>: {viewingClinicRecord.studentNames.join(", ") || "-"}</p>
+            <p style={{ whiteSpace: "pre-wrap" }}><strong>진행내용</strong><br />{viewingClinicRecord.content || "-"}</p>
+            {viewingClinicRecord.nextPrep && (
+              <p style={{ whiteSpace: "pre-wrap" }}><strong>다음 준비사항</strong><br />{viewingClinicRecord.nextPrep}</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {viewingClinicCompliance && (
+        <div className="modal-backdrop" onClick={() => setViewingClinicCompliance(null)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>클리닉 지시 이행 확인</h2>
+              <button type="button" className="secondary" onClick={() => setViewingClinicCompliance(null)}>
+                닫기
+              </button>
+            </div>
+            <p className="muted">
+              {viewingClinicCompliance.date ?? "-"} · 담당조교: {viewingClinicCompliance.assistant}
+              {" · "}
+              {viewingClinicCompliance.overdue ? "미이행" : viewingClinicCompliance.done ? "완료" : "진행 예정"}
+            </p>
+            <p><strong>학생</strong>: {viewingClinicCompliance.studentName}</p>
+            <p style={{ whiteSpace: "pre-wrap" }}><strong>지시사항</strong><br />{viewingClinicCompliance.instruction || "-"}</p>
+            {viewingClinicCompliance.report ? (
+              <>
+                <p style={{ whiteSpace: "pre-wrap" }}><strong>조교 보고 (진행내용)</strong><br />{viewingClinicCompliance.report.content || "-"}</p>
+                {viewingClinicCompliance.report.nextPrep && (
+                  <p style={{ whiteSpace: "pre-wrap" }}><strong>다음 준비사항</strong><br />{viewingClinicCompliance.report.nextPrep}</p>
+                )}
+              </>
+            ) : (
+              viewingClinicCompliance.done && (
+                <p className="muted">연결된 보고 없이 완료 처리됨(체크박스로 바로 완료했거나 자율 기록으로 연결 안 함)</p>
+              )
+            )}
+          </div>
+        </div>
       )}
 
       {viewingAdminInbox && (
