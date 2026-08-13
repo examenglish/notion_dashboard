@@ -2147,6 +2147,31 @@ export async function getAssistantBrief(assistantId: string, date: string) {
   };
 }
 
+// 조교 본인의 클리닉 기록을 날짜로 검색 — getAssistantBrief의 "최근 5건"에는
+// 없는 지나간 날짜의 기록도 조교 스스로 찾아서 고칠 수 있게 한다.
+export async function getAssistantClinicRecordsByDate(assistantId: string, date: string) {
+  const [records, names] = await Promise.all([
+    queryAllPages({
+      data_source_id: DB.CLINIC,
+      filter: {
+        and: [
+          { property: "조교", relation: { contains: assistantId } },
+          { property: "날짜", date: { equals: date } },
+        ],
+      },
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
+    }),
+    studentNameMap(),
+  ]);
+  return records.map((p: any) => ({
+    id: p.id,
+    date: getDate(p, "날짜"),
+    studentNames: getRelationIds(p, "담당학생").map((id) => names.get(id) ?? "-"),
+    content: getRichText(p, "진행내용"),
+    nextPrep: getRichText(p, "다음준비사항"),
+  }));
+}
+
 // 담당강사/원장/행정이 조교들의 클리닉 활동 전체를 훑어보고 확인 체크하는 용도.
 export async function getRecentClinicRecords() {
   const [results, staffMap, studentNames] = await Promise.all([

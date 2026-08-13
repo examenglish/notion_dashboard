@@ -64,12 +64,40 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const canDelete = role === "원장";
 
+  // "최근 내 클리닉 기록"은 최신 5건만 보여줘서, 그보다 오래된 지난 일정을
+  // 고치려면 방법이 없었다 — 날짜를 직접 지정해 본인이 그날 작성한 기록을
+  // 찾아서 같은 방식으로 수정/삭제할 수 있게 한다.
+  const [lookupDate, setLookupDate] = useState(todayKST());
+  const [lookupResults, setLookupResults] = useState<ClinicHistoryItem[] | null>(null);
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+
   function loadBrief() {
     fetch("/api/assistant-brief")
       .then((r) => r.json())
       .then((data) => setBrief(data && !data.error ? data : null))
       .catch(() => setBrief(null))
       .finally(() => setLoading(false));
+  }
+
+  function runLookup() {
+    if (!lookupDate) return;
+    setLookupLoading(true);
+    setLookupError(null);
+    fetch(`/api/clinic-records/mine?date=${lookupDate}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) setLookupResults(data);
+        else {
+          setLookupResults([]);
+          setLookupError(data.error ?? "조회에 실패했습니다.");
+        }
+      })
+      .catch(() => {
+        setLookupResults([]);
+        setLookupError("네트워크 오류가 발생했습니다.");
+      })
+      .finally(() => setLookupLoading(false));
   }
 
   useEffect(() => {
@@ -196,6 +224,7 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
       }
       setEditingId(null);
       loadBrief();
+      if (lookupResults) runLookup();
     } catch {
       setEditError("네트워크 오류가 발생했습니다.");
     } finally {
@@ -214,11 +243,71 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
         return;
       }
       loadBrief();
+      if (lookupResults) runLookup();
     } catch {
       setEditError("네트워크 오류가 발생했습니다.");
     } finally {
       setDeletingId(null);
     }
+  }
+
+  // "최근 내 클리닉 기록"과 "지난 기록 조회" 두 목록이 같은 수정/삭제 UI를
+  // 쓰므로 행 렌더링을 공유한다.
+  function renderClinicRow(c: ClinicHistoryItem) {
+    if (editingId === c.id) {
+      return (
+        <li key={c.id}>
+          <strong>{c.date ?? "-"}</strong> <span className="muted">{c.studentNames.join(", ")}</span>
+          <textarea
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            placeholder="진행 내용"
+            style={{ minHeight: 60, marginTop: 4 }}
+          />
+          <textarea
+            value={editNextPrep}
+            onChange={(e) => setEditNextPrep(e.target.value)}
+            placeholder="다음 준비사항"
+            style={{ minHeight: 40, marginTop: 4 }}
+          />
+          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+            <button type="button" disabled={editSaving} onClick={() => saveEdit(c.id)}>
+              {editSaving ? "저장 중..." : "저장"}
+            </button>
+            <button type="button" className="secondary" onClick={cancelEdit}>취소</button>
+          </div>
+        </li>
+      );
+    }
+    return (
+      <li key={c.id}>
+        <strong>{c.date ?? "-"}</strong> <span className="muted">{c.studentNames.join(", ")}</span>
+        <span style={{ display: "inline-flex", gap: 6, marginLeft: 8 }}>
+          <button
+            type="button"
+            className="secondary"
+            style={{ padding: "2px 8px", fontSize: 12 }}
+            onClick={() => startEdit(c)}
+          >
+            수정
+          </button>
+          {canDelete && (
+            <button
+              type="button"
+              className="secondary"
+              style={{ padding: "2px 8px", fontSize: 12 }}
+              disabled={deletingId === c.id}
+              onClick={() => deleteRecord(c.id)}
+            >
+              {deletingId === c.id ? "삭제 중..." : "삭제"}
+            </button>
+          )}
+        </span>
+        <br />
+        {c.content}
+        {c.nextPrep && <div className="muted">다음: {c.nextPrep}</div>}
+      </li>
+    );
   }
 
   return (
@@ -374,63 +463,46 @@ export default function AssistantClinicForm({ role }: { role?: string | null } =
         <div className="card">
           <h2>최근 내 클리닉 기록 <span className="title-lab-tag">(실험실)</span></h2>
           {editError && <p className="error-text">{editError}</p>}
-          <ul className="schedule-list">
-            {brief.recentClinic.map((c) =>
-              editingId === c.id ? (
-                <li key={c.id}>
-                  <strong>{c.date ?? "-"}</strong> <span className="muted">{c.studentNames.join(", ")}</span>
-                  <textarea
-                    value={editContent}
-                    onChange={(e) => setEditContent(e.target.value)}
-                    placeholder="진행 내용"
-                    style={{ minHeight: 60, marginTop: 4 }}
-                  />
-                  <textarea
-                    value={editNextPrep}
-                    onChange={(e) => setEditNextPrep(e.target.value)}
-                    placeholder="다음 준비사항"
-                    style={{ minHeight: 40, marginTop: 4 }}
-                  />
-                  <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                    <button type="button" disabled={editSaving} onClick={() => saveEdit(c.id)}>
-                      {editSaving ? "저장 중..." : "저장"}
-                    </button>
-                    <button type="button" className="secondary" onClick={cancelEdit}>취소</button>
-                  </div>
-                </li>
-              ) : (
-                <li key={c.id}>
-                  <strong>{c.date ?? "-"}</strong> <span className="muted">{c.studentNames.join(", ")}</span>
-                  <span style={{ display: "inline-flex", gap: 6, marginLeft: 8 }}>
-                    <button
-                      type="button"
-                      className="secondary"
-                      style={{ padding: "2px 8px", fontSize: 12 }}
-                      onClick={() => startEdit(c)}
-                    >
-                      수정
-                    </button>
-                    {canDelete && (
-                      <button
-                        type="button"
-                        className="secondary"
-                        style={{ padding: "2px 8px", fontSize: 12 }}
-                        disabled={deletingId === c.id}
-                        onClick={() => deleteRecord(c.id)}
-                      >
-                        {deletingId === c.id ? "삭제 중..." : "삭제"}
-                      </button>
-                    )}
-                  </span>
-                  <br />
-                  {c.content}
-                  {c.nextPrep && <div className="muted">다음: {c.nextPrep}</div>}
-                </li>
-              )
-            )}
-          </ul>
+          <ul className="schedule-list">{brief.recentClinic.map(renderClinicRow)}</ul>
         </div>
       )}
+
+      <div className="card">
+        <h2>지난 기록 조회·수정 <span className="title-lab-tag">(실험실)</span></h2>
+        <p className="muted">
+          최근 5건에 없는 지나간 날짜의 내 클리닉 기록도 날짜로 찾아서 직접 수정·추가할 수 있습니다.
+        </p>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div>
+            <label htmlFor="lookupDate">날짜</label>
+            <input
+              id="lookupDate"
+              type="date"
+              value={lookupDate}
+              onChange={(e) => setLookupDate(e.target.value)}
+            />
+          </div>
+          <button type="button" className="secondary" disabled={lookupLoading} onClick={runLookup}>
+            {lookupLoading ? "조회 중..." : "조회"}
+          </button>
+        </div>
+
+        {lookupError && <p className="error-text">{lookupError}</p>}
+        {editError && <p className="error-text">{editError}</p>}
+
+        {lookupResults && lookupResults.length === 0 && !lookupLoading && (
+          <p className="muted" style={{ marginTop: 8 }}>
+            {lookupDate}에 작성한 클리닉 기록이 없습니다. 위쪽 "클리닉 기록 작성"에서 날짜를
+            {" "}{lookupDate}로 바꿔 새로 추가할 수 있습니다.
+          </p>
+        )}
+
+        {lookupResults && lookupResults.length > 0 && (
+          <ul className="schedule-list" style={{ marginTop: 8 }}>
+            {lookupResults.map(renderClinicRow)}
+          </ul>
+        )}
+      </div>
     </>
   );
 }
