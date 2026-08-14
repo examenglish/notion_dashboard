@@ -760,12 +760,16 @@ function ExamPrepEditor({
   );
 }
 
+type StudentBrief = { id: string; name: string; school: string; grade: string | null };
+
 export default function ExamPrepClient() {
   const [overview, setOverview] = useState<OverviewRow[]>([]);
   const [loadingOverview, setLoadingOverview] = useState(true);
   const [studentId, setStudentId] = useState("");
   const [levelFilter, setLevelFilter] = useState<"" | SchoolLevel>("");
   const [query, setQuery] = useState("");
+  const [allStudents, setAllStudents] = useState<StudentBrief[]>([]);
+  const [selectedSchool, setSelectedSchool] = useState("");
 
   function reloadOverview() {
     fetch("/api/exam-prep")
@@ -776,7 +780,25 @@ export default function ExamPrepClient() {
 
   useEffect(() => {
     reloadOverview();
+    fetch("/api/students?q=")
+      .then((r) => r.json())
+      .then((list: StudentBrief[]) => setAllStudents(Array.isArray(list) ? list : []));
   }, []);
+
+  // 학교 선택 → 학생 선택 2단계로 좁혀갈 수 있게, 학생 명단에서 학교 목록을
+  // 뽑아둔다. 이름 검색(StudentPicker)만으로는 "이 학교 학생 중에서 고르고
+  // 싶다"는 흐름이 안 돼서 추가했다 — 기존 이름검색은 그대로 남겨둔다.
+  const schools = useMemo(() => {
+    const set = new Set(allStudents.map((s) => s.school).filter(Boolean));
+    return Array.from(set).sort();
+  }, [allStudents]);
+
+  const schoolStudents = useMemo(() => {
+    if (!selectedSchool) return [];
+    return allStudents
+      .filter((s) => s.school === selectedSchool)
+      .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  }, [allStudents, selectedSchool]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -795,6 +817,41 @@ export default function ExamPrepClient() {
           부교재/학교프린트를 자동으로 불러와 표기를 통일합니다. 아래 현황판에서 진행률이 낮은 순으로 취약 학생을 바로
           확인할 수 있습니다.
         </p>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+          <div style={{ minWidth: 160 }}>
+            <label>학교 선택</label>
+            <select
+              value={selectedSchool}
+              onChange={(e) => {
+                setSelectedSchool(e.target.value);
+                setStudentId("");
+              }}
+            >
+              <option value="">학교를 선택하세요</option>
+              {schools.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div style={{ minWidth: 200 }}>
+            <label>학생 선택</label>
+            <select
+              value={studentId}
+              onChange={(e) => setStudentId(e.target.value)}
+              disabled={!selectedSchool}
+            >
+              <option value="">{selectedSchool ? "학생을 선택하세요" : "학교를 먼저 선택하세요"}</option>
+              {schoolStudents.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} {s.grade ?? ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <p className="muted" style={{ margin: "0 0 6px" }}>또는 이름으로 바로 검색:</p>
         <StudentPicker studentId={studentId} onChange={setStudentId} label="학생 검색" />
       </div>
 
