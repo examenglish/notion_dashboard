@@ -9,14 +9,15 @@ export default async function TopBar({
   active: "dashboard" | "input" | "exam-prep" | "student-levels";
 }) {
   const session = await getSession();
+  const dashboardHref = session?.role === "원장" ? "/director" : "/dashboard";
   return (
     <div className="topbar">
-      <Link href="/dashboard" className="topbar-logo">
+      <Link href={dashboardHref} className="topbar-logo">
         <Image src="/logo.png" alt="이그잼영어학원" width={843} height={157} priority style={{ height: 32, width: "auto" }} />
       </Link>
       <span className="topbar-branch">{process.env.NEXT_PUBLIC_BRANCH_NAME ?? "이그잼영어학원"}</span>
       <nav>
-        <Link href="/dashboard" className={`navlink ${active === "dashboard" ? "active" : ""}`}>
+        <Link href={dashboardHref} className={`navlink ${active === "dashboard" ? "active" : ""}`}>
           대시보드
         </Link>
         <Link href="/input" className={`navlink ${active === "input" ? "active" : ""}`}>
