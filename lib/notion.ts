@@ -875,6 +875,62 @@ export async function getDailyOutcomeBreakdown(date: string) {
   return { attendance, vocab, homework };
 }
 
+export type DailyOutcomeStudent = {
+  studentId: string;
+  studentName: string;
+  school: string;
+  grade: string | null;
+  className: string;
+};
+
+// 원장 대시보드 "오늘 결석"/"미완료 과제" 타일의 더보기 팝업용 — 이름까지
+// 필요해서 집계 카운트만 내는 getDailyOutcomeBreakdown과는 별도로 둔다.
+// getAbsenceReviewData와 달리 순수 조회만 하고 보강요청을 만들지 않는다.
+export async function getDailyOutcomeDetail(date: string): Promise<{
+  absentStudents: DailyOutcomeStudent[];
+  incompleteHomeworkStudents: DailyOutcomeStudent[];
+}> {
+  const [records, students, classes] = await Promise.all([
+    queryAllPages({
+      data_source_id: DB.DAILY_RECORD,
+      filter: { property: "날짜", date: { equals: date } },
+    }),
+    searchStudents(""),
+    listClasses(),
+  ]);
+  const studentMap = new Map(students.map((s) => [s.id, s]));
+  const classMap = new Map(classes.map((c) => [c.id, c]));
+
+  function resolve(r: any): DailyOutcomeStudent | null {
+    const studentId = getRelationIds(r, "학생")[0];
+    if (!studentId) return null;
+    const student = studentMap.get(studentId);
+    const classId = getRelationIds(r, "반")[0];
+    const cls = classId ? classMap.get(classId) : undefined;
+    return {
+      studentId,
+      studentName: student?.name ?? "-",
+      school: student?.school ?? "",
+      grade: student?.grade ?? null,
+      className: cls ? stripClassSuffix(cls.name) : "-",
+    };
+  }
+
+  const absentStudents: DailyOutcomeStudent[] = [];
+  const incompleteHomeworkStudents: DailyOutcomeStudent[] = [];
+  for (const r of records as any[]) {
+    if (getSelect(r, "출결") === "결석") {
+      const s = resolve(r);
+      if (s) absentStudents.push(s);
+    }
+    if (!getCheckbox(r, "과제여부")) {
+      const s = resolve(r);
+      if (s) incompleteHomeworkStudents.push(s);
+    }
+  }
+  return { absentStudents, incompleteHomeworkStudents };
+}
+
 // "오늘의 일정": alarms + new-student events + makeup/retest sessions due today.
 // Grade strings look like "중2"/"고1" — several 오늘의 일정 sections only
 // want the trailing digit ("2"/"1"), not the level prefix.

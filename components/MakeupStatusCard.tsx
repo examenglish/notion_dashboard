@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { todayKST } from "@/lib/date";
 import ScheduleConfirmModal from "./ScheduleConfirmModal";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 
 export type MakeupScheduleItem = {
   id: string;
@@ -176,9 +177,16 @@ const PREVIEW_SIZE = 5;
 export default function MakeupStatusCard({
   role,
   onChanged,
+  variant = "legacy",
 }: {
   role?: string | null;
   onChanged?: () => void;
+  // "embed": used inside the new /director shadcn-style dashboard grid — needs
+  // the new Card shell and a visible empty state so the grid cell doesn't just
+  // vanish (a bare `return null` leaves an unexplained blank gap next to the
+  // other cards). "legacy": unchanged behavior for the old InputClient/
+  // DashboardClient screens, which still use app/globals.css's `.card`.
+  variant?: "legacy" | "embed";
 } = {}) {
   // 삭제는 서버(app/api/schedule-entry/[id]/route.ts DELETE)도 원장·행정만
   // 허용한다 — 여기서도 같은 기준으로 버튼을 보여준다.
@@ -206,33 +214,60 @@ export default function MakeupStatusCard({
     onChanged?.();
   }
 
-  if (items.length === 0) return null;
+  if (items.length === 0 && variant === "legacy") return null;
 
   const unconfirmed = items.filter((i) => !i.confirmed);
   const confirmed = items.filter((i) => i.confirmed);
   const sorted = [...unconfirmed, ...confirmed];
   const preview = sorted.slice(0, PREVIEW_SIZE);
+  const title = scope === "all" ? "보강·재시 확정 현황 (전체)" : "내 보강·재시 확정 현황";
+
+  const body = (
+    <>
+      {items.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">표시할 항목이 없습니다.</p>
+      ) : (
+        <>
+          {unconfirmed.length > 0 && (
+            <button type="button" className="secondary" onClick={() => setConfirmModalItems(unconfirmed)}>
+              미확정 {unconfirmed.length}건 처리하기
+            </button>
+          )}
+          <ul className="schedule-list" style={{ marginTop: 12 }}>
+            {preview.map((item) => (
+              <MakeupRow key={item.id} item={item} showOwner={scope === "all"} canDelete={canDelete} onChanged={handleChanged} />
+            ))}
+          </ul>
+          {sorted.length > PREVIEW_SIZE && (
+            <button type="button" className="secondary schedule-more-btn" onClick={() => setPopupOpen(true)}>
+              더보기
+            </button>
+          )}
+        </>
+      )}
+    </>
+  );
 
   return (
-    <div className="card">
-      <h2>{scope === "all" ? "보강·재시 확정 현황 (전체)" : "내 보강·재시 확정 현황"}</h2>
-      <p className="muted">
-        확정 {confirmed.length}건 · 미확정 {unconfirmed.length}건
-      </p>
-      {unconfirmed.length > 0 && (
-        <button type="button" className="secondary" onClick={() => setConfirmModalItems(unconfirmed)}>
-          미확정 {unconfirmed.length}건 처리하기
-        </button>
-      )}
-      <ul className="schedule-list" style={{ marginTop: 12 }}>
-        {preview.map((item) => (
-          <MakeupRow key={item.id} item={item} showOwner={scope === "all"} canDelete={canDelete} onChanged={handleChanged} />
-        ))}
-      </ul>
-      {sorted.length > PREVIEW_SIZE && (
-        <button type="button" className="secondary schedule-more-btn" onClick={() => setPopupOpen(true)}>
-          더보기
-        </button>
+    <>
+      {variant === "embed" ? (
+        <Card className="flex flex-col">
+          <CardHeader>
+            <CardTitle>{title}</CardTitle>
+            <span className="text-xs font-medium text-muted-foreground">
+              확정 {confirmed.length}건 · 미확정 {unconfirmed.length}건
+            </span>
+          </CardHeader>
+          <CardContent className="flex-1 pt-0.5">{body}</CardContent>
+        </Card>
+      ) : (
+        <div className="card">
+          <h2>{title}</h2>
+          <p className="muted">
+            확정 {confirmed.length}건 · 미확정 {unconfirmed.length}건
+          </p>
+          {body}
+        </div>
       )}
 
       {popupOpen && (
@@ -263,6 +298,6 @@ export default function MakeupStatusCard({
           onChanged={handleChanged}
         />
       )}
-    </div>
+    </>
   );
 }

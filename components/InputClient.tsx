@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import StudentPicker from "./StudentPicker";
 import StaffPicker from "./StaffPicker";
 import DailyBriefingPreviewModal from "./DailyBriefingPreviewModal";
@@ -1076,7 +1077,12 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
     ] as { key: TabKey; label: string; show: boolean }[]
   ).filter((t) => t.show);
 
-  const [tab, setTab] = useState<TabKey>("schedule");
+  // 좌측 사이드바 트리 메뉴("입력 > 일정 등록" 등)에서 ?tab=records 식으로
+  // 특정 탭에 바로 딥링크할 수 있게 초기값만 URL에서 읽는다 — 이후 탭 전환은
+  // 기존처럼 로컬 상태로만 처리(URL은 굳이 갱신하지 않음).
+  const searchParams = useSearchParams();
+  const initialTab = (searchParams.get("tab") as TabKey | null) ?? "schedule";
+  const [tab, setTab] = useState<TabKey>(initialTab);
   const activeTab = tabs.some((t) => t.key === tab) ? tab : tabs[0].key;
 
   return (

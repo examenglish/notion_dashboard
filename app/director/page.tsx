@@ -1,12 +1,10 @@
 import { redirect } from "next/navigation";
-import { Users, CheckCircle2, XCircle, BookX, ClipboardX } from "lucide-react";
 import { getSession } from "@/lib/auth";
 import { todayKST, formatDateLabel } from "@/lib/date";
 import { searchStudents, getTodaySchedule, getDailyOutcomeBreakdown, listExamPrepOverview, getRecentCounseling } from "@/lib/notion";
 import DirectorSidebar from "@/components/director/DirectorSidebar";
 import DirectorTopbar from "@/components/director/DirectorTopbar";
-import StatTile from "@/components/director/StatTile";
-import ListCard, { ListRow } from "@/components/director/ListCard";
+import DirectorDashboardClient from "@/components/director/DirectorDashboardClient";
 
 const SCHEDULE_GROUPS: { key: string; label: string; detail: (item: any) => string }[] = [
   { key: "alarms", label: "조치사항", detail: (i) => i.content || "-" },
@@ -42,30 +40,41 @@ export default async function DirectorDashboardPage() {
     getRecentCounseling(),
   ]);
 
-  // 전체 학생 / 상태 breakdown
   const statusCounts = students.reduce<Record<string, number>>((acc, s) => {
     acc[s.status ?? "재원"] = (acc[s.status ?? "재원"] ?? 0) + 1;
     return acc;
   }, {});
 
-  // 오늘 출석/결석/재시험/과제
   const { attendance, vocab, homework } = dailyOutcome;
   const loggedToday = attendance.출석 + attendance.지각 + attendance.결석;
   const attendanceRatePct = loggedToday > 0 ? Math.round(((attendance.출석 + attendance.지각) / loggedToday) * 100) : null;
 
-  // 시험 일정 — 오늘부터 앞으로 21일 이내
   const upcomingExams = examPrepItems
     .filter((e) => e.examDate && daysUntil(e.examDate, today) >= 0 && daysUntil(e.examDate, today) <= 21)
     .sort((a, b) => (a.examDate! < b.examDate! ? -1 : 1))
-    .slice(0, 8);
+    .slice(0, 8)
+    .map((e) => ({
+      studentId: e.studentId,
+      studentName: e.studentName,
+      examTitle: e.examTitle || "시험대비",
+      school: e.school,
+      grade: e.grade ?? null,
+      dDay: daysUntil(e.examDate!, today),
+    }));
 
-  // 최근 성적 — latestExam이 있는 학생, 날짜 내림차순
   const recentGrades = students
     .filter((s) => s.latestExam)
     .sort((a, b) => (a.latestExam!.date < b.latestExam!.date ? 1 : -1))
-    .slice(0, 8);
+    .slice(0, 8)
+    .map((s) => ({
+      id: s.id,
+      name: s.name,
+      subject: s.latestExam!.subject ?? "",
+      examName: s.latestExam!.examName ?? "",
+      score: s.latestExam!.score ?? "-",
+      date: s.latestExam!.date,
+    }));
 
-  // 상담 필요 학생 — 재원 학생 중 상담 이력이 없거나 30일 이상 지난 학생
   const lastCounselingByStudent = new Map<string, string>();
   for (const c of counselingEntries) {
     if (!c.studentId || !c.date) continue;
@@ -83,7 +92,6 @@ export default async function DirectorDashboardPage() {
     .sort((a, b) => (b.gapDays ?? 9999) - (a.gapDays ?? 9999))
     .slice(0, 8);
 
-  // 오늘 일정 — 카테고리별 합산 + 상위 5건 미리보기
   const scheduleFlat = SCHEDULE_GROUPS.flatMap(({ key, label, detail }) =>
     ((todaySchedule as any)[key] as any[]).map((item) => ({
       label,
@@ -105,74 +113,22 @@ export default async function DirectorDashboardPage() {
             <p className="text-xs text-muted-foreground">{session.name} 원장님, 오늘 하루 현황입니다.</p>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-            <StatTile
-              icon={Users}
-              label="전체 학생"
-              value={`${students.length}명`}
-              sub={`재원 ${statusCounts["재원"] ?? 0}`}
-            />
-            <StatTile
-              icon={CheckCircle2}
-              label="오늘 출석"
-              value={attendanceRatePct !== null ? `${attendanceRatePct}%` : "-"}
-              sub={`${attendance.출석 + attendance.지각}/${loggedToday || 0}명 기록`}
-              tone="success"
-            />
-            <StatTile icon={XCircle} label="오늘 결석" value={`${attendance.결석}명`} tone="destructive" />
-            <StatTile icon={BookX} label="단어 재시험" value={`${vocab.재시험}명`} tone="warning" />
-            <StatTile icon={ClipboardX} label="미완료 과제" value={`${homework.미완료}명`} tone="warning" />
-          </div>
-
-          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <ListCard title="오늘 일정" countLabel={`전체 ${scheduleTotal}건`} empty={scheduleTotal === 0}>
-              {scheduleFlat.slice(0, 8).map((item, i) => (
-                <ListRow key={i} primary={`${item.studentName} · ${item.label}`} secondary={item.detail} />
-              ))}
-              {scheduleTotal > 8 && (
-                <p className="pt-1.5 text-[11px] text-muted-foreground">외 {scheduleTotal - 8}건 더 — 대시보드에서 전체 확인</p>
-              )}
-            </ListCard>
-
-            <ListCard title="시험 일정" countLabel="앞으로 21일" empty={upcomingExams.length === 0}>
-              {upcomingExams.map((e) => (
-                <ListRow
-                  key={e.studentId + e.examTitle}
-                  primary={`${e.studentName} · ${e.examTitle || "시험대비"}`}
-                  secondary={`${e.school} ${e.grade ?? ""}`}
-                  meta={`D-${daysUntil(e.examDate!, today)}`}
-                  tone={daysUntil(e.examDate!, today) <= 7 ? "destructive" : "default"}
-                />
-              ))}
-            </ListCard>
-
-            <ListCard title="최근 성적" empty={recentGrades.length === 0}>
-              {recentGrades.map((s) => (
-                <ListRow
-                  key={s.id}
-                  primary={s.name}
-                  secondary={`${s.latestExam!.subject ?? ""} ${s.latestExam!.examName ?? ""}`}
-                  meta={`${s.latestExam!.score ?? "-"}점 · ${s.latestExam!.date}`}
-                />
-              ))}
-            </ListCard>
-
-            <ListCard
-              title="상담 필요 학생"
-              countLabel="상담 30일 이상 공백"
-              empty={counselingGapStudents.length === 0}
-            >
-              {counselingGapStudents.map((s) => (
-                <ListRow
-                  key={s.id}
-                  primary={s.name}
-                  secondary={`${s.school} ${s.grade ?? ""}`}
-                  meta={s.lastCounseling ? `마지막 상담 ${s.lastCounseling}` : "상담 이력 없음"}
-                  tone="warning"
-                />
-              ))}
-            </ListCard>
-          </div>
+          <DirectorDashboardClient
+            today={today}
+            role={session.role ?? ""}
+            studentsCount={students.length}
+            activeStudentsCount={statusCounts["재원"] ?? 0}
+            attendanceRatePct={attendanceRatePct}
+            attendanceLoggedLabel={`${attendance.출석 + attendance.지각}/${loggedToday || 0}명 기록`}
+            absentCount={attendance.결석}
+            vocabRetestCount={vocab.재시험}
+            homeworkIncompleteCount={homework.미완료}
+            scheduleFlat={scheduleFlat}
+            scheduleTotal={scheduleTotal}
+            upcomingExams={upcomingExams}
+            recentGrades={recentGrades}
+            counselingGapStudents={counselingGapStudents}
+          />
         </main>
       </div>
     </div>
