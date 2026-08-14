@@ -1,13 +1,21 @@
 :root {
-  --bg: #f5f6f8;
+  --bg: #f2f4f8;
   --card: #ffffff;
-  --border: #e2e5ea;
-  --text: #1f2430;
+  --border: #e1e5ec;
+  --text: #14213d;
   --muted: #6b7280;
-  --primary: #2f6fed;
-  --primary-dark: #1f4fc7;
-  --danger: #e5484d;
-  --radius: 10px;
+  --primary: #004ea2;
+  --primary-dark: #003b7a;
+  --primary-tint: #e8f0fa;
+  --danger: #d6323c;
+  --danger-tint: #fbe6e7;
+  --success: #1a8a54;
+  --success-tint: #e2f7ea;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow-sm: 0 1px 2px rgba(20, 33, 61, 0.05);
+  --shadow-md: 0 8px 24px rgba(20, 33, 61, 0.08);
+  --font-mono: "SF Mono", ui-monospace, "Roboto Mono", monospace;
 }
 
 * {
@@ -20,6 +28,12 @@ body {
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
     "Noto Sans KR", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 a {
@@ -38,56 +52,87 @@ a {
   border-radius: var(--radius);
   padding: 20px;
   margin-bottom: 20px;
+  box-shadow: var(--shadow-sm);
 }
 
 .topbar {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 14px 20px;
+  gap: 14px;
+  padding: 12px 20px;
   background: var(--card);
   border-bottom: 1px solid var(--border);
   margin-bottom: 24px;
+}
+
+.topbar::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--primary);
 }
 
 .topbar nav {
   display: flex;
   gap: 16px;
   align-items: center;
+  margin-left: auto;
 }
 
 .topbar-logo {
   display: flex;
   align-items: center;
+  transition: opacity 0.15s ease;
+}
+
+.topbar-logo:hover {
+  opacity: 0.8;
 }
 
 .topbar-branch {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--primary-dark);
+  background: var(--primary-tint);
+  padding: 3px 10px;
+  border-radius: 999px;
 }
 
 .topbar a.navlink {
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   text-decoration: none;
   color: var(--muted);
   font-size: 14px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.topbar a.navlink:hover {
+  background: var(--bg);
+  color: var(--text);
 }
 
 .topbar a.navlink.active {
-  background: #eaf0ff;
+  background: var(--primary-tint);
   color: var(--primary-dark);
   font-weight: 600;
 }
 
 h1 {
   font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   margin: 0 0 4px;
 }
 
 h2 {
   font-size: 17px;
+  font-weight: 700;
   margin: 0 0 12px;
 }
 
@@ -114,8 +159,17 @@ h2 {
   max-width: 360px;
   background: var(--card);
   border: 1px solid var(--border);
+  border-top: 3px solid var(--primary);
   border-radius: var(--radius);
   padding: 32px;
+  box-shadow: var(--shadow-md);
+}
+
+.login-logo {
+  display: block;
+  height: 28px;
+  width: auto;
+  margin-bottom: 18px;
 }
 
 label {
@@ -133,10 +187,29 @@ textarea {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   font-size: 14px;
   background: #fff;
   color: var(--text);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+select:hover,
+input[type="text"]:hover,
+input[type="password"]:hover,
+input[type="date"]:hover,
+textarea:hover {
+  border-color: #c7cedb;
+}
+
+select:focus,
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="date"]:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-tint);
 }
 
 input[type="date"] {
@@ -221,27 +294,38 @@ textarea {
 button {
   cursor: pointer;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 10px 16px;
   font-size: 14px;
   font-weight: 600;
   background: var(--primary);
   color: #fff;
+  transition: background 0.15s ease, transform 0.05s ease;
 }
 
 button:hover {
   background: var(--primary-dark);
 }
 
+button:active {
+  transform: scale(0.98);
+}
+
 button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+  transform: none;
 }
 
 button.secondary {
   background: transparent;
   color: var(--muted);
   border: 1px solid var(--border);
+}
+
+button.secondary:hover {
+  background: var(--bg);
+  color: var(--text);
 }
 
 .error-text {
@@ -271,6 +355,23 @@ th, td {
   border-bottom: 1px solid var(--border);
 }
 
+.search-input-wrap {
+  position: relative;
+}
+
+.search-input-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.search-input-wrap input {
+  padding-left: 34px;
+}
+
 .student-row {
   display: flex;
   justify-content: space-between;
@@ -286,22 +387,23 @@ th, td {
 
 .badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 2px 9px;
   border-radius: 999px;
   font-size: 12px;
+  font-weight: 600;
   background: #eef1f6;
   color: var(--muted);
 }
 
 .badge-urgent {
-  background: #ffe3e3;
-  color: #c92a2a;
+  background: var(--danger-tint);
+  color: var(--danger);
   font-weight: 700;
 }
 
 .badge-success {
-  background: #d3f9d8;
-  color: #1a7f3c;
+  background: var(--success-tint);
+  color: var(--success);
   font-weight: 700;
 }
 
@@ -362,6 +464,7 @@ th, td {
   max-width: 640px;
   max-height: 85vh;
   overflow-y: auto;
+  box-shadow: var(--shadow-md);
   /* 담당자 자동완성 목록처럼 안쪽 콘텐츠가 순간적으로 스크롤 임계값을
      넘나들 때 스크롤바가 나타났다 사라지며 본문 폭이 흔들리는 걸 막는다. */
   scrollbar-gutter: stable;
@@ -652,13 +755,20 @@ th, td {
 }
 
 .sortable-table th {
+  position: sticky;
+  top: 0;
   text-align: left;
-  padding: 8px 10px;
+  padding: 9px 10px;
   border-bottom: 2px solid var(--border);
   cursor: pointer;
   user-select: none;
   color: var(--muted);
   white-space: nowrap;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--card);
 }
 
 .sortable-table th:hover {
@@ -670,28 +780,37 @@ th, td {
 }
 
 .sortable-table td {
-  padding: 8px 10px;
+  padding: 9px 10px;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .sortable-table tbody tr {
   cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.sortable-table tbody tr:nth-child(even) {
+  background: #fbfbfd;
 }
 
 .sortable-table tbody tr:hover {
-  background: #fafbfc;
+  background: var(--primary-tint);
 }
 
 .new-badge {
   display: inline-block;
   margin-left: 4px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-size: 11px;
+  padding: 1px 7px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-size: 10px;
   font-weight: 700;
-  background: #ffe3e3;
-  color: #c92a2a;
+  letter-spacing: 0.03em;
+  background: var(--danger-tint);
+  color: var(--danger);
+  transform: rotate(-4deg);
 }
 
 .table-scroll {

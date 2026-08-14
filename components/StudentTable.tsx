@@ -39,8 +39,8 @@ type SortKey = "attendanceRate" | "homeworkRate" | "vocabPassRate" | "tuitionDay
 const pct = (v: number | null) => (v === null ? "-" : `${Math.round(v * 100)}%`);
 
 const STATUS_COLORS: Record<string, string> = {
-  재원: "#22c55e",
-  대기생: "#2f6fed",
+  재원: "#1a8a54",
+  대기생: "#004ea2",
   휴원: "#f59e0b",
   퇴원: "#94a3b8",
 };
@@ -181,12 +181,18 @@ export default function StudentTable({
   return (
     <div className="card">
       <h2>학생 검색</h2>
-      <input
-        type="text"
-        placeholder="학생 이름으로 검색"
-        value={query}
-        onChange={(e) => onQueryChange(e.target.value)}
-      />
+      <div className="search-input-wrap">
+        <svg className="search-input-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+          <path d="M20 20L16.5 16.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+        <input
+          type="text"
+          placeholder="학생 이름으로 검색"
+          value={query}
+          onChange={(e) => onQueryChange(e.target.value)}
+        />
+      </div>
 
       {query === "" ? (
         <BottomMetricsList onSelect={onSelect} />

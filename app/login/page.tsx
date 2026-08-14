@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Image from "next/image";
 
 function LoginForm() {
   const router = useRouter();
@@ -38,6 +39,7 @@ function LoginForm() {
   return (
     <div className="login-shell">
       <form className="login-box" onSubmit={handleSubmit}>
+        <Image src="/logo.png" alt="" width={843} height={157} priority className="login-logo" />
         <h1>{process.env.NEXT_PUBLIC_BRANCH_NAME ?? "이그잼영어학원"}</h1>
         <p className="muted">직원 로그인</p>
 
