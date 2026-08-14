@@ -55,7 +55,23 @@ export default function StaffScheduleForm() {
     setDayHours((cur) => ({ ...cur, [day]: { ...cur[day], [field]: value } }));
   }
 
+  function findIncompleteDay(): string | null {
+    // 요일을 체크했는데 시작/종료 중 하나라도 비어있으면, 저장 API가 그
+    // 요일을 그냥 조용히 빼먹는다(에러 없이) — 그래서 "저장됐습니다"만
+    // 보고는 근무시간이 실제로 등록 안 된 걸 알아챌 방법이 없었다. 여기서
+    // 미리 걸러 사용자에게 알려준다.
+    for (const [day, range] of Object.entries(dayHours)) {
+      if (!range.start.trim() || !range.end.trim()) return day;
+    }
+    return null;
+  }
+
   async function handleSave() {
+    const incomplete = findIncompleteDay();
+    if (incomplete) {
+      setError(`${incomplete}요일의 시작/종료 시간을 모두 입력해주세요. 하나라도 비어있으면 그 요일은 저장되지 않습니다.`);
+      return;
+    }
     if (!confirmSave()) return;
     setSaving(true);
     setError(null);
@@ -127,6 +143,9 @@ export default function StaffScheduleForm() {
                         placeholder="종료 예: 18:00"
                         style={{ maxWidth: 120 }}
                       />
+                      {(!dayHours[d]?.start.trim() || !dayHours[d]?.end.trim()) && (
+                        <span style={{ color: "#b91c1c", fontSize: 12 }}>⚠ 시작/종료 둘 다 입력해야 저장됩니다</span>
+                      )}
                     </>
                   )}
                 </div>
