@@ -7,6 +7,7 @@ import ListCard, { ListRow } from "./ListCard";
 import Popup from "./Popup";
 import NaturalLanguageInput from "@/components/NaturalLanguageInput";
 import MakeupStatusCard from "@/components/MakeupStatusCard";
+import TodayClinicCard from "./TodayClinicCard";
 import type { DailyOutcomeStudent } from "@/lib/notion";
 
 type ScheduleRow = { label: string; studentName: string; detail: string };
@@ -54,11 +55,15 @@ export default function DirectorDashboardClient({
 }) {
   const clinicToday = scheduleFlat.filter((i) => i.label === "클리닉");
   const makeupToday = scheduleFlat.filter((i) => i.label === "보강");
-  const [popup, setPopup] = useState<null | "absent" | "homework">(null);
-  const [detail, setDetail] = useState<{ absentStudents: DailyOutcomeStudent[]; incompleteHomeworkStudents: DailyOutcomeStudent[] } | null>(null);
+  const [popup, setPopup] = useState<null | "absent" | "homework" | "vocabRetest">(null);
+  const [detail, setDetail] = useState<{
+    absentStudents: DailyOutcomeStudent[];
+    incompleteHomeworkStudents: DailyOutcomeStudent[];
+    vocabRetestStudents: DailyOutcomeStudent[];
+  } | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
-  async function openPopup(kind: "absent" | "homework") {
+  async function openPopup(kind: "absent" | "homework" | "vocabRetest") {
     setPopup(kind);
     if (detail) return;
     setLoadingDetail(true);
@@ -71,7 +76,13 @@ export default function DirectorDashboardClient({
   }
 
   const popupList =
-    popup === "absent" ? detail?.absentStudents : popup === "homework" ? detail?.incompleteHomeworkStudents : undefined;
+    popup === "absent"
+      ? detail?.absentStudents
+      : popup === "homework"
+      ? detail?.incompleteHomeworkStudents
+      : popup === "vocabRetest"
+      ? detail?.vocabRetestStudents
+      : undefined;
 
   // First-row cards (오늘 일정/상담 필요 학생/시험 일정/보강 일정) only show the
   // first PREVIEW_SIZE rows inline — the rest is available via "더보기" so a
@@ -95,7 +106,13 @@ export default function DirectorDashboardClient({
           tone="success"
         />
         <StatTile icon={XCircle} label="오늘 결석" value={`${absentCount}명`} tone="destructive" onClick={() => openPopup("absent")} />
-        <StatTile icon={BookX} label="단어 재시험" value={`${vocabRetestCount}명`} tone="warning" />
+        <StatTile
+          icon={BookX}
+          label="단어 재시험"
+          value={`${vocabRetestCount}명`}
+          tone="warning"
+          onClick={() => openPopup("vocabRetest")}
+        />
         <StatTile
           icon={ClipboardX}
           label="미완료 과제"
@@ -168,11 +185,7 @@ export default function DirectorDashboardClient({
       </div>
 
       <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-        <ListCard title="조교 클리닉" countLabel={`오늘 ${clinicToday.length}건`} empty={clinicToday.length === 0}>
-          {clinicToday.map((item, i) => (
-            <ListRow key={i} primary={item.studentName} secondary={item.detail} />
-          ))}
-        </ListCard>
+        <TodayClinicCard today={today} initialItems={clinicToday} />
 
         <div className="director-embed">
           <MakeupStatusCard role={role} variant="embed" />
@@ -232,7 +245,7 @@ export default function DirectorDashboardClient({
 
       {popup && (
         <Popup
-          title={popup === "absent" ? "오늘 결석" : "미완료 과제"}
+          title={popup === "absent" ? "오늘 결석" : popup === "homework" ? "미완료 과제" : "단어 재시험"}
           countLabel={popupList ? `${popupList.length}명` : undefined}
           onClose={() => setPopup(null)}
         >

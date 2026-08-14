@@ -889,6 +889,7 @@ export type DailyOutcomeStudent = {
 export async function getDailyOutcomeDetail(date: string): Promise<{
   absentStudents: DailyOutcomeStudent[];
   incompleteHomeworkStudents: DailyOutcomeStudent[];
+  vocabRetestStudents: DailyOutcomeStudent[];
 }> {
   const [records, students, classes] = await Promise.all([
     queryAllPages({
@@ -918,6 +919,7 @@ export async function getDailyOutcomeDetail(date: string): Promise<{
 
   const absentStudents: DailyOutcomeStudent[] = [];
   const incompleteHomeworkStudents: DailyOutcomeStudent[] = [];
+  const vocabRetestStudents: DailyOutcomeStudent[] = [];
   for (const r of records as any[]) {
     if (getSelect(r, "출결") === "결석") {
       const s = resolve(r);
@@ -927,8 +929,12 @@ export async function getDailyOutcomeDetail(date: string): Promise<{
       const s = resolve(r);
       if (s) incompleteHomeworkStudents.push(s);
     }
+    if (getSelect(r, "단어테스트결과") === "재시험") {
+      const s = resolve(r);
+      if (s) vocabRetestStudents.push(s);
+    }
   }
-  return { absentStudents, incompleteHomeworkStudents };
+  return { absentStudents, incompleteHomeworkStudents, vocabRetestStudents };
 }
 
 // "오늘의 일정": alarms + new-student events + makeup/retest sessions due today.
