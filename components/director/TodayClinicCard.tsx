@@ -132,10 +132,7 @@ export default function TodayClinicCard({ today, initialItems }: { today: string
             <ClinicRow
               key={item.id}
               item={item}
-              onClick={() => {
-                setShowAll(false);
-                setSelected(item);
-              }}
+              onClick={() => setSelected(item)}
             />
           ))}
         </Popup>

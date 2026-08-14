@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ExamPrepEditor, ProgressBar, CategoryChips, type OverviewRow } from "@/components/ExamPrepClient";
 import type { SchoolLevel } from "@/lib/examPrep";
+import { cn } from "@/lib/utils";
 
 type StudentBrief = { id: string; name: string; school: string; grade: string | null };
 
@@ -17,23 +18,47 @@ function gradeSort(a: string, b: string) {
   return a.localeCompare(b, "ko");
 }
 
-function BrowseRow({ label, meta, onClick }: { label: string; meta?: string; onClick: () => void }) {
+function BrowseRow({
+  label,
+  meta,
+  active,
+  onClick,
+}: {
+  label: string;
+  meta?: string;
+  active?: boolean;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center justify-between gap-2 border-b border-border bg-transparent px-0 py-2.5 text-left text-sm last:border-b-0 hover:bg-muted/40"
+      className={cn(
+        "flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted/60",
+        active ? "bg-accent font-semibold text-accent-foreground" : "text-foreground"
+      )}
     >
-      <span className="font-medium text-foreground">{label}</span>
-      {meta && <span className="text-xs text-muted-foreground">{meta}</span>}
-      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+      <span className="truncate">{label}</span>
+      {meta && <span className="shrink-0 text-xs text-muted-foreground">{meta}</span>}
     </button>
   );
 }
 
-// /director/exam-prep 전용 — 원장 대시보드의 새 디자인(학생 관리 화면과 같은
-// "좌: 검색/목록 카드, 우: 상세 카드" 2단 구성)에 맞춰 새로 만들었다. 과목별
-// 세부 입력폼(ExamPrepEditor)은 그대로 재사용하고, 감싸는 카드/목록/현황판만
+function BrowseColumn({ title, width, children }: { title: string; width: number; children: React.ReactNode }) {
+  return (
+    <Card className="flex h-full flex-col" style={{ width, flexShrink: 0 }}>
+      <CardHeader>
+        <CardTitle className="text-sm">{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="flex-1 space-y-0.5 overflow-y-auto pt-0.5">{children}</CardContent>
+    </Card>
+  );
+}
+
+// /director/exam-prep 전용 — 학생 관리 화면과 같은 새 디자인 톤을 쓰되, 학교를
+// 누르면 그 오른쪽에 학년 열이, 학년을 누르면 그 오른쪽에 학생 열이 나타나는
+// 캐스케이드(Finder 컬럼 뷰) 방식으로 찾는다. 과목별 세부 입력폼
+// (ExamPrepEditor)은 복잡해서 그대로 재사용하고, 감싸는 카드/목록/현황판만
 // 새 디자인으로 바꿨다 — /exam-prep(구 화면, 다른 역할용)은 그대로 둔다.
 export default function ExamPrepDirectorClient() {
   const [overview, setOverview] = useState<OverviewRow[]>([]);
@@ -98,13 +123,11 @@ export default function ExamPrepDirectorClient() {
     setQuery("");
   }
 
-  const breadcrumb = [selectedSchool, selectedGrade].filter(Boolean).join(" ");
-
   return (
-    <div className="grid grid-cols-1 gap-4 lg:h-[calc(100vh-8.5rem)] lg:grid-cols-[380px_1fr]">
-      <Card className="flex h-full flex-col">
+    <div className="flex items-start gap-4" style={{ height: "calc(100vh - 8.5rem)" }}>
+      <Card className="flex h-full flex-col" style={{ width: 220, flexShrink: 0 }}>
         <CardHeader className="flex-col items-stretch gap-2.5">
-          <CardTitle>시험대비 · 학생 찾기</CardTitle>
+          <CardTitle className="text-sm">시험대비 · 학생 찾기</CardTitle>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -116,7 +139,7 @@ export default function ExamPrepDirectorClient() {
             />
           </div>
         </CardHeader>
-        <CardContent className="flex-1 overflow-y-auto pt-1">
+        <CardContent className="flex-1 space-y-0.5 overflow-y-auto pt-0.5">
           {query.trim() !== "" ? (
             searchResults.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">검색 결과가 없습니다.</p>
@@ -133,127 +156,140 @@ export default function ExamPrepDirectorClient() {
                 />
               ))
             )
-          ) : selectedGrade ? (
-            <>
-              <button
-                type="button"
-                onClick={() => setSelectedGrade("")}
-                className="mb-2 flex items-center gap-1 bg-transparent p-0 text-xs font-medium text-primary hover:underline"
-              >
-                <ChevronLeft className="size-3.5" />
-                {breadcrumb}
-              </button>
-              {gradeStudents.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">소속 학생이 없습니다.</p>}
-              {gradeStudents.map((s) => (
-                <BrowseRow key={s.id} label={s.name} onClick={() => setStudentId(s.id)} />
-              ))}
-            </>
-          ) : selectedSchool ? (
-            <>
-              <button
-                type="button"
-                onClick={() => setSelectedSchool("")}
-                className="mb-2 flex items-center gap-1 bg-transparent p-0 text-xs font-medium text-primary hover:underline"
-              >
-                <ChevronLeft className="size-3.5" />
-                {selectedSchool}
-              </button>
-              {grades.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">학생이 없습니다.</p>}
-              {grades.map((g) => (
-                <BrowseRow key={g} label={g} onClick={() => setSelectedGrade(g)} />
-              ))}
-            </>
           ) : (
-            schools.map((s) => <BrowseRow key={s} label={s} onClick={() => setSelectedSchool(s)} />)
+            schools.map((s) => (
+              <BrowseRow
+                key={s}
+                label={s}
+                active={selectedSchool === s}
+                onClick={() => {
+                  setSelectedSchool(s);
+                  setSelectedGrade("");
+                  setStudentId("");
+                }}
+              />
+            ))
           )}
         </CardContent>
       </Card>
 
-      {studentId ? (
-        <Card className="flex h-full flex-col">
-          <CardHeader>
-            <CardTitle>학생 상세 · 시험대비</CardTitle>
-            <button
-              type="button"
-              onClick={reset}
-              className="rounded-md border border-border bg-transparent px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
-            >
-              목록으로
-            </button>
-          </CardHeader>
-          <CardContent className="flex-1 overflow-y-auto pt-1">
-            <ExamPrepEditor key={studentId} studentId={studentId} onSaved={reloadOverview} />
-          </CardContent>
-        </Card>
-      ) : (
-        <Card className="flex h-full flex-col">
-          <CardHeader className="flex-col items-stretch gap-2.5 sm:flex-row sm:items-center sm:justify-between">
-            <CardTitle>현황판 · 진도표</CardTitle>
-            <select
-              value={levelFilter}
-              onChange={(e) => setLevelFilter(e.target.value as "" | SchoolLevel)}
-              className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
-            >
-              <option value="">전체</option>
-              <option value="중등">중등</option>
-              <option value="고등">고등</option>
-            </select>
-          </CardHeader>
-          <CardContent className="flex-1 overflow-y-auto pt-1">
-            {loadingOverview && <p className="py-6 text-center text-sm text-muted-foreground">불러오는 중...</p>}
-            {!loadingOverview && filteredOverview.length === 0 && (
-              <p className="py-6 text-center text-sm text-muted-foreground">등록된 시험대비 시트가 없습니다. 왼쪽에서 학생을 선택해 작성해보세요.</p>
-            )}
-            {!loadingOverview && filteredOverview.length > 0 && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-xs text-muted-foreground">
-                      <th className="py-1.5 text-left font-medium">학생</th>
-                      <th className="py-1.5 text-left font-medium">시험명 / 범위</th>
-                      <th className="py-1.5 text-left font-medium">담당교사</th>
-                      <th className="py-1.5 text-left font-medium">진행률</th>
-                      <th className="py-1.5 text-left font-medium">항목별 성취</th>
-                      <th className="py-1.5 text-left font-medium">취약부분</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredOverview.map((r) => (
-                      <tr
-                        key={r.studentId}
-                        onClick={() => setStudentId(r.studentId)}
-                        className="cursor-pointer border-b border-border last:border-b-0 hover:bg-muted/40"
-                      >
-                        <td className="py-2">
-                          <div className="font-medium text-foreground">{r.studentName}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {r.school} {r.grade} · {r.level}
-                          </div>
-                        </td>
-                        <td className="py-2 text-foreground">
-                          {r.examTitle || "-"}
-                          {r.examRange && <div className="text-xs text-muted-foreground">{r.examRange}</div>}
-                        </td>
-                        <td className="py-2 text-foreground">{r.teachers.length > 0 ? r.teachers.join(", ") : "-"}</td>
-                        <td className="py-2">
-                          <div className="flex items-center gap-2">
-                            <ProgressBar value={r.progress} />
-                            <span className="text-xs text-foreground">{r.progress}%</span>
-                          </div>
-                        </td>
-                        <td className="py-2">
-                          <CategoryChips categories={r.categories} />
-                        </td>
-                        <td className="max-w-[200px] py-2 text-xs text-foreground">{r.weakPoints || "-"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      {!query.trim() && selectedSchool && (
+        <BrowseColumn title="학년" width={110}>
+          {grades.length === 0 && <p className="py-6 text-center text-xs text-muted-foreground">학생 없음</p>}
+          {grades.map((g) => (
+            <BrowseRow
+              key={g}
+              label={g}
+              active={selectedGrade === g}
+              onClick={() => {
+                setSelectedGrade(g);
+                setStudentId("");
+              }}
+            />
+          ))}
+        </BrowseColumn>
       )}
+
+      {!query.trim() && selectedGrade && (
+        <BrowseColumn title={`${selectedSchool} ${selectedGrade}`} width={170}>
+          {gradeStudents.length === 0 && (
+            <p className="py-6 text-center text-xs text-muted-foreground">소속 학생이 없습니다.</p>
+          )}
+          {gradeStudents.map((s) => (
+            <BrowseRow key={s.id} label={s.name} active={studentId === s.id} onClick={() => setStudentId(s.id)} />
+          ))}
+        </BrowseColumn>
+      )}
+
+      <div className="h-full min-w-0 flex-1">
+        {studentId ? (
+          <Card className="flex h-full flex-col">
+            <CardHeader>
+              <CardTitle>학생 상세 · 시험대비</CardTitle>
+              <button
+                type="button"
+                onClick={reset}
+                className="rounded-md border border-border bg-transparent px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
+              >
+                목록으로
+              </button>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-y-auto pt-1">
+              <ExamPrepEditor key={studentId} studentId={studentId} onSaved={reloadOverview} />
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="flex h-full flex-col">
+            <CardHeader className="flex-col items-stretch gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+              <CardTitle>현황판 · 진도표</CardTitle>
+              <select
+                value={levelFilter}
+                onChange={(e) => setLevelFilter(e.target.value as "" | SchoolLevel)}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+              >
+                <option value="">전체</option>
+                <option value="중등">중등</option>
+                <option value="고등">고등</option>
+              </select>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-y-auto pt-1">
+              {loadingOverview && <p className="py-6 text-center text-sm text-muted-foreground">불러오는 중...</p>}
+              {!loadingOverview && filteredOverview.length === 0 && (
+                <p className="py-6 text-center text-sm text-muted-foreground">
+                  등록된 시험대비 시트가 없습니다. 왼쪽에서 학생을 선택해 작성해보세요.
+                </p>
+              )}
+              {!loadingOverview && filteredOverview.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-xs text-muted-foreground">
+                        <th className="py-1.5 text-left font-medium">학생</th>
+                        <th className="py-1.5 text-left font-medium">시험명 / 범위</th>
+                        <th className="py-1.5 text-left font-medium">담당교사</th>
+                        <th className="py-1.5 text-left font-medium">진행률</th>
+                        <th className="py-1.5 text-left font-medium">항목별 성취</th>
+                        <th className="py-1.5 text-left font-medium">취약부분</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredOverview.map((r) => (
+                        <tr
+                          key={r.studentId}
+                          onClick={() => setStudentId(r.studentId)}
+                          className="cursor-pointer border-b border-border last:border-b-0 hover:bg-muted/40"
+                        >
+                          <td className="py-2">
+                            <div className="font-medium text-foreground">{r.studentName}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {r.school} {r.grade} · {r.level}
+                            </div>
+                          </td>
+                          <td className="py-2 text-foreground">
+                            {r.examTitle || "-"}
+                            {r.examRange && <div className="text-xs text-muted-foreground">{r.examRange}</div>}
+                          </td>
+                          <td className="py-2 text-foreground">{r.teachers.length > 0 ? r.teachers.join(", ") : "-"}</td>
+                          <td className="py-2">
+                            <div className="flex items-center gap-2">
+                              <ProgressBar value={r.progress} />
+                              <span className="text-xs text-foreground">{r.progress}%</span>
+                            </div>
+                          </td>
+                          <td className="py-2">
+                            <CategoryChips categories={r.categories} />
+                          </td>
+                          <td className="max-w-[200px] py-2 text-xs text-foreground">{r.weakPoints || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+      </div>
     </div>
   );
 }
