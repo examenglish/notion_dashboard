@@ -762,6 +762,46 @@ function ExamPrepEditor({
 
 type StudentBrief = { id: string; name: string; school: string; grade: string | null };
 
+// GRADE_ORDER: raw grade strings sort lexicographically wrong ("고1" before
+// "중2" is fine, but "중10"-style never happens — this just keeps 중 before
+// 고 and ascending within each, matching how staff think about grade level).
+const GRADE_ORDER = ["중1", "중2", "중3", "고1", "고2", "고3"];
+function gradeSort(a: string, b: string) {
+  const ia = GRADE_ORDER.indexOf(a);
+  const ib = GRADE_ORDER.indexOf(b);
+  if (ia !== -1 && ib !== -1) return ia - ib;
+  return a.localeCompare(b, "ko");
+}
+
+function CascadeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className="secondary"
+      onClick={onClick}
+      style={{
+        textAlign: "left",
+        fontSize: 12.5,
+        padding: "5px 8px",
+        fontWeight: active ? 700 : 400,
+        background: active ? "var(--primary-tint)" : undefined,
+        color: active ? "var(--primary-dark)" : undefined,
+        borderColor: active ? "var(--primary)" : undefined,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function ExamPrepClient() {
   const [overview, setOverview] = useState<OverviewRow[]>([]);
   const [loadingOverview, setLoadingOverview] = useState(true);
@@ -770,6 +810,7 @@ export default function ExamPrepClient() {
   const [query, setQuery] = useState("");
   const [allStudents, setAllStudents] = useState<StudentBrief[]>([]);
   const [selectedSchool, setSelectedSchool] = useState("");
+  const [selectedGrade, setSelectedGrade] = useState("");
 
   function reloadOverview() {
     fetch("/api/exam-prep")
@@ -785,20 +826,28 @@ export default function ExamPrepClient() {
       .then((list: StudentBrief[]) => setAllStudents(Array.isArray(list) ? list : []));
   }, []);
 
-  // 학교 선택 → 학생 선택 2단계로 좁혀갈 수 있게, 학생 명단에서 학교 목록을
-  // 뽑아둔다. 이름 검색(StudentPicker)만으로는 "이 학교 학생 중에서 고르고
-  // 싶다"는 흐름이 안 돼서 추가했다 — 기존 이름검색은 그대로 남겨둔다.
+  // 학교 → 학년 → 학생 3단 캐스케이드로 좁혀갈 수 있게, 학생 명단에서 뽑아둔다.
+  // 이름 검색(StudentPicker)만으로는 "이 학교 이 학년 중에서 고르고 싶다"는
+  // 흐름이 안 돼서 추가했다 — 기존 이름검색은 그대로 남겨둔다.
   const schools = useMemo(() => {
     const set = new Set(allStudents.map((s) => s.school).filter(Boolean));
     return Array.from(set).sort();
   }, [allStudents]);
 
-  const schoolStudents = useMemo(() => {
+  const grades = useMemo(() => {
     if (!selectedSchool) return [];
-    return allStudents
-      .filter((s) => s.school === selectedSchool)
-      .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+    const set = new Set(
+      allStudents.filter((s) => s.school === selectedSchool).map((s) => s.grade).filter((g): g is string => !!g)
+    );
+    return Array.from(set).sort(gradeSort);
   }, [allStudents, selectedSchool]);
+
+  const gradeStudents = useMemo(() => {
+    if (!selectedSchool || !selectedGrade) return [];
+    return allStudents
+      .filter((s) => s.school === selectedSchool && s.grade === selectedGrade)
+      .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  }, [allStudents, selectedSchool, selectedGrade]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -809,159 +858,155 @@ export default function ExamPrepClient() {
   }, [overview, levelFilter, query]);
 
   return (
-    <div className="page">
-      <div className="card">
-        <h2>학생별 시험대비</h2>
-        <p className="muted" style={{ marginTop: 0 }}>
-          학생을 검색해 시험대비 시트를 작성/저장하세요. 같은 학교·학년 학생이 이미 있으면 시험대비명/시험범위/교과서/
-          부교재/학교프린트를 자동으로 불러와 표기를 통일합니다. 아래 현황판에서 진행률이 낮은 순으로 취약 학생을 바로
-          확인할 수 있습니다.
-        </p>
-        <div style={{ display: "flex", gap: 20, marginBottom: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
-          <div style={{ minWidth: 150 }}>
-            <label>학교</label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 280, overflowY: "auto" }}>
-              {schools.map((s) => {
-                const active = selectedSchool === s;
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    className="secondary"
-                    onClick={() => {
-                      setSelectedSchool(s);
-                      setStudentId("");
-                    }}
-                    style={{
-                      textAlign: "left",
-                      fontWeight: active ? 700 : 400,
-                      background: active ? "var(--primary-tint)" : undefined,
-                      color: active ? "var(--primary-dark)" : undefined,
-                      borderColor: active ? "var(--primary)" : undefined,
-                    }}
-                  >
-                    {s}
-                  </button>
-                );
-              })}
+    <div className="page" style={{ maxWidth: 1240 }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div className="card" style={{ width: 160, flexShrink: 0, padding: 14 }}>
+          <h2 style={{ fontSize: 14, marginBottom: 2 }}>학생별 시험대비</h2>
+          <p className="muted" style={{ fontSize: 11, marginTop: 0, marginBottom: 10 }}>
+            학교 → 학년 → 학생 순으로 눌러서 찾으세요.
+          </p>
+          <label style={{ fontSize: 11 }}>학교</label>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 360, overflowY: "auto" }}>
+            {schools.map((s) => (
+              <CascadeButton
+                key={s}
+                active={selectedSchool === s}
+                onClick={() => {
+                  setSelectedSchool(s);
+                  setSelectedGrade("");
+                  setStudentId("");
+                }}
+              >
+                {s}
+              </CascadeButton>
+            ))}
+          </div>
+          <label style={{ fontSize: 11, marginTop: 12 }}>이름으로 검색</label>
+          <StudentPicker studentId={studentId} onChange={setStudentId} label="" />
+        </div>
+
+        {selectedSchool && (
+          <div className="card" style={{ width: 100, flexShrink: 0, padding: 14 }}>
+            <h2 style={{ fontSize: 14, marginBottom: 8 }}>학년</h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 360, overflowY: "auto" }}>
+              {grades.length === 0 && <p className="muted" style={{ fontSize: 11 }}>학생 없음</p>}
+              {grades.map((g) => (
+                <CascadeButton
+                  key={g}
+                  active={selectedGrade === g}
+                  onClick={() => {
+                    setSelectedGrade(g);
+                    setStudentId("");
+                  }}
+                >
+                  {g}
+                </CascadeButton>
+              ))}
             </div>
           </div>
+        )}
 
-          {selectedSchool && (
-            <div style={{ minWidth: 180 }}>
-              <label>{selectedSchool} 학생</label>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 280, overflowY: "auto" }}>
-                {schoolStudents.length === 0 && <p className="muted">소속 학생이 없습니다.</p>}
-                {schoolStudents.map((s) => {
-                  const active = studentId === s.id;
-                  return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      className="secondary"
-                      onClick={() => setStudentId(s.id)}
-                      style={{
-                        textAlign: "left",
-                        fontWeight: active ? 700 : 400,
-                        background: active ? "var(--primary-tint)" : undefined,
-                        color: active ? "var(--primary-dark)" : undefined,
-                        borderColor: active ? "var(--primary)" : undefined,
-                      }}
-                    >
-                      {s.name} <span className="muted">{s.grade ?? ""}</span>
-                    </button>
-                  );
-                })}
+        {selectedGrade && (
+          <div className="card" style={{ width: 180, flexShrink: 0, padding: 14 }}>
+            <h2 style={{ fontSize: 14, marginBottom: 8 }}>
+              {selectedSchool} {selectedGrade}
+            </h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 360, overflowY: "auto" }}>
+              {gradeStudents.length === 0 && <p className="muted" style={{ fontSize: 11 }}>소속 학생이 없습니다.</p>}
+              {gradeStudents.map((s) => (
+                <CascadeButton key={s.id} active={studentId === s.id} onClick={() => setStudentId(s.id)}>
+                  {s.name}
+                </CascadeButton>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{ flex: "1 1 480px", minWidth: 0 }}>
+          {studentId ? (
+            <div className="card">
+              <ExamPrepEditor key={studentId} studentId={studentId} onSaved={reloadOverview} />
+            </div>
+          ) : (
+            <div className="card">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <h2 style={{ margin: 0 }}>현황판 · 진도표</h2>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <input
+                    type="text"
+                    placeholder="이름으로 검색"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    style={{ flex: "1 1 160px" }}
+                  />
+                  <select value={levelFilter} onChange={(e) => setLevelFilter(e.target.value as "" | SchoolLevel)}>
+                    <option value="">전체</option>
+                    <option value="중등">중등</option>
+                    <option value="고등">고등</option>
+                  </select>
+                </div>
               </div>
+
+              {loadingOverview && <p className="muted">불러오는 중...</p>}
+              {!loadingOverview && filtered.length === 0 && (
+                <p className="muted">등록된 시험대비 시트가 없습니다. 왼쪽에서 학생을 선택해 작성해보세요.</p>
+              )}
+              {!loadingOverview && filtered.length > 0 && (
+                <div className="table-scroll" style={{ marginTop: 12 }}>
+                  <table className="sortable-table">
+                    <thead>
+                      <tr>
+                        <th>학생</th>
+                        <th>학교급</th>
+                        <th>시험명 / 범위</th>
+                        <th>담당교사</th>
+                        <th>진행률</th>
+                        <th>항목별 성취</th>
+                        <th>최근 시험성적</th>
+                        <th>취약부분</th>
+                        <th>갱신일</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.map((r) => (
+                        <tr key={r.studentId} onClick={() => setStudentId(r.studentId)}>
+                          <td>
+                            <strong>{r.studentName}</strong>
+                            <div className="muted">{r.school} {r.grade}</div>
+                          </td>
+                          <td>
+                            <span className="badge">{r.level}</span>
+                          </td>
+                          <td>
+                            {r.examTitle || "-"}
+                            {r.examRange && <div className="muted" style={{ fontSize: 12 }}>{r.examRange}</div>}
+                          </td>
+                          <td>{r.teachers.length > 0 ? r.teachers.join(", ") : "-"}</td>
+                          <td>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <ProgressBar value={r.progress} />
+                              <span style={{ fontSize: 12 }}>{r.progress}%</span>
+                            </div>
+                          </td>
+                          <td>
+                            <CategoryChips categories={r.categories} />
+                          </td>
+                          <td>
+                            {r.latestExam
+                              ? `${r.latestExam.subject ?? ""} ${r.latestExam.score ?? "-"}점 (${r.latestExam.date})`
+                              : "-"}
+                          </td>
+                          <td style={{ maxWidth: 200 }}>{r.weakPoints || "-"}</td>
+                          <td>{r.updatedAt ?? "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>
-        <p className="muted" style={{ margin: "0 0 6px" }}>또는 이름으로 바로 검색:</p>
-        <StudentPicker studentId={studentId} onChange={setStudentId} label="학생 검색" />
-      </div>
-
-      {studentId && (
-        <div className="card">
-          <ExamPrepEditor key={studentId} studentId={studentId} onSaved={reloadOverview} />
-        </div>
-      )}
-
-      <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-          <h2 style={{ margin: 0 }}>현황판 · 진도표</h2>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <input
-              type="text"
-              placeholder="이름으로 검색"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              style={{ flex: "1 1 160px" }}
-            />
-            <select value={levelFilter} onChange={(e) => setLevelFilter(e.target.value as "" | SchoolLevel)}>
-              <option value="">전체</option>
-              <option value="중등">중등</option>
-              <option value="고등">고등</option>
-            </select>
-          </div>
-        </div>
-
-        {loadingOverview && <p className="muted">불러오는 중...</p>}
-        {!loadingOverview && filtered.length === 0 && (
-          <p className="muted">등록된 시험대비 시트가 없습니다. 위에서 학생을 선택해 작성해보세요.</p>
-        )}
-        {!loadingOverview && filtered.length > 0 && (
-          <div className="table-scroll" style={{ marginTop: 12 }}>
-            <table className="sortable-table">
-              <thead>
-                <tr>
-                  <th>학생</th>
-                  <th>학교급</th>
-                  <th>시험명 / 범위</th>
-                  <th>담당교사</th>
-                  <th>진행률</th>
-                  <th>항목별 성취</th>
-                  <th>최근 시험성적</th>
-                  <th>취약부분</th>
-                  <th>갱신일</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((r) => (
-                  <tr key={r.studentId} onClick={() => setStudentId(r.studentId)}>
-                    <td>
-                      <strong>{r.studentName}</strong>
-                      <div className="muted">{r.school} {r.grade}</div>
-                    </td>
-                    <td>
-                      <span className="badge">{r.level}</span>
-                    </td>
-                    <td>
-                      {r.examTitle || "-"}
-                      {r.examRange && <div className="muted" style={{ fontSize: 12 }}>{r.examRange}</div>}
-                    </td>
-                    <td>{r.teachers.length > 0 ? r.teachers.join(", ") : "-"}</td>
-                    <td>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <ProgressBar value={r.progress} />
-                        <span style={{ fontSize: 12 }}>{r.progress}%</span>
-                      </div>
-                    </td>
-                    <td>
-                      <CategoryChips categories={r.categories} />
-                    </td>
-                    <td>
-                      {r.latestExam
-                        ? `${r.latestExam.subject ?? ""} ${r.latestExam.score ?? "-"}점 (${r.latestExam.date})`
-                        : "-"}
-                    </td>
-                    <td style={{ maxWidth: 200 }}>{r.weakPoints || "-"}</td>
-                    <td>{r.updatedAt ?? "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
       </div>
     </div>
   );
