@@ -12,6 +12,7 @@ export function formatBriefingText(input: {
   notice: string;
   vocabFail: boolean;
   homeworkIncomplete: boolean;
+  absent: boolean;
   individualNotice?: string;
 }): string {
   const [y, m, d] = input.date.split("-").map(Number);
@@ -28,11 +29,15 @@ export function formatBriefingText(input: {
   if (input.nextAssignment) {
     lines.push("", "【다음시간 테스트】", input.nextAssignment);
   }
-  lines.push(
-    "",
-    `단어테스트: ${input.vocabFail ? "미통과 (재시험 필요)" : "통과"}`,
-    `과제 수행: ${input.homeworkIncomplete ? "미완료" : "완료"}`
-  );
+  if (input.absent) {
+    lines.push("", "출결: 결석");
+  } else {
+    lines.push(
+      "",
+      `단어테스트: ${input.vocabFail ? "미통과 (재시험 필요)" : "통과"}`,
+      `과제 수행: ${input.homeworkIncomplete ? "미완료" : "완료"}`
+    );
+  }
   if (input.notice) lines.push(`전달사항: ${input.notice}`);
   if (input.individualNotice) lines.push(`개별 안내사항: ${input.individualNotice}`);
   return lines.join("\n");

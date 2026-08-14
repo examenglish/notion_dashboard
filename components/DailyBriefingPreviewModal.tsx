@@ -5,7 +5,7 @@ import { formatBriefingText } from "@/lib/briefingFormat";
 import { stripClassSuffix } from "@/lib/format";
 
 type RosterStudent = { id: string; name: string };
-type PerStudentFlags = Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; individualNotice?: string }>;
+type PerStudentFlags = Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent?: boolean; individualNotice?: string }>;
 type ClassOption = { id: string; name: string };
 
 type ExistingBriefing = { id: string; date: string | null; studentId: string | null; content: string };
@@ -22,7 +22,7 @@ function initialTexts(draft: {
 }): Record<string, string> {
   const map: Record<string, string> = {};
   for (const s of draft.roster) {
-    const flags = draft.perStudent[s.id] ?? { vocabFail: false, homeworkIncomplete: false };
+    const flags = draft.perStudent[s.id] ?? { vocabFail: false, homeworkIncomplete: false, absent: false };
     map[s.id] = formatBriefingText({
       date: draft.date,
       className: draft.className,
@@ -33,6 +33,7 @@ function initialTexts(draft: {
       notice: draft.notice,
       vocabFail: flags.vocabFail,
       homeworkIncomplete: flags.homeworkIncomplete,
+      absent: flags.absent ?? false,
       individualNotice: flags.individualNotice,
     });
   }
