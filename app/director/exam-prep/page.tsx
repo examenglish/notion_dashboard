@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import DirectorSidebar from "@/components/director/DirectorSidebar";
 import DirectorTopbar from "@/components/director/DirectorTopbar";
-import ExamPrepClient from "@/components/ExamPrepClient";
+import ExamPrepDirectorClient from "@/components/director/ExamPrepDirectorClient";
 import { todayKST, formatDateLabel } from "@/lib/date";
 
 export default async function DirectorExamPrepPage() {
@@ -16,10 +16,16 @@ export default async function DirectorExamPrepPage() {
     <div className="director-shell flex h-screen bg-background text-foreground">
       <DirectorSidebar branchName={branchName} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <DirectorTopbar staffName={session.name} role={session.role ?? ""} dateLabel={formatDateLabel(todayKST())} />
+        <DirectorTopbar
+          staffName={session.name}
+          role={session.role ?? ""}
+          dateLabel={formatDateLabel(todayKST())}
+          greetingTitle="시험대비"
+          greetingText="학교·학년·학생으로 찾아 시험대비 시트를 작성하세요."
+        />
 
-        <main className="flex-1 overflow-y-auto bg-muted/50 py-6">
-          <ExamPrepClient />
+        <main className="flex-1 overflow-y-auto bg-muted/50 px-6 py-6">
+          <ExamPrepDirectorClient />
         </main>
       </div>
     </div>

@@ -19,7 +19,7 @@ import {
   computeCategoryBreakdown,
 } from "@/lib/examPrep";
 
-type OverviewRow = {
+export type OverviewRow = {
   studentId: string;
   studentName: string;
   school: string;
@@ -46,7 +46,7 @@ function categoryColor(done: number, total: number): string {
   return "#e5484d";
 }
 
-function ProgressBar({ value }: { value: number }) {
+export function ProgressBar({ value }: { value: number }) {
   return (
     <div style={{ background: "var(--border)", borderRadius: 6, height: 8, overflow: "hidden", minWidth: 70 }}>
       <div
@@ -62,7 +62,7 @@ function ProgressBar({ value }: { value: number }) {
 
 // 진행률 하나만으로는 어느 영역이 약한지 안 보여서, Lesson암기/연습문제 또는
 // 기출모의고사/워크북 등 그룹별 완료 개수를 색상 배지로 따로 노출한다.
-function CategoryChips({ categories }: { categories: CategoryBreakdown[] }) {
+export function CategoryChips({ categories }: { categories: CategoryBreakdown[] }) {
   if (categories.length === 0) return <span className="muted" style={{ fontSize: 12 }}>-</span>;
   return (
     <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -313,7 +313,10 @@ function ScoreEntryForm({ studentId, onSaved }: { studentId: string; onSaved: ()
   );
 }
 
-function ExamPrepEditor({
+// 원장 대시보드(/director/exam-prep)의 새 디자인 브라우징 UI에서도 그대로
+// 재사용한다 — 과목별 세부 입력폼이 크고 복잡해서 다시 만들지 않고, 감싸는
+// 카드만 새 디자인으로 바꾸고 내부 폼은 그대로 가져다 쓴다.
+export function ExamPrepEditor({
   studentId,
   onSaved,
 }: {
