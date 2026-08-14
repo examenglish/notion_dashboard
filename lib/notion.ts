@@ -1169,6 +1169,7 @@ export async function createClassProgress(input: {
         notice: input.notice,
         vocabFail: flags.vocabFail,
         homeworkIncomplete: flags.homeworkIncomplete,
+        absent: flags.absent,
         individualNotice: flags.individualNotice,
       });
     const briefing = await notion.pages.create({
@@ -1177,7 +1178,7 @@ export async function createClassProgress(input: {
         제목: { title: [{ text: { content: `${studentName} 데일리브리핑 ${input.date}` } }] },
         학생: { relation: [{ id: studentId }] },
         날짜: { date: { start: input.date } },
-        브리핑유형: { select: { name: flags.vocabFail || flags.homeworkIncomplete ? "주의" : "전달사항" } },
+        브리핑유형: { select: { name: !flags.absent && (flags.vocabFail || flags.homeworkIncomplete) ? "주의" : "전달사항" } },
         브리핑내용: { rich_text: [{ text: { content: briefingText } }] },
       } as any,
     });
@@ -1387,6 +1388,7 @@ export async function updateClassProgress(input: {
           notice: input.notice ?? "",
           vocabFail: flags.vocabFail,
           homeworkIncomplete: flags.homeworkIncomplete,
+          absent: flags.absent,
           individualNotice: flags.individualNotice,
         });
         await notion.pages.create({
@@ -1395,7 +1397,7 @@ export async function updateClassProgress(input: {
             제목: { title: [{ text: { content: `${studentName} 데일리브리핑 ${input.date}` } }] },
             학생: { relation: [{ id: studentId }] },
             날짜: { date: { start: input.date } },
-            브리핑유형: { select: { name: flags.vocabFail || flags.homeworkIncomplete ? "주의" : "전달사항" } },
+            브리핑유형: { select: { name: !flags.absent && (flags.vocabFail || flags.homeworkIncomplete) ? "주의" : "전달사항" } },
             브리핑내용: { rich_text: [{ text: { content: briefingText } }] },
           } as any,
         });
