@@ -817,39 +817,64 @@ export default function ExamPrepClient() {
           부교재/학교프린트를 자동으로 불러와 표기를 통일합니다. 아래 현황판에서 진행률이 낮은 순으로 취약 학생을 바로
           확인할 수 있습니다.
         </p>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-          <div style={{ minWidth: 160 }}>
-            <label>학교 선택</label>
-            <select
-              value={selectedSchool}
-              onChange={(e) => {
-                setSelectedSchool(e.target.value);
-                setStudentId("");
-              }}
-            >
-              <option value="">학교를 선택하세요</option>
-              {schools.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
+        <div style={{ display: "flex", gap: 20, marginBottom: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <div style={{ minWidth: 150 }}>
+            <label>학교</label>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 280, overflowY: "auto" }}>
+              {schools.map((s) => {
+                const active = selectedSchool === s;
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    className="secondary"
+                    onClick={() => {
+                      setSelectedSchool(s);
+                      setStudentId("");
+                    }}
+                    style={{
+                      textAlign: "left",
+                      fontWeight: active ? 700 : 400,
+                      background: active ? "var(--primary-tint)" : undefined,
+                      color: active ? "var(--primary-dark)" : undefined,
+                      borderColor: active ? "var(--primary)" : undefined,
+                    }}
+                  >
+                    {s}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          <div style={{ minWidth: 200 }}>
-            <label>학생 선택</label>
-            <select
-              value={studentId}
-              onChange={(e) => setStudentId(e.target.value)}
-              disabled={!selectedSchool}
-            >
-              <option value="">{selectedSchool ? "학생을 선택하세요" : "학교를 먼저 선택하세요"}</option>
-              {schoolStudents.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} {s.grade ?? ""}
-                </option>
-              ))}
-            </select>
-          </div>
+
+          {selectedSchool && (
+            <div style={{ minWidth: 180 }}>
+              <label>{selectedSchool} 학생</label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 280, overflowY: "auto" }}>
+                {schoolStudents.length === 0 && <p className="muted">소속 학생이 없습니다.</p>}
+                {schoolStudents.map((s) => {
+                  const active = studentId === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className="secondary"
+                      onClick={() => setStudentId(s.id)}
+                      style={{
+                        textAlign: "left",
+                        fontWeight: active ? 700 : 400,
+                        background: active ? "var(--primary-tint)" : undefined,
+                        color: active ? "var(--primary-dark)" : undefined,
+                        borderColor: active ? "var(--primary)" : undefined,
+                      }}
+                    >
+                      {s.name} <span className="muted">{s.grade ?? ""}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
         <p className="muted" style={{ margin: "0 0 6px" }}>또는 이름으로 바로 검색:</p>
         <StudentPicker studentId={studentId} onChange={setStudentId} label="학생 검색" />

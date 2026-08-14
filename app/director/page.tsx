@@ -1,7 +1,14 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { todayKST, formatDateLabel } from "@/lib/date";
-import { searchStudents, getTodaySchedule, getDailyOutcomeBreakdown, listExamPrepOverview, getRecentCounseling } from "@/lib/notion";
+import {
+  searchStudents,
+  getTodaySchedule,
+  getDailyOutcomeBreakdown,
+  listExamPrepOverview,
+  getRecentCounseling,
+  getClinicRecordsByDate,
+} from "@/lib/notion";
 import DirectorSidebar from "@/components/director/DirectorSidebar";
 import DirectorTopbar from "@/components/director/DirectorTopbar";
 import DirectorDashboardClient from "@/components/director/DirectorDashboardClient";
@@ -32,13 +39,29 @@ export default async function DirectorDashboardPage() {
   const today = todayKST();
   const branchName = process.env.NEXT_PUBLIC_BRANCH_NAME ?? "이그잼영어학원";
 
-  const [students, todaySchedule, dailyOutcome, examPrepItems, counselingEntries] = await Promise.all([
+  const [students, todaySchedule, dailyOutcome, examPrepItems, counselingEntries, clinicRecordsToday] = await Promise.all([
     searchStudents(""),
     getTodaySchedule(today, session.staffId),
     getDailyOutcomeBreakdown(today),
     listExamPrepOverview(),
     getRecentCounseling(),
+    getClinicRecordsByDate(today),
   ]);
+
+  // "조교 클리닉" 카드는 지시된 할일(DB⑱)이 아니라 조교가 실제로 작성한
+  // 보고(DB⑮)를 보여준다 — 한 기록이 학생 여러 명을 담당학생으로 묶어둘 수
+  // 있어(예: 담당반 전체 클리닉), 학생별 한 줄 표시를 위해 여기서 펼친다.
+  const clinicItems = clinicRecordsToday.flatMap((r) =>
+    (r.studentNames.length > 0 ? r.studentNames : ["-"]).map((name, idx) => ({
+      id: `${r.id}:${idx}`,
+      studentName: name,
+      studentNames: r.studentNames,
+      assistantName: r.assistantName,
+      content: r.content,
+      nextPrep: r.nextPrep,
+      checked: r.checked,
+    }))
+  );
 
   const statusCounts = students.reduce<Record<string, number>>((acc, s) => {
     acc[s.status ?? "재원"] = (acc[s.status ?? "재원"] ?? 0) + 1;
@@ -59,6 +82,12 @@ export default async function DirectorDashboardPage() {
       school: e.school,
       grade: e.grade ?? null,
       dDay: daysUntil(e.examDate!, today),
+      examRange: e.examRange,
+      examDate: e.examDate,
+      teachers: e.teachers,
+      progress: e.progress,
+      weakPoints: e.weakPoints,
+      categories: e.categories,
     }));
 
   const lastCounselingByStudent = new Map<string, string>();
@@ -111,7 +140,8 @@ export default async function DirectorDashboardPage() {
             homeworkIncompleteCount={homework.미완료}
             scheduleFlat={scheduleFlat}
             scheduleTotal={scheduleTotal}
-            clinicItems={todaySchedule.clinicTasks}
+            clinicItems={clinicItems}
+            makeupItems={todaySchedule.makeupClasses}
             inquiriesToday={todaySchedule.inquiries}
             counselingToday={todaySchedule.counseling}
             upcomingExams={upcomingExams}

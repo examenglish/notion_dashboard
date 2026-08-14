@@ -2259,6 +2259,31 @@ export async function getAssistantClinicRecordsByDate(assistantId: string, date:
   }));
 }
 
+// 원장 대시보드 "조교 클리닉" 카드용 — 특정 날짜에 조교들이 실제로 작성한
+// 클리닉 기록(진행내용/다음준비사항)을 전체 조교 대상으로 조회한다.
+// getAssistantClinicRecordsByDate와 달리 조교 한 명으로 필터하지 않고,
+// getRecentClinicRecords와 달리 날짜로 걸러서 전체 이력을 다 훑지 않는다.
+export async function getClinicRecordsByDate(date: string) {
+  const [records, staffMap, names] = await Promise.all([
+    queryAllPages({
+      data_source_id: DB.CLINIC,
+      filter: { property: "날짜", date: { equals: date } },
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
+    }),
+    staffNameMap(),
+    studentNameMap(),
+  ]);
+  return records.map((p: any) => ({
+    id: p.id,
+    date: getDate(p, "날짜"),
+    assistantName: firstRelationName(p, "조교", staffMap),
+    studentNames: getRelationIds(p, "담당학생").map((id) => names.get(id) ?? "-"),
+    content: getRichText(p, "진행내용"),
+    nextPrep: getRichText(p, "다음준비사항"),
+    checked: getCheckbox(p, "확인완료"),
+  }));
+}
+
 // 담당강사/원장/행정이 조교들의 클리닉 활동 전체를 훑어보고 확인 체크하는 용도.
 export async function getRecentClinicRecords() {
   const [results, staffMap, studentNames] = await Promise.all([

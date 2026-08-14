@@ -46,31 +46,49 @@ export default function PreviewTestPage() {
             ]}
             clinicItems={[
               {
-                id: "c1",
+                id: "c1:0",
                 studentName: "최지우",
-                time: "17:00",
-                memo: "단어 재시험 대비 유닛 5 복습",
-                owner: "최조교",
-                done: false,
-                school: "이그잼고",
-                gradeNum: "2",
+                studentNames: ["최지우"],
+                assistantName: "최조교",
+                content: "단어 재시험 대비 유닛 5 복습",
+                nextPrep: "유닛 6 예습 확인",
+                checked: false,
               },
               {
-                id: "c2",
+                id: "c2:0",
                 studentName: "정하은",
-                time: "",
-                memo: "",
-                owner: "-",
-                done: false,
-                school: "이그잼중",
-                gradeNum: "1",
+                studentNames: ["정하은", "한소율"],
+                assistantName: "-",
+                content: "",
+                nextPrep: "",
+                checked: false,
               },
             ]}
+            makeupItems={[
+              { id: "m1", studentName: "김민준", time: "18:00", memo: "지난주 결석분 보강 — Unit 4 문법", owner: "박선생", done: false },
+              { id: "m2", studentName: "이서연", time: "", memo: "", owner: "-", done: false },
+            ]}
             upcomingExams={[
-              { studentId: "1", studentName: "김민준", examTitle: "1학기 기말고사", school: "이그잼중", grade: "2", dDay: 3 },
-              { studentId: "2", studentName: "이서연", examTitle: "중간고사 대비", school: "이그잼고", grade: "1", dDay: 6 },
-              { studentId: "3", studentName: "박도윤", examTitle: "1학기 기말고사", school: "이그잼중", grade: "3", dDay: 12 },
-              { studentId: "4", studentName: "최지우", examTitle: "모의고사 대비", school: "이그잼고", grade: "2", dDay: 18 },
+              {
+                studentId: "1",
+                studentName: "김민준",
+                examTitle: "1학기 기말고사",
+                school: "이그잼중",
+                grade: "2",
+                dDay: 3,
+                examRange: "Unit 1~6",
+                examDate: "2026-08-17",
+                teachers: ["박선생"],
+                progress: 62,
+                weakPoints: "관계대명사 파트 반복 오답",
+                categories: [
+                  { label: "교과서", done: 4, total: 6 },
+                  { label: "부교재", done: 2, total: 4 },
+                ],
+              },
+              { studentId: "2", studentName: "이서연", examTitle: "중간고사 대비", school: "이그잼고", grade: "1", dDay: 6, examRange: "", examDate: null, teachers: [], progress: 0, weakPoints: "", categories: [] },
+              { studentId: "3", studentName: "박도윤", examTitle: "1학기 기말고사", school: "이그잼중", grade: "3", dDay: 12, examRange: "", examDate: null, teachers: [], progress: 0, weakPoints: "", categories: [] },
+              { studentId: "4", studentName: "최지우", examTitle: "모의고사 대비", school: "이그잼고", grade: "2", dDay: 18, examRange: "", examDate: null, teachers: [], progress: 0, weakPoints: "", categories: [] },
             ]}
             counselingGapStudents={[
               { id: "1", name: "정하은", school: "이그잼중", grade: "1", lastCounseling: null },

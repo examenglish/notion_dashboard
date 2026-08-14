@@ -8,12 +8,11 @@ import Popup from "./Popup";
 type ClinicItem = {
   id: string;
   studentName: string;
-  time: string;
-  memo: string;
-  owner: string;
-  done: boolean;
-  school: string;
-  gradeNum: string;
+  studentNames: string[];
+  assistantName: string;
+  content: string;
+  nextPrep: string;
+  checked: boolean;
 };
 
 function shiftDate(dateStr: string, days: number): string {
@@ -30,7 +29,7 @@ function dateLabel(dateStr: string, today: string): string {
 }
 
 function ClinicRow({ item, onClick }: { item: ClinicItem; onClick: () => void }) {
-  const ownerLabel = item.owner && item.owner !== "-" ? item.owner : "담당 미배정";
+  const assistant = item.assistantName && item.assistantName !== "-" ? item.assistantName : "담당 미배정";
   return (
     <button
       type="button"
@@ -39,16 +38,17 @@ function ClinicRow({ item, onClick }: { item: ClinicItem; onClick: () => void })
     >
       <div className="flex items-center justify-between gap-2">
         <span className="truncate text-[13px] font-medium text-foreground">{item.studentName}</span>
-        <span className="shrink-0 text-[11px] text-muted-foreground">{item.time || "시간 미정"}</span>
+        <span className="shrink-0 text-[11px] text-muted-foreground">{assistant}</span>
       </div>
-      <div className="truncate text-[11px] text-muted-foreground">
-        {ownerLabel}
-        {item.memo ? ` · ${item.memo}` : ""}
-      </div>
+      <div className="truncate text-[11px] text-muted-foreground">{item.content || "작성된 내용이 없습니다."}</div>
     </button>
   );
 }
 
+// 원장 대시보드 "조교 클리닉" 카드 — DB⑱(지시된 할일)이 아니라 조교가 실제로
+// 작성한 클리닉 기록(DB⑮, /api/clinic-records?date=)을 보여준다. 한 기록이
+// 여러 학생을 담당학생으로 묶을 수 있어(예: 반 전체 클리닉), 학생별로 한
+// 줄씩 펼쳐 보여주되 클릭하면 그 기록에 포함된 학생 전체를 팝업에 표시한다.
 export default function TodayClinicCard({ today, initialItems }: { today: string; initialItems: ClinicItem[] }) {
   const [date, setDate] = useState(today);
   const [items, setItems] = useState<ClinicItem[]>(initialItems);
@@ -59,9 +59,22 @@ export default function TodayClinicCard({ today, initialItems }: { today: string
     const nextDate = shiftDate(date, days);
     setDate(nextDate);
     setLoading(true);
-    fetch(`/api/today-schedule?date=${nextDate}`)
+    fetch(`/api/clinic-records?date=${nextDate}`)
       .then((r) => r.json())
-      .then((data) => setItems(Array.isArray(data.clinicTasks) ? data.clinicTasks : []))
+      .then((records: any[]) => {
+        const rows: ClinicItem[] = (Array.isArray(records) ? records : []).flatMap((r) =>
+          (r.studentNames.length > 0 ? r.studentNames : ["-"]).map((name: string, idx: number) => ({
+            id: `${r.id}:${idx}`,
+            studentName: name,
+            studentNames: r.studentNames,
+            assistantName: r.assistantName,
+            content: r.content,
+            nextPrep: r.nextPrep,
+            checked: r.checked,
+          }))
+        );
+        setItems(rows);
+      })
       .finally(() => setLoading(false));
   }
 
@@ -92,32 +105,33 @@ export default function TodayClinicCard({ today, initialItems }: { today: string
       <CardContent className="flex-1 pt-0.5">
         {loading && <p className="py-6 text-center text-sm text-muted-foreground">불러오는 중...</p>}
         {!loading && items.length === 0 && (
-          <p className="py-6 text-center text-sm text-muted-foreground">표시할 항목이 없습니다.</p>
+          <p className="py-6 text-center text-sm text-muted-foreground">작성된 클리닉 기록이 없습니다.</p>
         )}
         {!loading && items.map((item) => <ClinicRow key={item.id} item={item} onClick={() => setSelected(item)} />)}
       </CardContent>
 
       {selected && (
-        <Popup title={`${selected.studentName} · 클리닉`} countLabel={dateLabel(date, today)} onClose={() => setSelected(null)}>
+        <Popup
+          title={`${selected.studentNames.join(", ") || selected.studentName} · 클리닉`}
+          countLabel={dateLabel(date, today)}
+          onClose={() => setSelected(null)}
+        >
           <div className="space-y-2 text-sm">
-            <div className="text-xs text-muted-foreground">
-              {selected.school} {selected.gradeNum && `${selected.gradeNum}학년`}
-            </div>
             <div>
               <span className="text-xs font-medium text-muted-foreground">담당 조교</span>
-              <p className="text-foreground">{selected.owner && selected.owner !== "-" ? selected.owner : "미배정"}</p>
+              <p className="text-foreground">{selected.assistantName && selected.assistantName !== "-" ? selected.assistantName : "미배정"}</p>
             </div>
             <div>
-              <span className="text-xs font-medium text-muted-foreground">시간</span>
-              <p className="text-foreground">{selected.time || "미정"}</p>
+              <span className="text-xs font-medium text-muted-foreground">확인 완료 여부</span>
+              <p className="text-foreground">{selected.checked ? "확인완료" : "미확인"}</p>
             </div>
             <div>
-              <span className="text-xs font-medium text-muted-foreground">완료 여부</span>
-              <p className="text-foreground">{selected.done ? "완료" : "예정"}</p>
+              <span className="text-xs font-medium text-muted-foreground">진행 내용</span>
+              <p className="whitespace-pre-wrap text-foreground">{selected.content || "작성된 내용이 없습니다."}</p>
             </div>
             <div>
-              <span className="text-xs font-medium text-muted-foreground">학습 내용</span>
-              <p className="whitespace-pre-wrap text-foreground">{selected.memo || "메모가 없습니다."}</p>
+              <span className="text-xs font-medium text-muted-foreground">다음 준비사항</span>
+              <p className="whitespace-pre-wrap text-foreground">{selected.nextPrep || "-"}</p>
             </div>
           </div>
         </Popup>

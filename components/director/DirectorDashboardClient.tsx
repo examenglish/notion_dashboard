@@ -11,19 +11,41 @@ import MakeupStatusCard from "@/components/MakeupStatusCard";
 import TodayClinicCard from "./TodayClinicCard";
 import { InquiryEditRow, CounselingEditRow, type InquiryItem, type CounselingItem } from "./EditableScheduleRow";
 import type { DailyOutcomeStudent } from "@/lib/notion";
+import { cn } from "@/lib/utils";
 
 type ScheduleRow = { id: string; label: string; studentName: string; detail: string };
-type ExamRow = { studentId: string; studentName: string; examTitle: string; school: string; grade: string | null; dDay: number };
+type CategoryBreakdown = { label: string; done: number; total: number };
+type ExamRow = {
+  studentId: string;
+  studentName: string;
+  examTitle: string;
+  school: string;
+  grade: string | null;
+  dDay: number;
+  examRange: string;
+  examDate: string | null;
+  teachers: string[];
+  progress: number;
+  weakPoints: string;
+  categories: CategoryBreakdown[];
+};
 type CounselingGapRow = { id: string; name: string; school: string; grade: string | null; lastCounseling: string | null };
 type ClinicTaskRow = {
+  id: string;
+  studentName: string;
+  studentNames: string[];
+  assistantName: string;
+  content: string;
+  nextPrep: string;
+  checked: boolean;
+};
+type MakeupTaskRow = {
   id: string;
   studentName: string;
   time: string;
   memo: string;
   owner: string;
   done: boolean;
-  school: string;
-  gradeNum: string;
 };
 
 function MoreButton({ count, onClick }: { count: number; onClick: () => void }) {
@@ -33,6 +55,16 @@ function MoreButton({ count, onClick }: { count: number; onClick: () => void }) 
         더보기 · 전체 {count}건
       </button>
     </div>
+  );
+}
+
+// ListRow는 순수 표시용(div)이라 그 위에 button을 씌워 클릭 가능하게 만든다
+// — 오늘 일정/시험 일정/보강 일정 각 행에서 재사용.
+function ClickableRow({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} className="block w-full bg-transparent p-0 text-left">
+      {children}
+    </button>
   );
 }
 
@@ -49,6 +81,7 @@ export default function DirectorDashboardClient({
   scheduleFlat,
   scheduleTotal,
   clinicItems,
+  makeupItems,
   inquiriesToday,
   counselingToday,
   upcomingExams,
@@ -66,18 +99,21 @@ export default function DirectorDashboardClient({
   scheduleFlat: ScheduleRow[];
   scheduleTotal: number;
   clinicItems: ClinicTaskRow[];
+  makeupItems: MakeupTaskRow[];
   inquiriesToday: InquiryItem[];
   counselingToday: CounselingItem[];
   upcomingExams: ExamRow[];
   counselingGapStudents: CounselingGapRow[];
 }) {
   const router = useRouter();
-  const makeupToday = scheduleFlat.filter((i) => i.label === "보강");
   const inquiryById = new Map(inquiriesToday.map((i) => [i.id, i]));
   const counselingById = new Map(counselingToday.map((c) => [c.id, c]));
   function refreshSchedule() {
     router.refresh();
   }
+  const [scheduleDetail, setScheduleDetail] = useState<ScheduleRow | null>(null);
+  const [examDetail, setExamDetail] = useState<ExamRow | null>(null);
+  const [makeupDetail, setMakeupDetail] = useState<MakeupTaskRow | null>(null);
   const [popup, setPopup] = useState<null | "absent" | "homework" | "vocabRetest">(null);
   const [detail, setDetail] = useState<{
     absentStudents: DailyOutcomeStudent[];
@@ -119,8 +155,10 @@ export default function DirectorDashboardClient({
         <NaturalLanguageInput />
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <StatTile icon={Users} label="전체 학생" value={`${studentsCount}명`} sub={`재원 ${activeStudentsCount}`} />
+      <div className={cn("grid grid-cols-2 gap-3", role === "원장" ? "lg:grid-cols-5" : "lg:grid-cols-4")}>
+        {role === "원장" && (
+          <StatTile icon={Users} label="전체 학생" value={`${studentsCount}명`} sub={`재원 ${activeStudentsCount}`} />
+        )}
         <StatTile
           icon={CheckCircle2}
           label="오늘 출석"
@@ -153,7 +191,9 @@ export default function DirectorDashboardClient({
           action={scheduleTotal > PREVIEW_SIZE ? <MoreButton count={scheduleTotal} onClick={() => setListPopup("schedule")} /> : undefined}
         >
           {scheduleFlat.slice(0, PREVIEW_SIZE).map((item, i) => (
-            <ListRow key={i} primary={`${item.studentName} · ${item.label}`} secondary={item.detail} />
+            <ClickableRow key={i} onClick={() => setScheduleDetail(item)}>
+              <ListRow primary={`${item.studentName} · ${item.label}`} secondary={item.detail} />
+            </ClickableRow>
           ))}
         </ListCard>
 
@@ -185,24 +225,27 @@ export default function DirectorDashboardClient({
           action={upcomingExams.length > PREVIEW_SIZE ? <MoreButton count={upcomingExams.length} onClick={() => setListPopup("exams")} /> : undefined}
         >
           {upcomingExams.slice(0, PREVIEW_SIZE).map((e) => (
-            <ListRow
-              key={e.studentId + e.examTitle}
-              primary={`${e.studentName} · ${e.examTitle}`}
-              secondary={`${e.school} ${e.grade ?? ""}`}
-              meta={`D-${e.dDay}`}
-              tone={e.dDay <= 7 ? "destructive" : "default"}
-            />
+            <ClickableRow key={e.studentId + e.examTitle} onClick={() => setExamDetail(e)}>
+              <ListRow
+                primary={`${e.studentName} · ${e.examTitle}`}
+                secondary={`${e.school} ${e.grade ?? ""}`}
+                meta={`D-${e.dDay}`}
+                tone={e.dDay <= 7 ? "destructive" : "default"}
+              />
+            </ClickableRow>
           ))}
         </ListCard>
 
         <ListCard
           title="보강 일정"
-          countLabel={`오늘 ${makeupToday.length}건`}
-          empty={makeupToday.length === 0}
-          action={makeupToday.length > PREVIEW_SIZE ? <MoreButton count={makeupToday.length} onClick={() => setListPopup("makeup")} /> : undefined}
+          countLabel={`오늘 ${makeupItems.length}건`}
+          empty={makeupItems.length === 0}
+          action={makeupItems.length > PREVIEW_SIZE ? <MoreButton count={makeupItems.length} onClick={() => setListPopup("makeup")} /> : undefined}
         >
-          {makeupToday.slice(0, PREVIEW_SIZE).map((item, i) => (
-            <ListRow key={i} primary={item.studentName} secondary={item.detail} />
+          {makeupItems.slice(0, PREVIEW_SIZE).map((item) => (
+            <ClickableRow key={item.id} onClick={() => setMakeupDetail(item)}>
+              <ListRow primary={item.studentName} secondary={item.time || "시간 미정"} meta={item.owner && item.owner !== "-" ? item.owner : "담당 미배정"} />
+            </ClickableRow>
           ))}
         </ListCard>
       </div>
@@ -233,7 +276,7 @@ export default function DirectorDashboardClient({
               ? `${counselingGapStudents.length}명`
               : listPopup === "exams"
               ? `${upcomingExams.length}건`
-              : `${makeupToday.length}건`
+              : `${makeupItems.length}건`
           }
           onClose={() => setListPopup(null)}
         >
@@ -247,7 +290,11 @@ export default function DirectorDashboardClient({
                 const entry = counselingById.get(item.id);
                 if (entry) return <CounselingEditRow key={item.id} item={entry} onChanged={refreshSchedule} />;
               }
-              return <ListRow key={i} primary={`${item.studentName} · ${item.label}`} secondary={item.detail} />;
+              return (
+                <ClickableRow key={i} onClick={() => setScheduleDetail(item)}>
+                  <ListRow primary={`${item.studentName} · ${item.label}`} secondary={item.detail} />
+                </ClickableRow>
+              );
             })}
           {listPopup === "counseling" &&
             counselingGapStudents.map((s) => (
@@ -261,16 +308,95 @@ export default function DirectorDashboardClient({
             ))}
           {listPopup === "exams" &&
             upcomingExams.map((e) => (
-              <ListRow
-                key={e.studentId + e.examTitle}
-                primary={`${e.studentName} · ${e.examTitle}`}
-                secondary={`${e.school} ${e.grade ?? ""}`}
-                meta={`D-${e.dDay}`}
-                tone={e.dDay <= 7 ? "destructive" : "default"}
-              />
+              <ClickableRow key={e.studentId + e.examTitle} onClick={() => setExamDetail(e)}>
+                <ListRow
+                  primary={`${e.studentName} · ${e.examTitle}`}
+                  secondary={`${e.school} ${e.grade ?? ""}`}
+                  meta={`D-${e.dDay}`}
+                  tone={e.dDay <= 7 ? "destructive" : "default"}
+                />
+              </ClickableRow>
             ))}
           {listPopup === "makeup" &&
-            makeupToday.map((item, i) => <ListRow key={i} primary={item.studentName} secondary={item.detail} />)}
+            makeupItems.map((item) => (
+              <ClickableRow key={item.id} onClick={() => setMakeupDetail(item)}>
+                <ListRow primary={item.studentName} secondary={item.time || "시간 미정"} meta={item.owner && item.owner !== "-" ? item.owner : "담당 미배정"} />
+              </ClickableRow>
+            ))}
+        </Popup>
+      )}
+
+      {scheduleDetail && (
+        <Popup title={`${scheduleDetail.studentName} · ${scheduleDetail.label}`} onClose={() => setScheduleDetail(null)}>
+          <p className="whitespace-pre-wrap text-sm text-foreground">{scheduleDetail.detail || "-"}</p>
+        </Popup>
+      )}
+
+      {examDetail && (
+        <Popup title={`${examDetail.studentName} · ${examDetail.examTitle}`} countLabel={`D-${examDetail.dDay}`} onClose={() => setExamDetail(null)}>
+          <div className="space-y-2 text-sm">
+            <div className="text-xs text-muted-foreground">
+              {examDetail.school} {examDetail.grade ?? ""}
+            </div>
+            {examDetail.examRange && (
+              <div>
+                <span className="text-xs font-medium text-muted-foreground">시험범위</span>
+                <p className="text-foreground">{examDetail.examRange}</p>
+              </div>
+            )}
+            {examDetail.examDate && (
+              <div>
+                <span className="text-xs font-medium text-muted-foreground">시험일</span>
+                <p className="text-foreground">{examDetail.examDate}</p>
+              </div>
+            )}
+            <div>
+              <span className="text-xs font-medium text-muted-foreground">담당교사</span>
+              <p className="text-foreground">{examDetail.teachers.length > 0 ? examDetail.teachers.join(", ") : "-"}</p>
+            </div>
+            <div>
+              <span className="text-xs font-medium text-muted-foreground">진행률</span>
+              <p className="text-foreground">{examDetail.progress}%</p>
+            </div>
+            {examDetail.categories.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {examDetail.categories.map((c) => (
+                  <span key={c.label} className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-foreground">
+                    {c.label} {c.done}/{c.total}
+                  </span>
+                ))}
+              </div>
+            )}
+            {examDetail.weakPoints && (
+              <div>
+                <span className="text-xs font-medium text-muted-foreground">취약부분</span>
+                <p className="whitespace-pre-wrap text-foreground">{examDetail.weakPoints}</p>
+              </div>
+            )}
+          </div>
+        </Popup>
+      )}
+
+      {makeupDetail && (
+        <Popup title={`${makeupDetail.studentName} · 보강`} onClose={() => setMakeupDetail(null)}>
+          <div className="space-y-2 text-sm">
+            <div>
+              <span className="text-xs font-medium text-muted-foreground">담당자</span>
+              <p className="text-foreground">{makeupDetail.owner && makeupDetail.owner !== "-" ? makeupDetail.owner : "미배정"}</p>
+            </div>
+            <div>
+              <span className="text-xs font-medium text-muted-foreground">시간</span>
+              <p className="text-foreground">{makeupDetail.time || "미정"}</p>
+            </div>
+            <div>
+              <span className="text-xs font-medium text-muted-foreground">완료 여부</span>
+              <p className="text-foreground">{makeupDetail.done ? "완료" : "예정"}</p>
+            </div>
+            <div>
+              <span className="text-xs font-medium text-muted-foreground">메모</span>
+              <p className="whitespace-pre-wrap text-foreground">{makeupDetail.memo || "메모가 없습니다."}</p>
+            </div>
+          </div>
         </Popup>
       )}
 

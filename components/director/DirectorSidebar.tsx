@@ -68,7 +68,7 @@ function DirectorSidebarInner({ branchName }: { branchName: string }) {
 
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-border bg-sidebar">
-      <Link href="/director" className="flex h-14 items-center gap-2 border-b border-border px-5">
+      <Link href="/director" className="flex h-14 items-center gap-2 border-b border-border px-5 no-underline">
         <Image src="/logo.png" alt="" width={843} height={157} className="h-6 w-auto" />
       </Link>
 
@@ -92,7 +92,7 @@ function DirectorSidebarInner({ branchName }: { branchName: string }) {
                     : "text-sidebar-foreground hover:bg-sidebar-active/60"
                 )}
               >
-                <Link href={href} className="flex flex-1 items-center gap-2.5 px-3 py-2 min-w-0">
+                <Link href={href} className="flex flex-1 items-center gap-2.5 px-3 py-2 min-w-0 no-underline">
                   <Icon
                     className={cn("size-4 shrink-0", active && !children ? "" : "text-sidebar-foreground/60")}
                     strokeWidth={2}
@@ -120,7 +120,7 @@ function DirectorSidebarInner({ branchName }: { branchName: string }) {
                         key={c.href}
                         href={c.href}
                         className={cn(
-                          "block truncate rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors",
+                          "block truncate rounded-md px-2.5 py-1.5 text-[13px] font-medium no-underline transition-colors",
                           childActive
                             ? "bg-sidebar-active text-sidebar-active-foreground"
                             : "text-sidebar-foreground/80 hover:bg-sidebar-active/60"
