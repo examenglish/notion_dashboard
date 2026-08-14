@@ -14,20 +14,16 @@ import type { DailyOutcomeStudent } from "@/lib/notion";
 import { cn } from "@/lib/utils";
 
 type ScheduleRow = { id: string; label: string; studentName: string; detail: string };
-type CategoryBreakdown = { label: string; done: number; total: number };
-type ExamRow = {
-  studentId: string;
+type UrgentRow = {
+  id: string;
+  date: string | null;
+  studentId: string | null;
   studentName: string;
-  examTitle: string;
   school: string;
   grade: string | null;
-  dDay: number;
-  examRange: string;
-  examDate: string | null;
-  teachers: string[];
-  progress: number;
-  weakPoints: string;
-  categories: CategoryBreakdown[];
+  content: string;
+  owner: string;
+  enteredBy: string;
 };
 type CounselingGapRow = { id: string; name: string; school: string; grade: string | null; lastCounseling: string | null };
 type ClinicTaskRow = {
@@ -84,7 +80,7 @@ export default function DirectorDashboardClient({
   makeupItems,
   inquiriesToday,
   counselingToday,
-  upcomingExams,
+  urgentCounseling,
   counselingGapStudents,
 }: {
   today: string;
@@ -102,7 +98,7 @@ export default function DirectorDashboardClient({
   makeupItems: MakeupTaskRow[];
   inquiriesToday: InquiryItem[];
   counselingToday: CounselingItem[];
-  upcomingExams: ExamRow[];
+  urgentCounseling: UrgentRow[];
   counselingGapStudents: CounselingGapRow[];
 }) {
   const router = useRouter();
@@ -112,7 +108,7 @@ export default function DirectorDashboardClient({
     router.refresh();
   }
   const [scheduleDetail, setScheduleDetail] = useState<ScheduleRow | null>(null);
-  const [examDetail, setExamDetail] = useState<ExamRow | null>(null);
+  const [urgentDetail, setUrgentDetail] = useState<UrgentRow | null>(null);
   const [makeupDetail, setMakeupDetail] = useState<MakeupTaskRow | null>(null);
   const [popup, setPopup] = useState<null | "absent" | "homework" | "vocabRetest">(null);
   const [detail, setDetail] = useState<{
@@ -147,7 +143,7 @@ export default function DirectorDashboardClient({
   // first PREVIEW_SIZE rows inline — the rest is available via "더보기" so a
   // busy day doesn't blow out the card height and break the 4-up row layout.
   const PREVIEW_SIZE = 4;
-  const [listPopup, setListPopup] = useState<null | "schedule" | "counseling" | "exams" | "makeup">(null);
+  const [listPopup, setListPopup] = useState<null | "schedule" | "counseling" | "urgent" | "makeup">(null);
 
   return (
     <>
@@ -219,18 +215,22 @@ export default function DirectorDashboardClient({
         </ListCard>
 
         <ListCard
-          title="시험 일정"
-          countLabel="앞으로 21일"
-          empty={upcomingExams.length === 0}
-          action={upcomingExams.length > PREVIEW_SIZE ? <MoreButton count={upcomingExams.length} onClick={() => setListPopup("exams")} /> : undefined}
+          title="긴급상담"
+          countLabel="처리 안 된 건"
+          empty={urgentCounseling.length === 0}
+          action={
+            urgentCounseling.length > PREVIEW_SIZE ? (
+              <MoreButton count={urgentCounseling.length} onClick={() => setListPopup("urgent")} />
+            ) : undefined
+          }
         >
-          {upcomingExams.slice(0, PREVIEW_SIZE).map((e) => (
-            <ClickableRow key={e.studentId + e.examTitle} onClick={() => setExamDetail(e)}>
+          {urgentCounseling.slice(0, PREVIEW_SIZE).map((u) => (
+            <ClickableRow key={u.id} onClick={() => setUrgentDetail(u)}>
               <ListRow
-                primary={`${e.studentName} · ${e.examTitle}`}
-                secondary={`${e.school} ${e.grade ?? ""}`}
-                meta={`D-${e.dDay}`}
-                tone={e.dDay <= 7 ? "destructive" : "default"}
+                primary={u.studentName}
+                secondary={`${u.school} ${u.grade ?? ""}`}
+                meta={u.date ?? ""}
+                tone="destructive"
               />
             </ClickableRow>
           ))}
@@ -265,8 +265,8 @@ export default function DirectorDashboardClient({
               ? "오늘 일정"
               : listPopup === "counseling"
               ? "상담 필요 학생"
-              : listPopup === "exams"
-              ? "시험 일정"
+              : listPopup === "urgent"
+              ? "긴급상담"
               : "보강 일정"
           }
           countLabel={
@@ -274,8 +274,8 @@ export default function DirectorDashboardClient({
               ? `${scheduleTotal}건`
               : listPopup === "counseling"
               ? `${counselingGapStudents.length}명`
-              : listPopup === "exams"
-              ? `${upcomingExams.length}건`
+              : listPopup === "urgent"
+              ? `${urgentCounseling.length}건`
               : `${makeupItems.length}건`
           }
           onClose={() => setListPopup(null)}
@@ -306,15 +306,10 @@ export default function DirectorDashboardClient({
                 tone="warning"
               />
             ))}
-          {listPopup === "exams" &&
-            upcomingExams.map((e) => (
-              <ClickableRow key={e.studentId + e.examTitle} onClick={() => setExamDetail(e)}>
-                <ListRow
-                  primary={`${e.studentName} · ${e.examTitle}`}
-                  secondary={`${e.school} ${e.grade ?? ""}`}
-                  meta={`D-${e.dDay}`}
-                  tone={e.dDay <= 7 ? "destructive" : "default"}
-                />
+          {listPopup === "urgent" &&
+            urgentCounseling.map((u) => (
+              <ClickableRow key={u.id} onClick={() => setUrgentDetail(u)}>
+                <ListRow primary={u.studentName} secondary={`${u.school} ${u.grade ?? ""}`} meta={u.date ?? ""} tone="destructive" />
               </ClickableRow>
             ))}
           {listPopup === "makeup" &&
@@ -332,47 +327,24 @@ export default function DirectorDashboardClient({
         </Popup>
       )}
 
-      {examDetail && (
-        <Popup title={`${examDetail.studentName} · ${examDetail.examTitle}`} countLabel={`D-${examDetail.dDay}`} onClose={() => setExamDetail(null)}>
+      {urgentDetail && (
+        <Popup title={`${urgentDetail.studentName} · 긴급상담`} countLabel={urgentDetail.date ?? undefined} onClose={() => setUrgentDetail(null)}>
           <div className="space-y-2 text-sm">
             <div className="text-xs text-muted-foreground">
-              {examDetail.school} {examDetail.grade ?? ""}
-            </div>
-            {examDetail.examRange && (
-              <div>
-                <span className="text-xs font-medium text-muted-foreground">시험범위</span>
-                <p className="text-foreground">{examDetail.examRange}</p>
-              </div>
-            )}
-            {examDetail.examDate && (
-              <div>
-                <span className="text-xs font-medium text-muted-foreground">시험일</span>
-                <p className="text-foreground">{examDetail.examDate}</p>
-              </div>
-            )}
-            <div>
-              <span className="text-xs font-medium text-muted-foreground">담당교사</span>
-              <p className="text-foreground">{examDetail.teachers.length > 0 ? examDetail.teachers.join(", ") : "-"}</p>
+              {urgentDetail.school} {urgentDetail.grade ?? ""}
             </div>
             <div>
-              <span className="text-xs font-medium text-muted-foreground">진행률</span>
-              <p className="text-foreground">{examDetail.progress}%</p>
+              <span className="text-xs font-medium text-muted-foreground">담당자</span>
+              <p className="text-foreground">{urgentDetail.owner || "미배정"}</p>
             </div>
-            {examDetail.categories.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {examDetail.categories.map((c) => (
-                  <span key={c.label} className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-foreground">
-                    {c.label} {c.done}/{c.total}
-                  </span>
-                ))}
-              </div>
-            )}
-            {examDetail.weakPoints && (
-              <div>
-                <span className="text-xs font-medium text-muted-foreground">취약부분</span>
-                <p className="whitespace-pre-wrap text-foreground">{examDetail.weakPoints}</p>
-              </div>
-            )}
+            <div>
+              <span className="text-xs font-medium text-muted-foreground">내용</span>
+              <p className="whitespace-pre-wrap text-foreground">{urgentDetail.content || "-"}</p>
+            </div>
+            <div>
+              <span className="text-xs font-medium text-muted-foreground">입력자</span>
+              <p className="text-foreground">{urgentDetail.enteredBy || "-"}</p>
+            </div>
           </div>
         </Popup>
       )}

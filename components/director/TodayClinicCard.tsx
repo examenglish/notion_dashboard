@@ -49,11 +49,14 @@ function ClinicRow({ item, onClick }: { item: ClinicItem; onClick: () => void })
 // 작성한 클리닉 기록(DB⑮, /api/clinic-records?date=)을 보여준다. 한 기록이
 // 여러 학생을 담당학생으로 묶을 수 있어(예: 반 전체 클리닉), 학생별로 한
 // 줄씩 펼쳐 보여주되 클릭하면 그 기록에 포함된 학생 전체를 팝업에 표시한다.
+const PREVIEW_SIZE = 5;
+
 export default function TodayClinicCard({ today, initialItems }: { today: string; initialItems: ClinicItem[] }) {
   const [date, setDate] = useState(today);
   const [items, setItems] = useState<ClinicItem[]>(initialItems);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<ClinicItem | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
   function go(days: number) {
     const nextDate = shiftDate(date, days);
@@ -76,6 +79,7 @@ export default function TodayClinicCard({ today, initialItems }: { today: string
         setItems(rows);
       })
       .finally(() => setLoading(false));
+    setShowAll(false);
   }
 
   return (
@@ -107,8 +111,35 @@ export default function TodayClinicCard({ today, initialItems }: { today: string
         {!loading && items.length === 0 && (
           <p className="py-6 text-center text-sm text-muted-foreground">작성된 클리닉 기록이 없습니다.</p>
         )}
-        {!loading && items.map((item) => <ClinicRow key={item.id} item={item} onClick={() => setSelected(item)} />)}
+        {!loading &&
+          items.slice(0, PREVIEW_SIZE).map((item) => <ClinicRow key={item.id} item={item} onClick={() => setSelected(item)} />)}
+        {!loading && items.length > PREVIEW_SIZE && (
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={() => setShowAll(true)}
+              className="bg-transparent p-0 text-xs font-medium text-primary hover:underline"
+            >
+              더보기 · 전체 {items.length}건
+            </button>
+          </div>
+        )}
       </CardContent>
+
+      {showAll && (
+        <Popup title="조교 클리닉" countLabel={`${dateLabel(date, today)} · ${items.length}건`} onClose={() => setShowAll(false)}>
+          {items.map((item) => (
+            <ClinicRow
+              key={item.id}
+              item={item}
+              onClick={() => {
+                setShowAll(false);
+                setSelected(item);
+              }}
+            />
+          ))}
+        </Popup>
+      )}
 
       {selected && (
         <Popup

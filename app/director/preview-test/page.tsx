@@ -11,14 +11,15 @@ export default function PreviewTestPage() {
     <div className="director-shell flex h-screen bg-background text-foreground">
       <DirectorSidebar branchName="이그잼영어학원 · 금정" />
       <div className="flex min-w-0 flex-1 flex-col">
-        <DirectorTopbar staffName="김원장" role="원장" dateLabel="8월 14일(금)" />
+        <DirectorTopbar
+          staffName="김원장"
+          role="원장"
+          dateLabel="8월 14일(금)"
+          greetingTitle="전체 학원 현황"
+          greetingText="김원장 원장님, 오늘 하루 현황입니다."
+        />
 
         <main className="flex-1 overflow-y-auto bg-muted/50 px-6 py-5">
-          <div className="mb-3">
-            <h1 className="text-base font-bold leading-tight text-foreground">전체 학원 현황</h1>
-            <p className="text-xs text-muted-foreground">김원장 원장님, 오늘 하루 현황입니다.</p>
-          </div>
-
           <DirectorDashboardClient
             today="2026-08-14"
             role="원장"
@@ -68,27 +69,18 @@ export default function PreviewTestPage() {
               { id: "m1", studentName: "김민준", time: "18:00", memo: "지난주 결석분 보강 — Unit 4 문법", owner: "박선생", done: false },
               { id: "m2", studentName: "이서연", time: "", memo: "", owner: "-", done: false },
             ]}
-            upcomingExams={[
+            urgentCounseling={[
               {
-                studentId: "1",
-                studentName: "김민준",
-                examTitle: "1학기 기말고사",
+                id: "u1",
+                date: "2026-08-13",
+                studentId: "5",
+                studentName: "정하은",
                 school: "이그잼중",
-                grade: "2",
-                dDay: 3,
-                examRange: "Unit 1~6",
-                examDate: "2026-08-17",
-                teachers: ["박선생"],
-                progress: 62,
-                weakPoints: "관계대명사 파트 반복 오답",
-                categories: [
-                  { label: "교과서", done: 4, total: 6 },
-                  { label: "부교재", done: 2, total: 4 },
-                ],
+                grade: "1",
+                content: "성적 급락으로 학부모가 긴급 상담 요청",
+                owner: "김원장",
+                enteredBy: "박선생",
               },
-              { studentId: "2", studentName: "이서연", examTitle: "중간고사 대비", school: "이그잼고", grade: "1", dDay: 6, examRange: "", examDate: null, teachers: [], progress: 0, weakPoints: "", categories: [] },
-              { studentId: "3", studentName: "박도윤", examTitle: "1학기 기말고사", school: "이그잼중", grade: "3", dDay: 12, examRange: "", examDate: null, teachers: [], progress: 0, weakPoints: "", categories: [] },
-              { studentId: "4", studentName: "최지우", examTitle: "모의고사 대비", school: "이그잼고", grade: "2", dDay: 18, examRange: "", examDate: null, teachers: [], progress: 0, weakPoints: "", categories: [] },
             ]}
             counselingGapStudents={[
               { id: "1", name: "정하은", school: "이그잼중", grade: "1", lastCounseling: null },

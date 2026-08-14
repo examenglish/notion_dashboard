@@ -10,10 +10,16 @@ export default function DirectorTopbar({
   staffName,
   role,
   dateLabel,
+  greetingTitle,
+  greetingText,
 }: {
   staffName: string;
   role: string;
   dateLabel: string;
+  // 검색창 우측에 놓는 페이지 제목/한줄 소개 — 대시보드에서만 넘긴다
+  // (다른 /director 하위 페이지는 각자 본문에 자기 제목을 따로 둔다).
+  greetingTitle?: string;
+  greetingText?: string;
 }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -109,6 +115,13 @@ export default function DirectorTopbar({
           </div>
         )}
       </div>
+
+      {greetingTitle && (
+        <div className="ml-4 min-w-0 flex-1 truncate text-sm">
+          <span className="font-semibold text-foreground">{greetingTitle}</span>
+          {greetingText && <span className="text-muted-foreground"> · {greetingText}</span>}
+        </div>
+      )}
 
       <DirectorUserMenu staffName={staffName} role={role} />
     </header>

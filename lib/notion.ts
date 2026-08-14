@@ -1552,6 +1552,41 @@ function firstRelationName(page: Page, prop: string, names: Map<string, string>)
   return names.get(ids[0]) ?? "-";
 }
 
+// 원장 대시보드 "긴급상담" 카드용 — 입력유형=긴급상담요청 중 아직 처리 안 된
+// 것만, 전체 이력을 훑는 getRecentAdminInbox와 달리 날짜 무관하게(급한 건은
+// 하루만 보여주면 놓칠 수 있어) 필터링해서 가져온다.
+export async function getUrgentCounselingRequests() {
+  const [results, names, briefs] = await Promise.all([
+    queryAllPages({
+      data_source_id: DB.ADMIN_INBOX,
+      filter: {
+        and: [
+          { property: "입력유형", select: { equals: "긴급상담요청" } },
+          { property: "처리완료", checkbox: { equals: false } },
+        ],
+      },
+      sorts: [{ property: "날짜", direction: "descending" }],
+    }),
+    studentNameMap(),
+    studentSchoolGradeMap(),
+  ]);
+  return results.map((p: any) => {
+    const studentId = getRelationIds(p, "대상학생")[0] ?? null;
+    const brief = studentId ? briefs.get(studentId) : undefined;
+    return {
+      id: p.id,
+      date: getDate(p, "날짜"),
+      studentId,
+      studentName: firstRelationName(p, "대상학생", names),
+      school: brief?.school ?? "",
+      grade: brief?.grade ?? null,
+      content: getRichText(p, "내용"),
+      owner: getRichText(p, "담당자"),
+      enteredBy: getRichText(p, "입력자"),
+    };
+  });
+}
+
 export async function getRecentAdminInbox() {
   const [results, names, briefs] = await Promise.all([
     queryAllPages({

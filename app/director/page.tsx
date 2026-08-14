@@ -5,9 +5,9 @@ import {
   searchStudents,
   getTodaySchedule,
   getDailyOutcomeBreakdown,
-  listExamPrepOverview,
   getRecentCounseling,
   getClinicRecordsByDate,
+  getUrgentCounselingRequests,
 } from "@/lib/notion";
 import DirectorSidebar from "@/components/director/DirectorSidebar";
 import DirectorTopbar from "@/components/director/DirectorTopbar";
@@ -39,11 +39,11 @@ export default async function DirectorDashboardPage() {
   const today = todayKST();
   const branchName = process.env.NEXT_PUBLIC_BRANCH_NAME ?? "이그잼영어학원";
 
-  const [students, todaySchedule, dailyOutcome, examPrepItems, counselingEntries, clinicRecordsToday] = await Promise.all([
+  const [students, todaySchedule, dailyOutcome, urgentCounseling, counselingEntries, clinicRecordsToday] = await Promise.all([
     searchStudents(""),
     getTodaySchedule(today, session.staffId),
     getDailyOutcomeBreakdown(today),
-    listExamPrepOverview(),
+    getUrgentCounselingRequests(),
     getRecentCounseling(),
     getClinicRecordsByDate(today),
   ]);
@@ -71,24 +71,6 @@ export default async function DirectorDashboardPage() {
   const { attendance, vocab, homework } = dailyOutcome;
   const loggedToday = attendance.출석 + attendance.지각 + attendance.결석;
   const attendanceRatePct = loggedToday > 0 ? Math.round(((attendance.출석 + attendance.지각) / loggedToday) * 100) : null;
-
-  const upcomingExams = examPrepItems
-    .filter((e) => e.examDate && daysUntil(e.examDate, today) >= 0 && daysUntil(e.examDate, today) <= 21)
-    .sort((a, b) => (a.examDate! < b.examDate! ? -1 : 1))
-    .map((e) => ({
-      studentId: e.studentId,
-      studentName: e.studentName,
-      examTitle: e.examTitle || "시험대비",
-      school: e.school,
-      grade: e.grade ?? null,
-      dDay: daysUntil(e.examDate!, today),
-      examRange: e.examRange,
-      examDate: e.examDate,
-      teachers: e.teachers,
-      progress: e.progress,
-      weakPoints: e.weakPoints,
-      categories: e.categories,
-    }));
 
   const lastCounselingByStudent = new Map<string, string>();
   for (const c of counselingEntries) {
@@ -120,14 +102,15 @@ export default async function DirectorDashboardPage() {
     <div className="director-shell flex h-screen bg-background text-foreground">
       <DirectorSidebar branchName={branchName} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <DirectorTopbar staffName={session.name} role={session.role ?? ""} dateLabel={formatDateLabel(today)} />
+        <DirectorTopbar
+          staffName={session.name}
+          role={session.role ?? ""}
+          dateLabel={formatDateLabel(today)}
+          greetingTitle="전체 학원 현황"
+          greetingText={`${session.name} 원장님, 오늘 하루 현황입니다.`}
+        />
 
         <main className="flex-1 overflow-y-auto bg-muted/50 px-6 py-5">
-          <div className="mb-3">
-            <h1 className="text-base font-bold leading-tight text-foreground">전체 학원 현황</h1>
-            <p className="text-xs text-muted-foreground">{session.name} 원장님, 오늘 하루 현황입니다.</p>
-          </div>
-
           <DirectorDashboardClient
             today={today}
             role={session.role ?? ""}
@@ -144,7 +127,7 @@ export default async function DirectorDashboardPage() {
             makeupItems={todaySchedule.makeupClasses}
             inquiriesToday={todaySchedule.inquiries}
             counselingToday={todaySchedule.counseling}
-            upcomingExams={upcomingExams}
+            urgentCounseling={urgentCounseling}
             counselingGapStudents={counselingGapStudents}
           />
         </main>
