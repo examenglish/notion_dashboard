@@ -34,8 +34,8 @@ function BrowseRow({
       type="button"
       onClick={onClick}
       className={cn(
-        "flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted/60",
-        active ? "bg-accent font-semibold text-accent-foreground" : "bg-transparent text-foreground"
+        "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs font-normal hover:bg-muted/60",
+        active ? "bg-accent text-accent-foreground" : "bg-transparent text-foreground"
       )}
     >
       <span className="truncate">{label}</span>
@@ -48,7 +48,7 @@ function BrowseColumn({ title, width, children }: { title: string; width: number
   return (
     <Card className="flex h-full flex-col" style={{ width, flexShrink: 0 }}>
       <CardHeader>
-        <CardTitle className="truncate text-sm" title={title}>
+        <CardTitle className="truncate text-xs font-normal text-muted-foreground" title={title}>
           {title}
         </CardTitle>
       </CardHeader>
@@ -129,15 +129,15 @@ export default function ExamPrepDirectorClient() {
     <div className="flex items-start gap-4" style={{ height: "calc(100vh - 8.5rem)" }}>
       <Card className="flex h-full flex-col" style={{ width: 170, flexShrink: 0 }}>
         <CardHeader className="flex-col items-stretch gap-2.5">
-          <CardTitle className="text-sm">시험대비 · 학생 찾기</CardTitle>
+          <CardTitle className="text-xs font-normal text-muted-foreground">시험대비 · 학생 찾기</CardTitle>
           <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               type="search"
               placeholder="이름으로 검색"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className="pl-9"
+              className="pl-8 text-xs placeholder:font-normal"
             />
           </div>
         </CardHeader>
