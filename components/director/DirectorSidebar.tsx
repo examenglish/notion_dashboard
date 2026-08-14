@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -44,7 +44,19 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/director/student-levels", label: "학생 레벨", icon: BarChart3, exact: false, tone: "text-sky-600" },
 ];
 
-export default function DirectorSidebar({ branchName }: { branchName: string }) {
+// useSearchParams() forces any statically-rendered page that embeds this
+// sidebar to opt into a Suspense boundary (Next.js requirement) — the
+// preview-test QA pages under /director aren't gated by getSession()/cookies
+// like the real pages, so without this wrapper they fail `next build`.
+export default function DirectorSidebar(props: { branchName: string }) {
+  return (
+    <Suspense fallback={<aside className="h-full w-60 shrink-0 border-r border-border bg-sidebar" />}>
+      <DirectorSidebarInner {...props} />
+    </Suspense>
+  );
+}
+
+function DirectorSidebarInner({ branchName }: { branchName: string }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const currentTab = searchParams.get("tab");
