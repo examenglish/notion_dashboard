@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { classColor, stripClassSuffix } from "@/lib/format";
 import type { StudentRow } from "@/components/StudentTable";
+import StudentHistoryModal from "@/components/StudentHistoryModal";
 
 export type StudentDetail = {
   student: StudentRow;
@@ -18,10 +19,16 @@ const pct = (v: number | null) => (v === null ? "-" : `${Math.round(v * 100)}%`)
 export default function StudentDetailPanel({
   detail,
   loading,
+  staffName,
+  onChanged,
 }: {
   detail: StudentDetail | null;
   loading: boolean;
+  staffName: string;
+  onChanged?: () => void;
 }) {
+  const [showHistory, setShowHistory] = useState(false);
+
   const trendData = useMemo(() => {
     if (!detail) return [];
     return detail.dailyRecords.map((r) => ({
@@ -59,9 +66,18 @@ export default function StudentDetailPanel({
                   {detail.student.school} · {detail.student.grade}
                 </span>
               </div>
-              {detail.student.status && detail.student.status !== "재원" && (
-                <Badge variant="warning">{detail.student.status}</Badge>
-              )}
+              <div className="flex shrink-0 items-center gap-2">
+                {detail.student.status && detail.student.status !== "재원" && (
+                  <Badge variant="warning">{detail.student.status}</Badge>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowHistory(true)}
+                  className="rounded-md border border-border bg-transparent px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
+                >
+                  전체기록 보기
+                </button>
+              </div>
             </div>
 
             <div className="mt-2 text-xs text-muted-foreground">
@@ -127,6 +143,24 @@ export default function StudentDetailPanel({
           </div>
         )}
       </CardContent>
+
+      {detail && showHistory && (
+        <StudentHistoryModal
+          studentId={detail.student.id}
+          student={{
+            name: detail.student.name,
+            school: detail.student.school,
+            grade: detail.student.grade,
+            memo: detail.student.memo ?? "",
+          }}
+          staffName={staffName}
+          staffRole="원장"
+          trendData={trendData}
+          scoreData={scoreData}
+          onClose={() => setShowHistory(false)}
+          onChanged={onChanged}
+        />
+      )}
     </Card>
   );
 }

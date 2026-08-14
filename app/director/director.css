@@ -60,3 +60,13 @@
    utility class (0,1,0). Rather than fight that in CSS, every native input
    under .director-shell simply avoids those literal `type` values (uses
    type="search" or omits `type`), so the selector never matches here. */
+
+/* app/globals.css also has a bare `button { background: var(--primary);
+   color: #fff; padding: 10px 16px; ... }` (its "buttons look primary by
+   default" convention), loaded app-wide at the same (0,0,1) specificity as
+   any equivalent bare-selector reset placed here — which stylesheet wins a
+   same-specificity tie turned out to depend on Next.js's CSS chunk order,
+   not simple import order, so a blanket reset here isn't reliable. Every
+   plain <button> under /director instead sets its own bg-* utility class
+   (0,1,0), which unconditionally outranks the (0,0,1) global rule — same
+   fix as the input[type] note above, applied per-component. */

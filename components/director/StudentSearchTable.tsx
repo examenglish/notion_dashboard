@@ -83,7 +83,7 @@ function BottomMetricsPanel({ onSelect }: { onSelect: (id: string) => void }) {
               key={r.studentId}
               type="button"
               onClick={() => onSelect(r.studentId)}
-              className="flex w-full items-center justify-between gap-3 border-b border-border py-2.5 text-left text-sm last:border-b-0 hover:bg-muted/40"
+              className="flex w-full items-center justify-between gap-3 border-b border-border bg-transparent px-0 py-2.5 text-left text-sm last:border-b-0 hover:bg-muted/40"
             >
               <div className="flex min-w-0 items-center gap-2">
                 <span className="shrink-0 font-medium text-foreground">{r.studentName}</span>
@@ -104,7 +104,7 @@ function BottomMetricsPanel({ onSelect }: { onSelect: (id: string) => void }) {
         <button
           type="button"
           onClick={() => setShowAll(true)}
-          className="mt-2.5 text-xs font-medium text-primary hover:underline"
+          className="mt-2.5 bg-transparent p-0 text-xs font-medium text-primary hover:underline"
         >
           더보기 (하위 30명까지)
         </button>

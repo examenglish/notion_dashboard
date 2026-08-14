@@ -104,7 +104,7 @@ function DirectorSidebarInner({ branchName }: { branchName: string }) {
                     type="button"
                     aria-label={isOpen ? `${label} 메뉴 접기` : `${label} 메뉴 펼치기`}
                     onClick={() => setOpenKey((cur) => (cur === href ? null : href))}
-                    className="shrink-0 rounded p-1.5 mr-1 text-sidebar-foreground/60 hover:bg-sidebar-active/60"
+                    className="shrink-0 rounded bg-transparent p-1.5 mr-1 text-sidebar-foreground/60 hover:bg-sidebar-active/60"
                   >
                     <ChevronRight className={cn("size-3.5 transition-transform", isOpen && "rotate-90")} strokeWidth={2.5} />
                   </button>

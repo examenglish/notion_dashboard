@@ -5,7 +5,13 @@ import StudentSearchTable from "./StudentSearchTable";
 import StudentDetailPanel, { StudentDetail } from "./StudentDetailPanel";
 import type { StudentRow } from "@/components/StudentTable";
 
-export default function DirectorStudentsClient({ initialStudents }: { initialStudents: StudentRow[] }) {
+export default function DirectorStudentsClient({
+  initialStudents,
+  staffName,
+}: {
+  initialStudents: StudentRow[];
+  staffName: string;
+}) {
   const [query, setQuery] = useState("");
   const [students, setStudents] = useState<StudentRow[]>(initialStudents);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -42,7 +48,12 @@ export default function DirectorStudentsClient({ initialStudents }: { initialStu
         onSelect={selectStudent}
         selectedId={selectedId}
       />
-      <StudentDetailPanel detail={detail} loading={loadingDetail} />
+      <StudentDetailPanel
+        detail={detail}
+        loading={loadingDetail}
+        staffName={staffName}
+        onChanged={() => selectedId && selectStudent(selectedId)}
+      />
     </div>
   );
 }

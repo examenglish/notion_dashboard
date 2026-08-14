@@ -26,7 +26,7 @@ export default async function DirectorStudentsPage() {
             <p className="text-sm text-muted-foreground">재원생 {students.length}명 · 이름으로 검색하거나 이번 달 하위 지표에서 바로 확인하세요.</p>
           </div>
 
-          <DirectorStudentsClient initialStudents={students} />
+          <DirectorStudentsClient initialStudents={students} staffName={session.name} />
         </main>
       </div>
     </div>

@@ -13,6 +13,16 @@ type ScheduleRow = { label: string; studentName: string; detail: string };
 type ExamRow = { studentId: string; studentName: string; examTitle: string; school: string; grade: string | null; dDay: number };
 type CounselingGapRow = { id: string; name: string; school: string; grade: string | null; lastCounseling: string | null };
 
+function MoreButton({ count, onClick }: { count: number; onClick: () => void }) {
+  return (
+    <div className="px-4 pb-3 pt-1">
+      <button type="button" onClick={onClick} className="bg-transparent p-0 text-xs font-medium text-primary hover:underline">
+        더보기 · 전체 {count}건
+      </button>
+    </div>
+  );
+}
+
 export default function DirectorDashboardClient({
   today,
   role,
@@ -63,6 +73,12 @@ export default function DirectorDashboardClient({
   const popupList =
     popup === "absent" ? detail?.absentStudents : popup === "homework" ? detail?.incompleteHomeworkStudents : undefined;
 
+  // First-row cards (오늘 일정/상담 필요 학생/시험 일정/보강 일정) only show the
+  // first PREVIEW_SIZE rows inline — the rest is available via "더보기" so a
+  // busy day doesn't blow out the card height and break the 4-up row layout.
+  const PREVIEW_SIZE = 4;
+  const [listPopup, setListPopup] = useState<null | "schedule" | "counseling" | "exams" | "makeup">(null);
+
   return (
     <>
       <div className="mb-3">
@@ -89,22 +105,29 @@ export default function DirectorDashboardClient({
         />
       </div>
 
-      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <ListCard title="오늘 일정" countLabel={`전체 ${scheduleTotal}건`} empty={scheduleTotal === 0}>
-          {scheduleFlat.slice(0, 8).map((item, i) => (
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <ListCard
+          title="오늘 일정"
+          countLabel={`전체 ${scheduleTotal}건`}
+          empty={scheduleTotal === 0}
+          action={scheduleTotal > PREVIEW_SIZE ? <MoreButton count={scheduleTotal} onClick={() => setListPopup("schedule")} /> : undefined}
+        >
+          {scheduleFlat.slice(0, PREVIEW_SIZE).map((item, i) => (
             <ListRow key={i} primary={`${item.studentName} · ${item.label}`} secondary={item.detail} />
           ))}
-          {scheduleTotal > 8 && (
-            <p className="pt-1.5 text-[11px] text-muted-foreground">외 {scheduleTotal - 8}건 더 — 대시보드에서 전체 확인</p>
-          )}
         </ListCard>
 
         <ListCard
           title="상담 필요 학생"
           countLabel="상담 30일 이상 공백"
           empty={counselingGapStudents.length === 0}
+          action={
+            counselingGapStudents.length > PREVIEW_SIZE ? (
+              <MoreButton count={counselingGapStudents.length} onClick={() => setListPopup("counseling")} />
+            ) : undefined
+          }
         >
-          {counselingGapStudents.map((s) => (
+          {counselingGapStudents.slice(0, PREVIEW_SIZE).map((s) => (
             <ListRow
               key={s.id}
               primary={s.name}
@@ -115,12 +138,13 @@ export default function DirectorDashboardClient({
           ))}
         </ListCard>
 
-        <div className="director-embed">
-          <MakeupStatusCard role={role} variant="embed" />
-        </div>
-
-        <ListCard title="시험 일정" countLabel="앞으로 21일" empty={upcomingExams.length === 0}>
-          {upcomingExams.map((e) => (
+        <ListCard
+          title="시험 일정"
+          countLabel="앞으로 21일"
+          empty={upcomingExams.length === 0}
+          action={upcomingExams.length > PREVIEW_SIZE ? <MoreButton count={upcomingExams.length} onClick={() => setListPopup("exams")} /> : undefined}
+        >
+          {upcomingExams.slice(0, PREVIEW_SIZE).map((e) => (
             <ListRow
               key={e.studentId + e.examTitle}
               primary={`${e.studentName} · ${e.examTitle}`}
@@ -131,18 +155,80 @@ export default function DirectorDashboardClient({
           ))}
         </ListCard>
 
+        <ListCard
+          title="보강 일정"
+          countLabel={`오늘 ${makeupToday.length}건`}
+          empty={makeupToday.length === 0}
+          action={makeupToday.length > PREVIEW_SIZE ? <MoreButton count={makeupToday.length} onClick={() => setListPopup("makeup")} /> : undefined}
+        >
+          {makeupToday.slice(0, PREVIEW_SIZE).map((item, i) => (
+            <ListRow key={i} primary={item.studentName} secondary={item.detail} />
+          ))}
+        </ListCard>
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
         <ListCard title="조교 클리닉" countLabel={`오늘 ${clinicToday.length}건`} empty={clinicToday.length === 0}>
           {clinicToday.map((item, i) => (
             <ListRow key={i} primary={item.studentName} secondary={item.detail} />
           ))}
         </ListCard>
 
-        <ListCard title="보강 일정" countLabel={`오늘 ${makeupToday.length}건`} empty={makeupToday.length === 0}>
-          {makeupToday.map((item, i) => (
-            <ListRow key={i} primary={item.studentName} secondary={item.detail} />
-          ))}
-        </ListCard>
+        <div className="director-embed">
+          <MakeupStatusCard role={role} variant="embed" />
+        </div>
       </div>
+
+      {listPopup && (
+        <Popup
+          title={
+            listPopup === "schedule"
+              ? "오늘 일정"
+              : listPopup === "counseling"
+              ? "상담 필요 학생"
+              : listPopup === "exams"
+              ? "시험 일정"
+              : "보강 일정"
+          }
+          countLabel={
+            listPopup === "schedule"
+              ? `${scheduleTotal}건`
+              : listPopup === "counseling"
+              ? `${counselingGapStudents.length}명`
+              : listPopup === "exams"
+              ? `${upcomingExams.length}건`
+              : `${makeupToday.length}건`
+          }
+          onClose={() => setListPopup(null)}
+        >
+          {listPopup === "schedule" &&
+            scheduleFlat.map((item, i) => (
+              <ListRow key={i} primary={`${item.studentName} · ${item.label}`} secondary={item.detail} />
+            ))}
+          {listPopup === "counseling" &&
+            counselingGapStudents.map((s) => (
+              <ListRow
+                key={s.id}
+                primary={s.name}
+                secondary={`${s.school} ${s.grade ?? ""}`}
+                meta={s.lastCounseling ? `마지막 상담 ${s.lastCounseling}` : "상담 이력 없음"}
+                tone="warning"
+              />
+            ))}
+          {listPopup === "exams" &&
+            upcomingExams.map((e) => (
+              <ListRow
+                key={e.studentId + e.examTitle}
+                primary={`${e.studentName} · ${e.examTitle}`}
+                secondary={`${e.school} ${e.grade ?? ""}`}
+                meta={`D-${e.dDay}`}
+                tone={e.dDay <= 7 ? "destructive" : "default"}
+              />
+            ))}
+          {listPopup === "makeup" &&
+            makeupToday.map((item, i) => <ListRow key={i} primary={item.studentName} secondary={item.detail} />)}
+        </Popup>
+      )}
 
       {popup && (
         <Popup

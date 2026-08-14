@@ -105,7 +105,7 @@ export default function PreviewTestPage() {
               onSelect={setSelectedId}
               selectedId={selectedId}
             />
-            <StudentDetailPanel detail={selectedId === "1" ? FIXTURE_DETAIL : null} loading={false} />
+            <StudentDetailPanel detail={selectedId === "1" ? FIXTURE_DETAIL : null} loading={false} staffName="김원장" />
           </div>
         </main>
       </div>

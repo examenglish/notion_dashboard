@@ -52,7 +52,6 @@ export default async function DirectorDashboardPage() {
   const upcomingExams = examPrepItems
     .filter((e) => e.examDate && daysUntil(e.examDate, today) >= 0 && daysUntil(e.examDate, today) <= 21)
     .sort((a, b) => (a.examDate! < b.examDate! ? -1 : 1))
-    .slice(0, 8)
     .map((e) => ({
       studentId: e.studentId,
       studentName: e.studentName,
@@ -76,8 +75,7 @@ export default async function DirectorDashboardPage() {
       return { ...s, lastCounseling: last, gapDays };
     })
     .filter((s) => s.gapDays === null || s.gapDays >= 30)
-    .sort((a, b) => (b.gapDays ?? 9999) - (a.gapDays ?? 9999))
-    .slice(0, 8);
+    .sort((a, b) => (b.gapDays ?? 9999) - (a.gapDays ?? 9999));
 
   const scheduleFlat = SCHEDULE_GROUPS.flatMap(({ key, label, detail }) =>
     ((todaySchedule as any)[key] as any[]).map((item) => ({

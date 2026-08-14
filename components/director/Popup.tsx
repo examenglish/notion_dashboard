@@ -32,7 +32,7 @@ export default function Popup({
             type="button"
             onClick={onClose}
             aria-label="닫기"
-            className="rounded p-1 text-muted-foreground hover:bg-muted"
+            className="rounded bg-transparent p-1 text-muted-foreground hover:bg-muted"
           >
             <X className="size-4" />
           </button>
