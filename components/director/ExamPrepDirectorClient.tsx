@@ -35,7 +35,7 @@ function BrowseRow({
       onClick={onClick}
       className={cn(
         "flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted/60",
-        active ? "bg-accent font-semibold text-accent-foreground" : "text-foreground"
+        active ? "bg-accent font-semibold text-accent-foreground" : "bg-transparent text-foreground"
       )}
     >
       <span className="truncate">{label}</span>
@@ -48,7 +48,9 @@ function BrowseColumn({ title, width, children }: { title: string; width: number
   return (
     <Card className="flex h-full flex-col" style={{ width, flexShrink: 0 }}>
       <CardHeader>
-        <CardTitle className="text-sm">{title}</CardTitle>
+        <CardTitle className="truncate text-sm" title={title}>
+          {title}
+        </CardTitle>
       </CardHeader>
       <CardContent className="flex-1 space-y-0.5 overflow-y-auto pt-0.5">{children}</CardContent>
     </Card>
@@ -125,7 +127,7 @@ export default function ExamPrepDirectorClient() {
 
   return (
     <div className="flex items-start gap-4" style={{ height: "calc(100vh - 8.5rem)" }}>
-      <Card className="flex h-full flex-col" style={{ width: 220, flexShrink: 0 }}>
+      <Card className="flex h-full flex-col" style={{ width: 170, flexShrink: 0 }}>
         <CardHeader className="flex-col items-stretch gap-2.5">
           <CardTitle className="text-sm">시험대비 · 학생 찾기</CardTitle>
           <div className="relative">
@@ -174,7 +176,7 @@ export default function ExamPrepDirectorClient() {
       </Card>
 
       {!query.trim() && selectedSchool && (
-        <BrowseColumn title="학년" width={110}>
+        <BrowseColumn title="학년" width={80}>
           {grades.length === 0 && <p className="py-6 text-center text-xs text-muted-foreground">학생 없음</p>}
           {grades.map((g) => (
             <BrowseRow
@@ -191,7 +193,7 @@ export default function ExamPrepDirectorClient() {
       )}
 
       {!query.trim() && selectedGrade && (
-        <BrowseColumn title={`${selectedSchool} ${selectedGrade}`} width={170}>
+        <BrowseColumn title={`${selectedSchool} ${selectedGrade}`} width={120}>
           {gradeStudents.length === 0 && (
             <p className="py-6 text-center text-xs text-muted-foreground">소속 학생이 없습니다.</p>
           )}
