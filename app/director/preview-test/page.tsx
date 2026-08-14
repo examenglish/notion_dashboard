@@ -46,12 +46,6 @@ export default function PreviewTestPage() {
               { studentId: "3", studentName: "박도윤", examTitle: "1학기 기말고사", school: "이그잼중", grade: "3", dDay: 12 },
               { studentId: "4", studentName: "최지우", examTitle: "모의고사 대비", school: "이그잼고", grade: "2", dDay: 18 },
             ]}
-            recentGrades={[
-              { id: "1", name: "김민준", subject: "영어", examName: "1학기 기말고사", score: 92, date: "2026-08-10" },
-              { id: "2", name: "이서연", subject: "영어", examName: "모의고사", score: 78, date: "2026-08-09" },
-              { id: "3", name: "박도윤", subject: "영어", examName: "중간고사", score: 65, date: "2026-08-07" },
-              { id: "4", name: "최지우", subject: "영어", examName: "단원평가", score: 88, date: "2026-08-05" },
-            ]}
             counselingGapStudents={[
               { id: "1", name: "정하은", school: "이그잼중", grade: "1", lastCounseling: null },
               { id: "2", name: "한소율", school: "이그잼고", grade: "2", lastCounseling: "2026-06-20" },

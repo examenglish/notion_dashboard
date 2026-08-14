@@ -10,10 +10,13 @@
 
 :root {
   --sc-background: 0 0% 100%;
-  --sc-foreground: 222 39% 15%;
+  /* Was 222 39% 15% — a saturated navy that read as "blue text" at small
+     sizes (student names, table cells) and hurt legibility. Desaturated +
+     darkened so body text reads as near-black instead. */
+  --sc-foreground: 222 15% 11%;
 
   --sc-card: 0 0% 100%;
-  --sc-card-foreground: 222 39% 15%;
+  --sc-card-foreground: 222 15% 11%;
 
   --sc-border: 214 20% 90%;
   --sc-input: 214 20% 88%;

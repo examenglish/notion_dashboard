@@ -11,7 +11,6 @@ import type { DailyOutcomeStudent } from "@/lib/notion";
 
 type ScheduleRow = { label: string; studentName: string; detail: string };
 type ExamRow = { studentId: string; studentName: string; examTitle: string; school: string; grade: string | null; dDay: number };
-type GradeRow = { id: string; name: string; subject: string; examName: string; score: number | string; date: string };
 type CounselingGapRow = { id: string; name: string; school: string; grade: string | null; lastCounseling: string | null };
 
 export default function DirectorDashboardClient({
@@ -27,7 +26,6 @@ export default function DirectorDashboardClient({
   scheduleFlat,
   scheduleTotal,
   upcomingExams,
-  recentGrades,
   counselingGapStudents,
 }: {
   today: string;
@@ -42,9 +40,10 @@ export default function DirectorDashboardClient({
   scheduleFlat: ScheduleRow[];
   scheduleTotal: number;
   upcomingExams: ExamRow[];
-  recentGrades: GradeRow[];
   counselingGapStudents: CounselingGapRow[];
 }) {
+  const clinicToday = scheduleFlat.filter((i) => i.label === "클리닉");
+  const makeupToday = scheduleFlat.filter((i) => i.label === "보강");
   const [popup, setPopup] = useState<null | "absent" | "homework">(null);
   const [detail, setDetail] = useState<{ absentStudents: DailyOutcomeStudent[]; incompleteHomeworkStudents: DailyOutcomeStudent[] } | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -132,9 +131,15 @@ export default function DirectorDashboardClient({
           ))}
         </ListCard>
 
-        <ListCard title="최근 성적" empty={recentGrades.length === 0}>
-          {recentGrades.map((s) => (
-            <ListRow key={s.id} primary={s.name} secondary={`${s.subject} ${s.examName}`} meta={`${s.score}점 · ${s.date}`} />
+        <ListCard title="조교 클리닉" countLabel={`오늘 ${clinicToday.length}건`} empty={clinicToday.length === 0}>
+          {clinicToday.map((item, i) => (
+            <ListRow key={i} primary={item.studentName} secondary={item.detail} />
+          ))}
+        </ListCard>
+
+        <ListCard title="보강 일정" countLabel={`오늘 ${makeupToday.length}건`} empty={makeupToday.length === 0}>
+          {makeupToday.map((item, i) => (
+            <ListRow key={i} primary={item.studentName} secondary={item.detail} />
           ))}
         </ListCard>
       </div>

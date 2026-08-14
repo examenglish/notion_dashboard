@@ -62,19 +62,6 @@ export default async function DirectorDashboardPage() {
       dDay: daysUntil(e.examDate!, today),
     }));
 
-  const recentGrades = students
-    .filter((s) => s.latestExam)
-    .sort((a, b) => (a.latestExam!.date < b.latestExam!.date ? 1 : -1))
-    .slice(0, 8)
-    .map((s) => ({
-      id: s.id,
-      name: s.name,
-      subject: s.latestExam!.subject ?? "",
-      examName: s.latestExam!.examName ?? "",
-      score: s.latestExam!.score ?? "-",
-      date: s.latestExam!.date,
-    }));
-
   const lastCounselingByStudent = new Map<string, string>();
   for (const c of counselingEntries) {
     if (!c.studentId || !c.date) continue;
@@ -126,7 +113,6 @@ export default async function DirectorDashboardPage() {
             scheduleFlat={scheduleFlat}
             scheduleTotal={scheduleTotal}
             upcomingExams={upcomingExams}
-            recentGrades={recentGrades}
             counselingGapStudents={counselingGapStudents}
           />
         </main>

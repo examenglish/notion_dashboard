@@ -20,19 +20,21 @@ type NavItem = {
   label: string;
   icon: typeof LayoutDashboard;
   exact: boolean;
-  tone: string;
   children?: NavChild[];
 };
 
+// Icons all share one neutral tone (text-sidebar-foreground/60) — a different
+// bright color per item (violet/emerald/amber/sky) read as a gaudy rainbow
+// rather than a professional dashboard. The active item stands out via the
+// tinted background instead, which is enough signal on its own.
 const NAV_ITEMS: NavItem[] = [
-  { href: "/director", label: "대시보드", icon: LayoutDashboard, exact: true, tone: "text-primary" },
-  { href: "/director/students", label: "학생 관리", icon: Users, exact: false, tone: "text-violet-600" },
+  { href: "/director", label: "대시보드", icon: LayoutDashboard, exact: true },
+  { href: "/director/students", label: "학생 관리", icon: Users, exact: false },
   {
     href: "/director/input",
     label: "입력",
     icon: PencilLine,
     exact: false,
-    tone: "text-emerald-600",
     children: [
       { href: "/director/input?tab=schedule", label: "일정 등록", tabKey: "schedule" },
       { href: "/director/input?tab=students", label: "학생 관리", tabKey: "students" },
@@ -40,8 +42,8 @@ const NAV_ITEMS: NavItem[] = [
       { href: "/director/input?tab=records", label: "수업 · 코칭 기록", tabKey: "records" },
     ],
   },
-  { href: "/director/exam-prep", label: "시험대비", icon: GraduationCap, exact: false, tone: "text-amber-600" },
-  { href: "/director/student-levels", label: "학생 레벨", icon: BarChart3, exact: false, tone: "text-sky-600" },
+  { href: "/director/exam-prep", label: "시험대비", icon: GraduationCap, exact: false },
+  { href: "/director/student-levels", label: "학생 레벨", icon: BarChart3, exact: false },
 ];
 
 // useSearchParams() forces any statically-rendered page that embeds this
@@ -66,9 +68,9 @@ function DirectorSidebarInner({ branchName }: { branchName: string }) {
 
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-border bg-sidebar">
-      <div className="flex h-14 items-center gap-2 border-b border-border px-5">
+      <Link href="/director" className="flex h-14 items-center gap-2 border-b border-border px-5">
         <Image src="/logo.png" alt="" width={843} height={157} className="h-6 w-auto" />
-      </div>
+      </Link>
 
       <div className="px-5 pt-4 pb-2">
         <span className="inline-flex items-center rounded-full bg-accent px-2.5 py-1 text-xs font-semibold text-accent-foreground">
@@ -77,7 +79,7 @@ function DirectorSidebarInner({ branchName }: { branchName: string }) {
       </div>
 
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-2">
-        {NAV_ITEMS.map(({ href, label, icon: Icon, exact, tone, children }) => {
+        {NAV_ITEMS.map(({ href, label, icon: Icon, exact, children }) => {
           const active = exact ? pathname === href : pathname.startsWith(href);
           const isOpen = openKey === href || (active && !!children);
           return (
@@ -91,7 +93,10 @@ function DirectorSidebarInner({ branchName }: { branchName: string }) {
                 )}
               >
                 <Link href={href} className="flex flex-1 items-center gap-2.5 px-3 py-2 min-w-0">
-                  <Icon className={cn("size-4 shrink-0", active && !children ? "" : tone)} strokeWidth={2} />
+                  <Icon
+                    className={cn("size-4 shrink-0", active && !children ? "" : "text-sidebar-foreground/60")}
+                    strokeWidth={2}
+                  />
                   <span className="truncate">{label}</span>
                 </Link>
                 {children && (
@@ -131,8 +136,6 @@ function DirectorSidebarInner({ branchName }: { branchName: string }) {
           );
         })}
       </nav>
-
-      <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">원장 대시보드 · 새 디자인</div>
     </aside>
   );
 }
