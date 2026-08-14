@@ -220,6 +220,13 @@ export default function ExamPrepDirectorClient() {
               <ExamPrepEditor key={studentId} studentId={studentId} onSaved={reloadOverview} />
             </CardContent>
           </Card>
+        ) : selectedSchool ? (
+          // 학교/학년까지만 고르고 아직 학생을 안 눌렀을 때, 선택과 무관한
+          // 전체 현황판을 그대로 띄워두면 그 안의 아무 학생이나 눈에 들어와
+          // "왜 얘가 나오지" 하고 헷갈리게 된다 — 학생을 고르기 전까진 비워둔다.
+          <Card className="flex h-full flex-col items-center justify-center">
+            <p className="text-sm text-muted-foreground">왼쪽에서 학생을 선택하세요.</p>
+          </Card>
         ) : (
           <Card className="flex h-full flex-col">
             <CardHeader className="flex-col items-stretch gap-2.5 sm:flex-row sm:items-center sm:justify-between">
