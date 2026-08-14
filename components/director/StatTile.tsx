@@ -22,15 +22,15 @@ export default function StatTile({
   };
 
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-4 shadow-card">
-      <div className={cn("flex size-9 shrink-0 items-center justify-center rounded-md", toneClasses[tone])}>
-        <Icon className="size-5" strokeWidth={2} />
+    <div className="flex items-center gap-2.5 rounded-lg border border-border bg-card px-3 py-2.5 shadow-card">
+      <div className={cn("flex size-8 shrink-0 items-center justify-center rounded-md", toneClasses[tone])}>
+        <Icon className="size-4" strokeWidth={2} />
       </div>
       <div className="min-w-0">
-        <div className="text-xs font-medium text-muted-foreground">{label}</div>
+        <div className="text-[11px] font-medium leading-tight text-muted-foreground">{label}</div>
         <div className="flex items-baseline gap-1.5">
-          <span className="text-xl font-bold text-foreground">{value}</span>
-          {sub && <span className="truncate text-xs text-muted-foreground">{sub}</span>}
+          <span className="text-lg font-bold leading-tight text-foreground">{value}</span>
+          {sub && <span className="truncate text-[11px] text-muted-foreground">{sub}</span>}
         </div>
       </div>
     </div>

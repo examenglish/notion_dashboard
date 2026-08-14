@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 const NAV_ITEMS = [
   { href: "/director", label: "대시보드", icon: LayoutDashboard, exact: true },
   { href: "/director/students", label: "학생 관리", icon: Users, exact: false },
-  { href: "/input", label: "입력", icon: PencilLine, exact: false },
+  { href: "/director/input", label: "입력", icon: PencilLine, exact: false },
   { href: "/exam-prep", label: "시험대비", icon: GraduationCap, exact: false },
   { href: "/student-levels", label: "학생 레벨", icon: BarChart3, exact: false },
 ];

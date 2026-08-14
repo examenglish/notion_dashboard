@@ -29,14 +29,17 @@ export default function PreviewTestPage() {
             <StatTile icon={ClipboardX} label="미완료 과제" value="9명" tone="warning" />
           </div>
 
-          <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             <ListCard title="오늘 일정" countLabel="전체 14건">
               <ListRow primary="김민준 · 보강" secondary="18:00" />
               <ListRow primary="이서연 · 재시" secondary="19:30" />
               <ListRow primary="박도윤 · 신입생 상담" secondary="15:00 레벨테스트" />
               <ListRow primary="최지우 · 클리닉" secondary="17:00" />
               <ListRow primary="정하은 · 조치사항" secondary="학부모 연락 필요" />
-              <p className="pt-2 text-xs text-muted-foreground">외 9건 더 — 대시보드에서 전체 확인</p>
+              <ListRow primary="한소율 · 복습" secondary="16:00" />
+              <ListRow primary="오지훈 · 상담일지" secondary="진로 상담" />
+              <ListRow primary="강명아 · 행정실 문의" secondary="교재 문의" />
+              <p className="pt-1.5 text-[11px] text-muted-foreground">외 6건 더 — 대시보드에서 전체 확인</p>
             </ListCard>
 
             <ListCard title="시험 일정" countLabel="앞으로 21일">
@@ -45,9 +48,7 @@ export default function PreviewTestPage() {
               <ListRow primary="박도윤 · 1학기 기말고사" secondary="이그잼중 3" meta="D-12" />
               <ListRow primary="최지우 · 모의고사 대비" secondary="이그잼고 2" meta="D-18" />
             </ListCard>
-          </div>
 
-          <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
             <ListCard title="최근 성적">
               <ListRow primary="김민준" secondary="영어 1학기 기말고사" meta="92점 · 2026-08-10" />
               <ListRow primary="이서연" secondary="영어 모의고사" meta="78점 · 2026-08-09" />
