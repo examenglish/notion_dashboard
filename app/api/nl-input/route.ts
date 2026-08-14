@@ -27,6 +27,29 @@ type StudentInfo = Awaited<ReturnType<typeof searchStudents>>[number];
 // an unrelated existing student.
 const NEW_STUDENT_KEYWORDS = ["신입생", "신규생", "첫등원"];
 
+// "/보강 박서재 내일 5시" 처럼 맨 앞에 카테고리를 슬래시로 직접 지정하면,
+// AI 분류(어느 tool을 쓸지) 단계를 완전히 건너뛰고 그 tool을 강제 호출한다
+// — "재시 일정"이 다른 카테고리로 잘못 분류될 걱정 없이 정확한 위치에
+// 저장된다. 나머지(학생 이름/날짜/시간 등) 추출은 그대로 AI가 맡는다.
+const SLASH_COMMANDS: Record<
+  string,
+  {
+    tool: "log_admin_inbox" | "log_schedule_entry" | "log_counseling" | "log_student_action";
+    scheduleType?: "보강" | "재시" | "신입생상담" | "레벨체크";
+    inboxType?: "결석예정" | "긴급상담요청" | "신규생문의" | "기타";
+  }
+> = {
+  보강: { tool: "log_schedule_entry", scheduleType: "보강" },
+  재시: { tool: "log_schedule_entry", scheduleType: "재시" },
+  신입생상담: { tool: "log_schedule_entry", scheduleType: "신입생상담" },
+  레벨체크: { tool: "log_schedule_entry", scheduleType: "레벨체크" },
+  상담: { tool: "log_counseling" },
+  조치: { tool: "log_student_action" },
+  행정실: { tool: "log_admin_inbox" },
+  결석: { tool: "log_admin_inbox", inboxType: "결석예정" },
+  긴급상담: { tool: "log_admin_inbox", inboxType: "긴급상담요청" },
+};
+
 function candidateLabel(s: StudentInfo, classNameById: Map<string, string>): string {
   const classNames = (s.classIds ?? []).map((id) => classNameById.get(id)).filter((n): n is string => !!n);
   const classLabel = classNames.length > 0 ? classNames.join("·") : "반 미배정";
@@ -165,7 +188,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, message: `개인 할일에 저장했습니다: ${content}` });
   }
 
-  if (NEW_STUDENT_KEYWORDS.some((k) => text.includes(k))) {
+  let slashCommand: (typeof SLASH_COMMANDS)[string] | undefined;
+  let slashRest = text;
+  const slashMatch = text.match(/^\/\s*(\S+)\s+([\s\S]+)$/);
+  if (slashMatch && SLASH_COMMANDS[slashMatch[1]]) {
+    slashCommand = SLASH_COMMANDS[slashMatch[1]];
+    slashRest = slashMatch[2].trim();
+  }
+
+  if (!slashCommand && NEW_STUDENT_KEYWORDS.some((k) => text.includes(k))) {
     await createAdminInboxEntry({
       type: "신규생문의",
       studentId: null,
@@ -184,13 +215,17 @@ export async function POST(req: NextRequest) {
 
   let parsed;
   try {
-    parsed = await parseNaturalLanguageInput(text, {
-      today,
-      weekday,
-      students: activeStudents.map((s) => `${s.name}(${s.school || "학교미상"})`),
-      classes: classes.map((c) => stripClassSuffix(c.name)),
-      staff: staff.map((s) => s.name),
-    });
+    parsed = await parseNaturalLanguageInput(
+      slashRest,
+      {
+        today,
+        weekday,
+        students: activeStudents.map((s) => `${s.name}(${s.school || "학교미상"})`),
+        classes: classes.map((c) => stripClassSuffix(c.name)),
+        staff: staff.map((s) => s.name),
+      },
+      slashCommand?.tool
+    );
   } catch {
     return NextResponse.json({ ok: false, message: "AI 처리 중 오류가 발생했습니다." }, { status: 502 });
   }
@@ -199,12 +234,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, message: parsed.message });
   }
 
+  // 슬래시 명령으로 tool은 이미 강제했지만, log_schedule_entry/log_admin_inbox
+  // 안의 세부 type까지는 tool_choice가 못 정한다 — 지정된 값으로 덮어써서
+  // 완전히 결정론적으로 만든다.
+  if (slashCommand?.scheduleType && parsed.kind === "log_schedule_entry") {
+    parsed.input.type = slashCommand.scheduleType;
+  }
+  if (slashCommand?.inboxType && parsed.kind === "log_admin_inbox") {
+    parsed.input.type = slashCommand.inboxType;
+  }
+
   const input = parsed.input;
   // Haiku is unreliable at "다음주 X요일"-style date arithmetic even with a
   // reference table in context; when the input text matches one of the
   // common explicit/relative patterns, trust the deterministic regex parse
   // over whatever date the model returned.
-  const regexDate = resolveRelativeDate(text, today);
+  const regexDate = resolveRelativeDate(slashRest, today);
   const nameById = new Map(activeStudents.map((s) => [s.id, s.name]));
   const resolveOpts = {
     selectedStudentId,
@@ -215,7 +260,7 @@ export async function POST(req: NextRequest) {
 
   try {
     if (parsed.kind === "log_admin_inbox") {
-      const result = await resolveOrRespond(text, input.studentName, activeStudents, classNameById, resolveOpts);
+      const result = await resolveOrRespond(slashRest, input.studentName, activeStudents, classNameById, resolveOpts);
       if (result instanceof NextResponse) return result;
       const studentId = result.studentId;
       const studentName = studentId ? nameById.get(studentId) ?? input.studentName : undefined;
@@ -234,7 +279,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (parsed.kind === "log_schedule_entry") {
-      const result = await resolveOrRespond(text, input.studentName, activeStudents, classNameById, resolveOpts);
+      const result = await resolveOrRespond(slashRest, input.studentName, activeStudents, classNameById, resolveOpts);
       if (result instanceof NextResponse) return result;
       const studentId = result.studentId;
       if (!studentId) {
@@ -256,7 +301,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (parsed.kind === "log_counseling") {
-      const result = await resolveOrRespond(text, input.studentName, activeStudents, classNameById, resolveOpts);
+      const result = await resolveOrRespond(slashRest, input.studentName, activeStudents, classNameById, resolveOpts);
       if (result instanceof NextResponse) return result;
       const studentId = result.studentId;
       if (!studentId) {
@@ -279,7 +324,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (parsed.kind === "log_student_action") {
-      const result = await resolveOrRespond(text, input.studentName, activeStudents, classNameById, resolveOpts);
+      const result = await resolveOrRespond(slashRest, input.studentName, activeStudents, classNameById, resolveOpts);
       if (result instanceof NextResponse) return result;
       const studentId = result.studentId;
       if (!studentId) {

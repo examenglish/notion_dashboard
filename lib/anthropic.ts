@@ -215,13 +215,21 @@ export type NlParseResult =
   | { kind: "clarify"; message: string }
   | { kind: "log_admin_inbox" | "log_schedule_entry" | "log_counseling" | "log_student_action"; input: any };
 
-export async function parseNaturalLanguageInput(text: string, ref: NlReference): Promise<NlParseResult> {
+// forceTool: "/보강", "/상담" 같은 슬래시 명령으로 카테고리를 이미 알고 있을
+// 때 넘긴다 — Haiku의 분류(어느 도구를 쓸지) 단계를 완전히 건너뛰고 해당
+// 도구 하나만 강제 호출해서, 그 안의 필드(학생 이름/날짜/시간 등) 추출만
+// 맡긴다. 분류가 애매해서 잘못된 카테고리로 저장되는 문제를 원천 차단한다.
+export async function parseNaturalLanguageInput(
+  text: string,
+  ref: NlReference,
+  forceTool?: "log_admin_inbox" | "log_schedule_entry" | "log_counseling" | "log_student_action"
+): Promise<NlParseResult> {
   const res = await anthropic.messages.create({
     model: NL_MODEL,
     max_tokens: 512,
     system: buildSystemBlocks(ref),
     tools: NL_TOOLS,
-    tool_choice: { type: "any" },
+    tool_choice: forceTool ? { type: "tool", name: forceTool } : { type: "any" },
     messages: [{ role: "user", content: text }],
   });
 

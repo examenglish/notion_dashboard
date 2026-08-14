@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Users, CheckCircle2, XCircle, BookX, ClipboardX } from "lucide-react";
 import StatTile from "./StatTile";
 import ListCard, { ListRow } from "./ListCard";
@@ -8,11 +9,22 @@ import Popup from "./Popup";
 import NaturalLanguageInput from "@/components/NaturalLanguageInput";
 import MakeupStatusCard from "@/components/MakeupStatusCard";
 import TodayClinicCard from "./TodayClinicCard";
+import { InquiryEditRow, CounselingEditRow, type InquiryItem, type CounselingItem } from "./EditableScheduleRow";
 import type { DailyOutcomeStudent } from "@/lib/notion";
 
-type ScheduleRow = { label: string; studentName: string; detail: string };
+type ScheduleRow = { id: string; label: string; studentName: string; detail: string };
 type ExamRow = { studentId: string; studentName: string; examTitle: string; school: string; grade: string | null; dDay: number };
 type CounselingGapRow = { id: string; name: string; school: string; grade: string | null; lastCounseling: string | null };
+type ClinicTaskRow = {
+  id: string;
+  studentName: string;
+  time: string;
+  memo: string;
+  owner: string;
+  done: boolean;
+  school: string;
+  gradeNum: string;
+};
 
 function MoreButton({ count, onClick }: { count: number; onClick: () => void }) {
   return (
@@ -36,6 +48,9 @@ export default function DirectorDashboardClient({
   homeworkIncompleteCount,
   scheduleFlat,
   scheduleTotal,
+  clinicItems,
+  inquiriesToday,
+  counselingToday,
   upcomingExams,
   counselingGapStudents,
 }: {
@@ -50,11 +65,19 @@ export default function DirectorDashboardClient({
   homeworkIncompleteCount: number;
   scheduleFlat: ScheduleRow[];
   scheduleTotal: number;
+  clinicItems: ClinicTaskRow[];
+  inquiriesToday: InquiryItem[];
+  counselingToday: CounselingItem[];
   upcomingExams: ExamRow[];
   counselingGapStudents: CounselingGapRow[];
 }) {
-  const clinicToday = scheduleFlat.filter((i) => i.label === "클리닉");
+  const router = useRouter();
   const makeupToday = scheduleFlat.filter((i) => i.label === "보강");
+  const inquiryById = new Map(inquiriesToday.map((i) => [i.id, i]));
+  const counselingById = new Map(counselingToday.map((c) => [c.id, c]));
+  function refreshSchedule() {
+    router.refresh();
+  }
   const [popup, setPopup] = useState<null | "absent" | "homework" | "vocabRetest">(null);
   const [detail, setDetail] = useState<{
     absentStudents: DailyOutcomeStudent[];
@@ -185,7 +208,7 @@ export default function DirectorDashboardClient({
       </div>
 
       <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-        <TodayClinicCard today={today} initialItems={clinicToday} />
+        <TodayClinicCard today={today} initialItems={clinicItems} />
 
         <div className="director-embed">
           <MakeupStatusCard role={role} variant="embed" />
@@ -215,9 +238,17 @@ export default function DirectorDashboardClient({
           onClose={() => setListPopup(null)}
         >
           {listPopup === "schedule" &&
-            scheduleFlat.map((item, i) => (
-              <ListRow key={i} primary={`${item.studentName} · ${item.label}`} secondary={item.detail} />
-            ))}
+            scheduleFlat.map((item, i) => {
+              if (item.label === "행정실 문의") {
+                const inquiry = inquiryById.get(item.id);
+                if (inquiry) return <InquiryEditRow key={item.id} item={inquiry} onChanged={refreshSchedule} />;
+              }
+              if (item.label === "상담일지") {
+                const entry = counselingById.get(item.id);
+                if (entry) return <CounselingEditRow key={item.id} item={entry} onChanged={refreshSchedule} />;
+              }
+              return <ListRow key={i} primary={`${item.studentName} · ${item.label}`} secondary={item.detail} />;
+            })}
           {listPopup === "counseling" &&
             counselingGapStudents.map((s) => (
               <ListRow

@@ -30,16 +30,42 @@ export default function PreviewTestPage() {
             vocabRetestCount={11}
             homeworkIncompleteCount={9}
             scheduleFlat={[
-              { label: "보강", studentName: "김민준", detail: "18:00" },
-              { label: "재시", studentName: "이서연", detail: "19:30" },
-              { label: "신입생 상담", studentName: "박도윤", detail: "15:00 레벨테스트" },
-              { label: "클리닉", studentName: "최지우", detail: "17:00" },
-              { label: "조치사항", studentName: "정하은", detail: "학부모 연락 필요" },
-              { label: "복습", studentName: "한소율", detail: "16:00" },
-              { label: "상담일지", studentName: "오지훈", detail: "진로 상담" },
-              { label: "행정실 문의", studentName: "강명아", detail: "교재 문의" },
+              { id: "s1", label: "보강", studentName: "김민준", detail: "18:00" },
+              { id: "s2", label: "재시", studentName: "이서연", detail: "19:30" },
+              { id: "s3", label: "신입생 상담", studentName: "박도윤", detail: "15:00 레벨테스트" },
+              { id: "s4", label: "클리닉", studentName: "최지우", detail: "17:00" },
+              { id: "s5", label: "조치사항", studentName: "정하은", detail: "학부모 연락 필요" },
+              { id: "s6", label: "복습", studentName: "한소율", detail: "16:00" },
+              { id: "q1", label: "상담일지", studentName: "오지훈", detail: "진로 상담" },
+              { id: "i1", label: "행정실 문의", studentName: "강명아", detail: "교재 문의" },
             ]}
             scheduleTotal={14}
+            inquiriesToday={[{ id: "i1", studentName: "강명아", content: "교재 문의 — 다음 학기 교재 언제 나오는지 물어봄" }]}
+            counselingToday={[
+              { id: "q1", studentName: "오지훈", counselor: "김원장", content: "진로 상담 진행, 이과 vs 문과 고민", followUp: "다음달 재상담 예정" },
+            ]}
+            clinicItems={[
+              {
+                id: "c1",
+                studentName: "최지우",
+                time: "17:00",
+                memo: "단어 재시험 대비 유닛 5 복습",
+                owner: "최조교",
+                done: false,
+                school: "이그잼고",
+                gradeNum: "2",
+              },
+              {
+                id: "c2",
+                studentName: "정하은",
+                time: "",
+                memo: "",
+                owner: "-",
+                done: false,
+                school: "이그잼중",
+                gradeNum: "1",
+              },
+            ]}
             upcomingExams={[
               { studentId: "1", studentName: "김민준", examTitle: "1학기 기말고사", school: "이그잼중", grade: "2", dDay: 3 },
               { studentId: "2", studentName: "이서연", examTitle: "중간고사 대비", school: "이그잼고", grade: "1", dDay: 6 },

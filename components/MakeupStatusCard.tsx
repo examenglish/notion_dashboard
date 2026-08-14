@@ -195,6 +195,7 @@ export default function MakeupStatusCard({
   const [items, setItems] = useState<MakeupScheduleItem[]>([]);
   const [confirmModalItems, setConfirmModalItems] = useState<MakeupScheduleItem[] | null>(null);
   const [popupOpen, setPopupOpen] = useState(false);
+  const [popupSearch, setPopupSearch] = useState("");
 
   function reload() {
     fetch("/api/makeup-status")
@@ -216,10 +217,22 @@ export default function MakeupStatusCard({
 
   if (items.length === 0 && variant === "legacy") return null;
 
-  const unconfirmed = items.filter((i) => !i.confirmed);
-  const confirmed = items.filter((i) => i.confirmed);
+  // 날짜순 정렬 없이 그냥 Notion 조회 순서(생성 순)로 나열되던 것 —
+  // 미확정/확정 구분은 유지하되, 각 그룹 안에서는 날짜가 빠른(임박한) 순으로
+  // 보여준다. 날짜 미정(null)인 항목은 맨 뒤로 보낸다.
+  const byDate = (a: MakeupScheduleItem, b: MakeupScheduleItem) => {
+    if (!a.date && !b.date) return 0;
+    if (!a.date) return 1;
+    if (!b.date) return -1;
+    return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+  };
+  const unconfirmed = items.filter((i) => !i.confirmed).sort(byDate);
+  const confirmed = items.filter((i) => i.confirmed).sort(byDate);
   const sorted = [...unconfirmed, ...confirmed];
   const preview = sorted.slice(0, PREVIEW_SIZE);
+  const popupFiltered = popupSearch.trim()
+    ? sorted.filter((i) => i.studentName.includes(popupSearch.trim()))
+    : sorted;
   const title = scope === "all" ? "보강·재시 확정 현황 (전체)" : "내 보강·재시 확정 현황";
 
   const body = (
@@ -271,22 +284,46 @@ export default function MakeupStatusCard({
       )}
 
       {popupOpen && (
-        <div className="modal-backdrop" onClick={() => setPopupOpen(false)}>
+        <div
+          className="modal-backdrop"
+          onClick={() => {
+            setPopupOpen(false);
+            setPopupSearch("");
+          }}
+        >
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2>
                 {scope === "all" ? "보강·재시 확정 현황 (전체)" : "내 보강·재시 확정 현황"}{" "}
                 <span className="muted">(전체 {sorted.length}건)</span>
               </h2>
-              <button type="button" className="secondary" onClick={() => setPopupOpen(false)}>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setPopupOpen(false);
+                  setPopupSearch("");
+                }}
+              >
                 닫기
               </button>
             </div>
-            <ul className="schedule-list">
-              {sorted.map((item) => (
-                <MakeupRow key={item.id} item={item} showOwner={scope === "all"} canDelete={canDelete} onChanged={handleChanged} />
-              ))}
-            </ul>
+            <input
+              type="text"
+              value={popupSearch}
+              onChange={(e) => setPopupSearch(e.target.value)}
+              placeholder="학생 이름으로 검색"
+              style={{ marginBottom: 10 }}
+            />
+            {popupFiltered.length === 0 ? (
+              <p className="muted">일치하는 학생이 없습니다.</p>
+            ) : (
+              <ul className="schedule-list">
+                {popupFiltered.map((item) => (
+                  <MakeupRow key={item.id} item={item} showOwner={scope === "all"} canDelete={canDelete} onChanged={handleChanged} />
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       )}

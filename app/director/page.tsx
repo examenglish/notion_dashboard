@@ -79,6 +79,7 @@ export default async function DirectorDashboardPage() {
 
   const scheduleFlat = SCHEDULE_GROUPS.flatMap(({ key, label, detail }) =>
     ((todaySchedule as any)[key] as any[]).map((item) => ({
+      id: item.id as string,
       label,
       studentName: item.studentName ?? "-",
       detail: detail(item),
@@ -110,6 +111,9 @@ export default async function DirectorDashboardPage() {
             homeworkIncompleteCount={homework.미완료}
             scheduleFlat={scheduleFlat}
             scheduleTotal={scheduleTotal}
+            clinicItems={todaySchedule.clinicTasks}
+            inquiriesToday={todaySchedule.inquiries}
+            counselingToday={todaySchedule.counseling}
             upcomingExams={upcomingExams}
             counselingGapStudents={counselingGapStudents}
           />

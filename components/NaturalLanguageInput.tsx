@@ -98,6 +98,10 @@ export default function NaturalLanguageInput({ onSaved }: { onSaved?: () => void
       <p className="muted">
         <strong>자연어로 자유롭게 입력하세요. 자동처리됩니다.</strong>
       </p>
+      <p className="muted" style={{ fontSize: "0.78em", marginTop: -6 }}>
+        분류가 헷갈릴 것 같으면 맨 앞에 /보강, /재시, /신입생상담, /레벨체크, /상담, /조치, /행정실, /결석, /긴급상담 중
+        하나를 붙이면 그 카테고리로 정확히 저장됩니다. (예: "/재시 박서재 내일 5시")
+      </p>
       <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
         <textarea
           value={text}
