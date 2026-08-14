@@ -1,0 +1,59 @@
+/* Scoped to the /director route tree only (imported from app/director/layout.tsx,
+   never from the root layout). Preflight is disabled in tailwind.config.ts and
+   every token below is namespaced with --sc- so nothing here can bleed into or
+   collide with app/globals.css, which the rest of the app still uses as-is. */
+@import "pretendard/dist/web/static/pretendard.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --sc-background: 0 0% 100%;
+  --sc-foreground: 222 39% 15%;
+
+  --sc-card: 0 0% 100%;
+  --sc-card-foreground: 222 39% 15%;
+
+  --sc-border: 214 20% 90%;
+  --sc-input: 214 20% 88%;
+
+  --sc-primary: 211 100% 32%;
+  --sc-primary-foreground: 0 0% 100%;
+
+  --sc-muted: 210 20% 96%;
+  --sc-muted-foreground: 215 16% 46%;
+
+  --sc-accent: 211 60% 95%;
+  --sc-accent-foreground: 211 100% 28%;
+
+  --sc-destructive: 0 72% 51%;
+  --sc-destructive-foreground: 0 0% 100%;
+
+  --sc-success: 152 60% 32%;
+  --sc-success-foreground: 0 0% 100%;
+
+  --sc-warning: 38 92% 45%;
+  --sc-warning-foreground: 0 0% 100%;
+
+  --sc-ring: 211 100% 32%;
+  --sc-radius: 0.625rem;
+
+  --sc-sidebar: 210 25% 98%;
+  --sc-sidebar-foreground: 222 20% 32%;
+  --sc-sidebar-active: 211 100% 96%;
+  --sc-sidebar-active-foreground: 211 100% 28%;
+}
+
+.director-shell {
+  font-family: "Pretendard", -apple-system, BlinkMacSystemFont, system-ui, "Apple SD Gothic Neo", "Noto Sans KR",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+/* app/globals.css styles native inputs via input[type="text"|"password"|"date"]
+   attribute selectors, whose specificity (0,1,1) beats a single Tailwind
+   utility class (0,1,0). Rather than fight that in CSS, every native input
+   under .director-shell simply avoids those literal `type` values (uses
+   type="search" or omits `type`), so the selector never matches here. */

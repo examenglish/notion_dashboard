@@ -852,6 +852,29 @@ export async function getMonthlyOutcomeBreakdown(month?: string) {
   return { attendance, vocab, homework, counselingByCounselor };
 }
 
+// 원장 대시보드용 — getMonthlyOutcomeBreakdown과 동일한 집계 로직을 한 날짜
+// (기본: 오늘)로만 좁힌 것. 기존 함수는 건드리지 않고 나란히 추가한 읽기전용
+// 헬퍼로, DB⑤일일기록 하나만 조회한다(쓰기 없음).
+export async function getDailyOutcomeBreakdown(date: string) {
+  const records = await queryAllPages({
+    data_source_id: DB.DAILY_RECORD,
+    filter: { property: "날짜", date: { equals: date } },
+  });
+
+  const attendance = { 출석: 0, 지각: 0, 결석: 0 };
+  const vocab = { 통과: 0, 재시험: 0, 미응시: 0 };
+  const homework = { 완료: 0, 미완료: 0 };
+  for (const r of records) {
+    const att = getSelect(r, "출결") as keyof typeof attendance | null;
+    if (att && att in attendance) attendance[att] += 1;
+    const voc = getSelect(r, "단어테스트결과") as keyof typeof vocab | null;
+    if (voc && voc in vocab) vocab[voc] += 1;
+    if (getCheckbox(r, "과제여부")) homework.완료 += 1;
+    else homework.미완료 += 1;
+  }
+  return { attendance, vocab, homework };
+}
+
 // "오늘의 일정": alarms + new-student events + makeup/retest sessions due today.
 // Grade strings look like "중2"/"고1" — several 오늘의 일정 sections only
 // want the trailing digit ("2"/"1"), not the level prefix.

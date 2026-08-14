@@ -17,6 +17,16 @@ const PUBLIC_API_PREFIX_PATHS = ["/api/cron/"];
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
+  // TEMP: local preview-only bypass, set via BYPASS_AUTH=1 env on the dev
+  // server process. Not committed to affect any deployed environment.
+  if (process.env.BYPASS_AUTH === "1") {
+    const requestHeaders = new Headers(req.headers);
+    requestHeaders.set("x-staff-name", encodeURIComponent("프리뷰"));
+    requestHeaders.set("x-staff-id", "preview");
+    requestHeaders.set("x-staff-role", encodeURIComponent("원장"));
+    return NextResponse.next({ request: { headers: requestHeaders } });
+  }
+
   if (
     pathname.startsWith("/api/") &&
     (PUBLIC_API_EXACT_PATHS.includes(pathname) || PUBLIC_API_PREFIX_PATHS.some((p) => pathname.startsWith(p)))
