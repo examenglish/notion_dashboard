@@ -30,6 +30,7 @@ type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { href: "/director", label: "대시보드", icon: LayoutDashboard, exact: true },
   { href: "/director/students", label: "학생 관리", icon: Users, exact: false },
+  { href: "/director/exam-prep", label: "시험대비", icon: GraduationCap, exact: false },
   {
     href: "/director/input",
     label: "입력",
@@ -42,7 +43,6 @@ const NAV_ITEMS: NavItem[] = [
       { href: "/director/input?tab=records", label: "수업 · 코칭 기록", tabKey: "records" },
     ],
   },
-  { href: "/director/exam-prep", label: "시험대비", icon: GraduationCap, exact: false },
   { href: "/director/student-levels", label: "학생 레벨", icon: BarChart3, exact: false },
 ];
 
