@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import StudentPicker from "./StudentPicker";
 import TeacherMultiSelect from "./TeacherMultiSelect";
 import { todayKST } from "@/lib/date";
@@ -512,7 +512,14 @@ export function ExamPrepEditor({
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
 
+  // 사용자가 항목을 조금만 고쳐도(체크박스 하나라도) 자동으로 저장되도록,
+  // 데이터 로딩으로 인한 state 변경은 건너뛰고 실제 편집만 디바운스 저장한다.
+  const skipAutosaveRef = useRef(true);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
+    skipAutosaveRef.current = true;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setLoading(true);
     setSavedFlash(false);
     Promise.all([
@@ -546,6 +553,7 @@ export function ExamPrepEditor({
             // 새 시트(id 없음)라면 같은 학교/학년에서 이미 쓰던 값으로
             // 빈 칸을 자동으로 채워 표기를 통일한다.
             if (!sheetData.id && tpl) {
+              skipAutosaveRef.current = true;
               if (!sheetData.examTitle) setExamTitle(tpl.latest.examTitle);
               if (!sheetData.examRange) setExamRange(tpl.latest.examRange);
               if (sheetData.teachers.length === 0) setTeachers(tpl.latest.teachers);
@@ -644,6 +652,23 @@ export function ExamPrepEditor({
       setSaving(false);
     }
   }
+
+  // 체크박스 하나, 글자 하나만 고쳐도 잠시 후 자동으로 저장한다 — 로딩 중
+  // 반영된 state 변경(skipAutosaveRef)은 건너뛰고, 실제 편집만 디바운스로 저장.
+  useEffect(() => {
+    if (skipAutosaveRef.current) {
+      skipAutosaveRef.current = false;
+      return;
+    }
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      handleSave();
+    }, 1200);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [level, examTitle, examRange, examDate, teachers, weakPoints, data]);
 
   const liveProgress = useMemo(() => computeProgress(data), [data]);
   const liveCategories = useMemo(() => computeCategoryBreakdown(data), [data]);
@@ -856,10 +881,11 @@ export function ExamPrepEditor({
       {error && <p className="error-text">{error}</p>}
       {savedFlash && !error && <p className="success-box" style={{ marginTop: 8 }}>저장되었습니다.</p>}
 
-      <div style={{ marginTop: 12 }}>
+      <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
         <button type="button" disabled={saving} onClick={handleSave}>
-          {saving ? "저장 중..." : "시험대비 시트 저장"}
+          {saving ? "저장 중..." : "지금 저장"}
         </button>
+        <span className="muted" style={{ fontSize: 12 }}>수정하면 잠시 후 자동으로 저장됩니다.</span>
       </div>
 
       <hr style={{ margin: "18px 0", border: "none", borderTop: "1px solid var(--border)" }} />
