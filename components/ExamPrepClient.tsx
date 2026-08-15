@@ -9,17 +9,20 @@ import {
   type ExamPrepData,
   type ExamPrepSheet,
   type ExamPrepTemplate,
-  type LessonItem,
+  type MiddleData,
   type NamedItem,
+  type PracticeCategory,
   type SchoolLevel,
   type TextSource,
   type TextCategory,
   type HighData,
   TEXT_CATEGORIES,
+  MIDDLE_TEXT_CATEGORIES,
+  MIDDLE_PRACTICE_CATEGORIES,
   defaultDataFor,
-  newLesson,
   newNamedItem,
   newTextSource,
+  newMiddleTextSource,
   computeProgress,
   computeCategoryBreakdown,
 } from "@/lib/examPrep";
@@ -27,15 +30,21 @@ import {
 // 같은 학교/학년 템플릿에서 가져온 교과서·부교재 이름을, 그 카테고리가
 // 아직 하나도 없을 때만 새 TextSource로 추가한다 — 이미 있는 텍스트의
 // 워크북/단어암기 진행 상황을 덮어쓰지 않기 위해 "없으면 추가"만 한다.
-function withAutoTextSources(high: HighData, tpl: { textbook: string; supplementary: string }): HighData {
-  let sources = high.textSources;
-  if (tpl.textbook && !sources.some((t) => t.category === "교과서")) {
-    sources = [...sources, newTextSource("교과서", tpl.textbook)];
+// 고등(newTextSource)/중등(newMiddleTextSource) 둘 다 이 배열 기반
+// 구조를 공유하므로 factory만 바꿔 재사용한다.
+function addAutoTextSources(
+  sources: TextSource[],
+  tpl: { textbook: string; supplementary: string },
+  makeSource: (category: TextCategory, label: string) => TextSource
+): TextSource[] {
+  let next = sources;
+  if (tpl.textbook && !next.some((t) => t.category === "교과서")) {
+    next = [...next, makeSource("교과서", tpl.textbook)];
   }
-  if (tpl.supplementary && !sources.some((t) => t.category === "부교재")) {
-    sources = [...sources, newTextSource("부교재", tpl.supplementary)];
+  if (tpl.supplementary && !next.some((t) => t.category === "부교재")) {
+    next = [...next, makeSource("부교재", tpl.supplementary)];
   }
-  return { ...high, textSources: sources };
+  return next;
 }
 
 export type OverviewRow = {
@@ -232,18 +241,22 @@ function TextSourceEditor({
   onChange,
   onRemove,
   labelDatalistId,
+  middleFields,
 }: {
   source: TextSource;
   onChange: (next: TextSource) => void;
   onRemove: () => void;
   labelDatalistId?: string;
+  // 중등 교과서/부교재의 과(Lesson) 전용 — 본문암기/대화문암기/성취도를
+  // 추가로 보여준다(고등에서는 안 씀).
+  middleFields?: boolean;
 }) {
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 10, marginTop: 8 }}>
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
         <input
           type="text"
-          placeholder="텍스트 이름"
+          placeholder={middleFields ? "과 이름 (예: 1과)" : "텍스트 이름"}
           value={source.label}
           onChange={(e) => onChange({ ...source, label: e.target.value })}
           list={labelDatalistId}
@@ -251,7 +264,7 @@ function TextSourceEditor({
         />
         <input
           type="text"
-          placeholder="범위 · 출처"
+          placeholder={middleFields ? "교재명 · 범위" : "범위 · 출처"}
           value={source.detail}
           onChange={(e) => onChange({ ...source, detail: e.target.value })}
           style={{ flex: "1 1 120px" }}
@@ -260,6 +273,37 @@ function TextSourceEditor({
           삭제
         </button>
       </div>
+
+      {middleFields && (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={!!source.bodyMemorized}
+              onChange={(e) => onChange({ ...source, bodyMemorized: e.target.checked })}
+            />
+            본문암기
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={!!source.dialogueMemorized}
+              onChange={(e) => onChange({ ...source, dialogueMemorized: e.target.checked })}
+            />
+            대화문암기
+          </label>
+          <select
+            value={source.achievement ?? ""}
+            onChange={(e) => onChange({ ...source, achievement: e.target.value })}
+            style={{ flex: "0 0 90px" }}
+          >
+            <option value="">성취도</option>
+            <option value="상">상</option>
+            <option value="중">중</option>
+            <option value="하">하</option>
+          </select>
+        </div>
+      )}
 
       <div style={{ marginTop: 8 }}>
         <WorkbookSteps steps={source.steps} onChange={(steps) => onChange({ ...source, steps })} />
@@ -295,11 +339,13 @@ function TextSourceGroup({
   sources,
   onChange,
   labelDatalistId,
+  middleFields,
 }: {
   category: TextCategory;
   sources: TextSource[];
   onChange: (sources: TextSource[]) => void;
   labelDatalistId?: string;
+  middleFields?: boolean;
 }) {
   function update(id: string, next: TextSource) {
     onChange(sources.map((s) => (s.id === id ? next : s)));
@@ -307,6 +353,7 @@ function TextSourceGroup({
   function remove(id: string) {
     onChange(sources.filter((s) => s.id !== id));
   }
+  const addLabel = middleFields ? "과 추가" : `${category} 추가`;
   return (
     <div style={{ marginTop: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -314,10 +361,10 @@ function TextSourceGroup({
         <button
           type="button"
           className="secondary"
-          onClick={() => onChange([...sources, newTextSource(category)])}
+          onClick={() => onChange([...sources, middleFields ? newMiddleTextSource(category) : newTextSource(category)])}
           style={{ padding: "4px 10px", fontSize: 12 }}
         >
-          + {category} 추가
+          + {addLabel}
         </button>
       </div>
       {sources.length === 0 && (
@@ -332,85 +379,8 @@ function TextSourceGroup({
           onChange={(next) => update(s.id, next)}
           onRemove={() => remove(s.id)}
           labelDatalistId={labelDatalistId}
+          middleFields={middleFields}
         />
-      ))}
-    </div>
-  );
-}
-
-function LessonList({ lessons, onChange }: { lessons: LessonItem[]; onChange: (l: LessonItem[]) => void }) {
-  function update(i: number, patch: Partial<LessonItem>) {
-    onChange(lessons.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
-  }
-  function remove(i: number) {
-    onChange(lessons.filter((_, idx) => idx !== i));
-  }
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span className="muted" style={{ fontSize: 12 }}>
-          {lessons.length > 0 ? `Lesson ${lessons.length}개` : "등록된 Lesson이 없습니다."}
-        </span>
-        <button
-          type="button"
-          className="secondary"
-          onClick={() => onChange([...lessons, newLesson()])}
-          style={{ padding: "4px 10px", fontSize: 12 }}
-        >
-          + Lesson 추가
-        </button>
-      </div>
-      {lessons.map((l, i) => (
-        <div key={l.id} style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
-          <input
-            type="text"
-            placeholder="Lesson명 (예: 1과)"
-            value={l.name}
-            onChange={(e) => update(i, { name: e.target.value })}
-            style={{ flex: "1 1 100px" }}
-          />
-          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13 }}>
-            <input
-              type="checkbox"
-              checked={l.bodyMemorized}
-              onChange={(e) => update(i, { bodyMemorized: e.target.checked })}
-            />
-            본문암기
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13 }}>
-            <input
-              type="checkbox"
-              checked={l.dialogueMemorized}
-              onChange={(e) => update(i, { dialogueMemorized: e.target.checked })}
-            />
-            대화문암기
-          </label>
-          <select
-            value={l.achievement}
-            onChange={(e) => update(i, { achievement: e.target.value })}
-            style={{ flex: "0 0 90px" }}
-          >
-            <option value="">성취도</option>
-            <option value="상">상</option>
-            <option value="중">중</option>
-            <option value="하">하</option>
-          </select>
-          <input
-            type="text"
-            placeholder="진도사항 메모"
-            value={l.progress}
-            onChange={(e) => update(i, { progress: e.target.value })}
-            style={{ flex: "2 1 160px" }}
-          />
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => remove(i)}
-            style={{ padding: "4px 8px", fontSize: 12 }}
-          >
-            삭제
-          </button>
-        </div>
       ))}
     </div>
   );
@@ -560,19 +530,17 @@ export function ExamPrepEditor({
               if (sheetData.teachers.length === 0) setTeachers(tpl.latest.teachers);
               setData((prev) => {
                 if (prev.level === "중등") {
+                  // 중등은 textbook 값이 "과 이름"들을 이어붙인 문자열이라
+                  // (예: "1과, 2과") 고등처럼 새 텍스트 항목으로 자동 등록하면
+                  // 뜻 모를 라벨이 생긴다 — 학교 프린트만 자동으로 채운다.
                   return {
                     level: "중등",
-                    middle: {
-                      ...prev.middle,
-                      textbook: prev.middle.textbook || tpl.latest.textbook,
-                      supplementary: prev.middle.supplementary || tpl.latest.supplementary,
-                      schoolPrint: prev.middle.schoolPrint || tpl.latest.schoolPrint,
-                    },
+                    middle: { ...prev.middle, schoolPrint: prev.middle.schoolPrint || tpl.latest.schoolPrint },
                   };
                 }
                 return {
                   level: "고등",
-                  high: withAutoTextSources(prev.high, tpl.latest),
+                  high: { ...prev.high, textSources: addAutoTextSources(prev.high.textSources, tpl.latest, newTextSource) },
                 };
               });
             }
@@ -588,19 +556,11 @@ export function ExamPrepEditor({
     setTeachers(template.latest.teachers);
     setData((prev) => {
       if (prev.level === "중등") {
-        return {
-          level: "중등",
-          middle: {
-            ...prev.middle,
-            textbook: template.latest.textbook,
-            supplementary: template.latest.supplementary,
-            schoolPrint: template.latest.schoolPrint,
-          },
-        };
+        return { level: "중등", middle: { ...prev.middle, schoolPrint: template.latest.schoolPrint } };
       }
       return {
         level: "고등",
-        high: withAutoTextSources(prev.high, template.latest),
+        high: { ...prev.high, textSources: addAutoTextSources(prev.high.textSources, template.latest, newTextSource) },
       };
     });
   }
@@ -608,7 +568,7 @@ export function ExamPrepEditor({
   function switchLevel(next: SchoolLevel) {
     if (next === level) return;
     if (data.level !== "중등" && data.level !== "고등") return;
-    const hasContent = data.level === "중등" ? data.middle.lessons.length > 0 : data.high.textSources.length > 0;
+    const hasContent = data.level === "중등" ? data.middle.textSources.length > 0 : data.high.textSources.length > 0;
     if (hasContent && !window.confirm("학교급을 변경하면 입력해둔 세부 항목이 초기화됩니다. 계속할까요?")) return;
     setLevel(next);
     setData(defaultDataFor(next));
@@ -869,26 +829,6 @@ export function ExamPrepEditor({
 
       {level === "중등" && data.level === "중등" && (
         <>
-          <div className="field-row">
-            <div>
-              <label>교과서</label>
-              <input
-                type="text"
-                list="textbookOptions"
-                value={data.middle.textbook}
-                onChange={(e) => setData({ level: "중등", middle: { ...data.middle, textbook: e.target.value } })}
-              />
-            </div>
-            <div>
-              <label>부교재</label>
-              <input
-                type="text"
-                list="supplementaryOptions"
-                value={data.middle.supplementary}
-                onChange={(e) => setData({ level: "중등", middle: { ...data.middle, supplementary: e.target.value } })}
-              />
-            </div>
-          </div>
           <label>학교 프린트</label>
           <input
             type="text"
@@ -897,20 +837,41 @@ export function ExamPrepEditor({
             onChange={(e) => setData({ level: "중등", middle: { ...data.middle, schoolPrint: e.target.value } })}
           />
 
-          <p style={{ marginTop: 16, marginBottom: 4, fontWeight: 600 }}>Lesson별 암기여부 · 진도 · 성취도</p>
-          <LessonList
-            lessons={data.middle.lessons}
-            onChange={(lessons) => setData({ level: "중등", middle: { ...data.middle, lessons } })}
-          />
-
-          <p style={{ marginTop: 8, marginBottom: 4, fontWeight: 600 }}>
-            자주 틀리는 문제 · 기출문제 · 추가문제 · 백발백중 · 적중백
+          <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>
+            교과서·부교재는 과(Lesson)마다 워크북 9단계(영어빈칸 · 동사형 · 어법 · 순서배열 · 영작 · 주제문 · 제목 ·
+            요약문 · 변형문제)와 단어암기, 본문암기·대화문암기·성취도를 관리합니다. 과를 여러 건 등록할 수 있어요.
           </p>
-          <NamedItemList
-            items={data.middle.practiceItems}
-            onChange={(practiceItems) => setData({ level: "중등", middle: { ...data.middle, practiceItems } })}
-            addLabel="항목 추가"
-          />
+
+          {MIDDLE_TEXT_CATEGORIES.map((cat) => (
+            <TextSourceGroup
+              key={cat}
+              category={cat}
+              sources={data.middle.textSources.filter((t) => t.category === cat)}
+              onChange={(catSources) => {
+                const others = data.middle.textSources.filter((t) => t.category !== cat);
+                setData({ level: "중등", middle: { ...data.middle, textSources: [...others, ...catSources] } });
+              }}
+              labelDatalistId={cat === "교과서" ? "textbookOptions" : "supplementaryOptions"}
+              middleFields
+            />
+          ))}
+
+          <p style={{ marginTop: 16, marginBottom: 4, fontWeight: 600 }}>내신대비 문제풀이</p>
+          {MIDDLE_PRACTICE_CATEGORIES.map((cat) => (
+            <div key={cat} style={{ marginTop: 8 }}>
+              <p style={{ margin: 0, fontWeight: 600, fontSize: 13 }}>{cat}</p>
+              <NamedItemList
+                items={data.middle.practiceItems[cat]}
+                onChange={(items) =>
+                  setData({
+                    level: "중등",
+                    middle: { ...data.middle, practiceItems: { ...data.middle.practiceItems, [cat]: items } },
+                  })
+                }
+                addLabel="항목 추가"
+              />
+            </div>
+          ))}
         </>
       )}
 

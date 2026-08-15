@@ -18,14 +18,19 @@ import {
   type ExamPrepTemplate,
   type SchoolLevel,
   type HighData,
+  type MiddleData,
   type TextSource,
   type TextCategory,
+  type PracticeCategory,
+  MIDDLE_PRACTICE_CATEGORIES,
   computeCategoryBreakdown,
   computeProgress,
   defaultDataFor,
+  emptyPracticeItems,
   joinTeachers,
   levelFromGrade,
   newTextSource,
+  newMiddleTextSource,
   splitTeachers,
 } from "./examPrep";
 
@@ -655,22 +660,21 @@ export async function getStudentFullHistory(studentId: string) {
     }))
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
 
-  // 고등은 텍스트(교과서/부교재/모의고사/학교프린트)별로 워크북 9단계·단어암기를
-  // 따로 관리하므로, 전체기록에서도 카테고리 합산 뿐 아니라 텍스트별 진행 상황을
-  // 바로 볼 수 있게 함께 내려준다.
-  const textSources =
-    examPrepSheet.data.level === "고등"
-      ? examPrepSheet.data.high.textSources.map((t) => ({
-          id: t.id,
-          category: t.category,
-          label: t.label,
-          detail: t.detail,
-          stepsDone: t.steps.filter((s) => s.done).length,
-          stepsTotal: t.steps.length,
-          vocabDone: t.vocab.filter((v) => v.done).length,
-          vocabTotal: t.vocab.length,
-        }))
-      : [];
+  // 고등은 텍스트(교과서/부교재/모의고사/학교프린트)별로, 중등은 과(Lesson)
+  // 별로 워크북 9단계·단어암기를 따로 관리하므로, 전체기록에서도 카테고리
+  // 합산 뿐 아니라 텍스트/과별 진행 상황을 바로 볼 수 있게 함께 내려준다.
+  const textSourcesRaw =
+    examPrepSheet.data.level === "고등" ? examPrepSheet.data.high.textSources : examPrepSheet.data.middle.textSources;
+  const textSources = textSourcesRaw.map((t) => ({
+    id: t.id,
+    category: t.category,
+    label: t.label,
+    detail: t.detail,
+    stepsDone: t.steps.filter((s) => s.done).length,
+    stepsTotal: t.steps.length,
+    vocabDone: t.vocab.filter((v) => v.done).length,
+    vocabTotal: t.vocab.length,
+  }));
 
   const examPrep = examPrepSheet.id
     ? {
@@ -2693,11 +2697,48 @@ function migrateHighData(rawHigh: any): HighData {
   return { textSources: sources, textAnalysisProgress: rawHigh?.textAnalysisProgress ?? "" };
 }
 
+// 중등도 고등과 같은 이유로 재설계: 교과서/부교재를 단일 문자열이 아니라
+// 과(Lesson)마다 워크북 9단계+단어암기를 추적하는 TextSource 배열로,
+// 연습문제 5종(자주틀리는문제/기출문제/추가문제/백발백중/적중백)은
+// 카테고리별 체크리스트(Record)로 바꾼다. 예전 lessons의 본문암기/
+// 대화문암기/성취도/진도메모는 각 과 TextSource로, practiceItems(단일
+// NamedItem 5개)는 매칭되는 카테고리의 첫 항목으로 그대로 옮긴다 —
+// 워크북 9단계는 예전에 없던 기준이라 고등과 동일하게 미체크로 시작한다.
+function migrateMiddleData(rawMiddle: any): MiddleData {
+  if (rawMiddle && Array.isArray(rawMiddle.textSources) && rawMiddle.practiceItems && !Array.isArray(rawMiddle.practiceItems)) {
+    return {
+      textSources: rawMiddle.textSources as TextSource[],
+      schoolPrint: rawMiddle.schoolPrint ?? "",
+      practiceItems: { ...emptyPracticeItems(), ...rawMiddle.practiceItems },
+    };
+  }
+
+  const textSources: TextSource[] = [];
+  for (const lesson of Array.isArray(rawMiddle?.lessons) ? rawMiddle.lessons : []) {
+    textSources.push({
+      ...newMiddleTextSource("교과서", lesson?.name ?? ""),
+      detail: rawMiddle?.textbook ?? "",
+      memo: lesson?.progress ?? "",
+      bodyMemorized: !!lesson?.bodyMemorized,
+      dialogueMemorized: !!lesson?.dialogueMemorized,
+      achievement: lesson?.achievement ?? "",
+    });
+  }
+
+  const practiceItems = emptyPracticeItems();
+  for (const item of Array.isArray(rawMiddle?.practiceItems) ? rawMiddle.practiceItems : []) {
+    const cat = (MIDDLE_PRACTICE_CATEGORIES as readonly string[]).includes(item?.label) ? (item.label as PracticeCategory) : null;
+    if (cat) practiceItems[cat].push({ ...item, label: "" });
+  }
+
+  return { textSources, schoolPrint: rawMiddle?.schoolPrint ?? "", practiceItems };
+}
+
 function parseExamPrepData(raw: string, level: SchoolLevel): ExamPrepData {
   if (raw) {
     try {
       const parsed = JSON.parse(raw);
-      if (parsed?.level === "중등") return parsed as ExamPrepData;
+      if (parsed?.level === "중등") return { level: "중등", middle: migrateMiddleData(parsed.middle) };
       if (parsed?.level === "고등") return { level: "고등", high: migrateHighData(parsed.high) };
     } catch {
       // 손상된 JSON이면 빈 시트로 대체
@@ -2871,10 +2912,16 @@ export async function getExamPrepTemplate(input: {
   const uniq = (vals: (string | null | undefined)[]) =>
     Array.from(new Set(vals.filter((v): v is string => !!v && v.trim() !== "")));
 
-  // 고등은 이제 교과서/부교재/학교프린트도 여러 건일 수 있어(모의고사처럼),
-  // 카테고리별 텍스트 이름만 뽑아 자동입력/자동완성 후보로 쓴다.
-  const highLabels = (data: ExamPrepData, category: TextCategory): string[] =>
-    data.level === "고등" ? data.high.textSources.filter((t) => t.category === category).map((t) => t.label) : [];
+  // 중등(과 단위)/고등(교재 단위) 둘 다 이제 교과서/부교재는 textSources
+  // 배열이라, 카테고리별 텍스트 이름만 뽑아 자동입력/자동완성 후보로 쓴다.
+  // 학교프린트는 중등은 아직 단일 문자열 필드라 별도로 처리한다.
+  const textSourcesOf = (data: ExamPrepData): TextSource[] => (data.level === "중등" ? data.middle.textSources : data.high.textSources);
+  const labelsOf = (data: ExamPrepData, category: TextCategory): string[] =>
+    textSourcesOf(data)
+      .filter((t) => t.category === category)
+      .map((t) => t.label);
+  const schoolPrintOf = (data: ExamPrepData): string =>
+    data.level === "중등" ? data.middle.schoolPrint : labelsOf(data, "학교프린트").join(", ");
 
   // getAllExamPrepEntries()는 갱신일 내림차순이므로 matches[0]/parsed[0]가 최신.
   const latest = parsed[0];
@@ -2884,24 +2931,16 @@ export async function getExamPrepTemplate(input: {
       examTitle: getRichText(latest.page, "시험명"),
       examRange: getRichText(latest.page, "시험범위"),
       teachers: splitTeachers(getRichText(latest.page, "담당교사")),
-      textbook: latest.data.level === "중등" ? latest.data.middle.textbook : highLabels(latest.data, "교과서").join(", "),
-      supplementary:
-        latest.data.level === "중등" ? latest.data.middle.supplementary : highLabels(latest.data, "부교재").join(", "),
-      schoolPrint:
-        latest.data.level === "중등" ? latest.data.middle.schoolPrint : highLabels(latest.data, "학교프린트").join(", "),
+      textbook: labelsOf(latest.data, "교과서").join(", "),
+      supplementary: labelsOf(latest.data, "부교재").join(", "),
+      schoolPrint: schoolPrintOf(latest.data),
     },
     examTitleOptions: uniq(parsed.map((p) => getRichText(p.page, "시험명"))),
     examRangeOptions: uniq(parsed.map((p) => getRichText(p.page, "시험범위"))),
-    textbookOptions: uniq(
-      parsed.flatMap((p) => (p.data.level === "중등" ? [p.data.middle.textbook] : highLabels(p.data, "교과서")))
-    ),
-    supplementaryOptions: uniq(
-      parsed.flatMap((p) => (p.data.level === "중등" ? [p.data.middle.supplementary] : highLabels(p.data, "부교재")))
-    ),
-    schoolPrintOptions: uniq(
-      parsed.flatMap((p) => (p.data.level === "중등" ? [p.data.middle.schoolPrint] : highLabels(p.data, "학교프린트")))
-    ),
-    schoolPrintItemLabels: uniq(parsed.flatMap((p) => highLabels(p.data, "학교프린트"))),
+    textbookOptions: uniq(parsed.flatMap((p) => labelsOf(p.data, "교과서"))),
+    supplementaryOptions: uniq(parsed.flatMap((p) => labelsOf(p.data, "부교재"))),
+    schoolPrintOptions: uniq(parsed.map((p) => schoolPrintOf(p.data))),
+    schoolPrintItemLabels: uniq(parsed.flatMap((p) => labelsOf(p.data, "학교프린트"))),
   };
 }
 

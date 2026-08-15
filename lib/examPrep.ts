@@ -15,21 +15,20 @@ export type NamedItem = {
   memo: string;
 };
 
-export type LessonItem = {
-  id: string;
-  name: string; // Lesson명 (예: "1과")
-  bodyMemorized: boolean; // 본문암기여부
-  dialogueMemorized: boolean; // 대화문암기여부
-  achievement: string; // 성취도 (상/중/하 등)
-  progress: string; // 진도사항 메모
-};
+// 중등 내신대비 문제풀이 5종 — 특정 과(Lesson)에 매인 게 아니라 시험범위
+// 전체에 걸쳐 도는 별도 교재/프린트라 워크북 9단계를 씌우지 않고, 카테고리별
+// 완료 체크리스트로만 관리한다(카테고리당 여러 건 등록 가능).
+export const MIDDLE_PRACTICE_CATEGORIES = ["자주 틀리는 문제", "기출문제", "추가문제", "백발백중", "적중백"] as const;
+export type PracticeCategory = (typeof MIDDLE_PRACTICE_CATEGORIES)[number];
 
 export type MiddleData = {
-  textbook: string;
-  supplementary: string;
+  // 교과서/부교재 — 고등의 TextSource를 그대로 재사용해 과(Lesson)마다
+  // 워크북 9단계+단어암기를 관리한다. label에 "1과" 같은 과 이름을, detail에
+  // 교재명/범위를 적는다. bodyMemorized/dialogueMemorized/achievement는
+  // 중등 전용 필드(고등에서는 쓰지 않음).
+  textSources: TextSource[];
   schoolPrint: string;
-  lessons: LessonItem[];
-  practiceItems: NamedItem[]; // 자주틀리는문제/기출문제/추가문제/백발백중/적중백
+  practiceItems: Record<PracticeCategory, NamedItem[]>;
 };
 
 export type TextCategory = "교과서" | "부교재" | "모의고사" | "학교프린트";
@@ -41,11 +40,15 @@ export type TextCategory = "교과서" | "부교재" | "모의고사" | "학교�
 export type TextSource = {
   id: string;
   category: TextCategory;
-  label: string; // 텍스트 이름 (예: "능률(김성곤)", "2025년 9월 모의고사", "OO중 2학기 프린트")
-  detail: string; // 부가정보 (범위/출처 등)
+  label: string; // 텍스트 이름 — 고등은 "능률(김성곤)"처럼 교재명, 중등은 "1과"처럼 과 이름
+  detail: string; // 부가정보 — 고등은 범위/출처, 중등은 교재명/범위
   steps: NamedItem[]; // 워크북 9단계(WORKBOOK_STEP_LABELS 고정) — 이 텍스트에서 반드시 거쳐야 하는 공정
   vocab: NamedItem[]; // 이 텍스트 범위의 단어암기 체크리스트(범위별로 자유롭게 추가)
   memo: string;
+  // 중등 교과서/부교재의 과(Lesson) 전용 필드 — 고등에서는 쓰지 않는다.
+  bodyMemorized?: boolean;
+  dialogueMemorized?: boolean;
+  achievement?: string;
 };
 
 export type HighData = {
@@ -103,19 +106,19 @@ function namedItem(label: string): NamedItem {
   return { id: makeId(), label, detail: "", done: false, memo: "" };
 }
 
-export const MIDDLE_PRACTICE_LABELS = ["자주 틀리는 문제", "기출문제", "추가문제", "백발백중", "적중백"];
 // 워크북 8단계 + 변형문제 = 텍스트 하나당 반드시 거쳐야 하는 9단계 공정.
 export const WORKBOOK_STEP_LABELS = ["영어빈칸", "동사형", "어법", "순서배열", "영작", "주제문", "제목", "요약문", "변형문제"];
 export const TEXT_CATEGORIES: TextCategory[] = ["교과서", "부교재", "모의고사", "학교프린트"];
+export const MIDDLE_TEXT_CATEGORIES: TextCategory[] = ["교과서", "부교재"];
+
+export function emptyPracticeItems(): Record<PracticeCategory, NamedItem[]> {
+  const obj = {} as Record<PracticeCategory, NamedItem[]>;
+  for (const cat of MIDDLE_PRACTICE_CATEGORIES) obj[cat] = [];
+  return obj;
+}
 
 export function defaultMiddleData(): MiddleData {
-  return {
-    textbook: "",
-    supplementary: "",
-    schoolPrint: "",
-    lessons: [],
-    practiceItems: MIDDLE_PRACTICE_LABELS.map(namedItem),
-  };
+  return { textSources: [], schoolPrint: "", practiceItems: emptyPracticeItems() };
 }
 
 export function newTextSource(category: TextCategory, label = ""): TextSource {
@@ -130,16 +133,18 @@ export function newTextSource(category: TextCategory, label = ""): TextSource {
   };
 }
 
+// 중등 교과서/부교재의 과(Lesson) 하나 — newTextSource에 본문암기/대화문암기/
+// 성취도 필드를 얹는다.
+export function newMiddleTextSource(category: TextCategory, label = ""): TextSource {
+  return { ...newTextSource(category, label), bodyMemorized: false, dialogueMemorized: false, achievement: "" };
+}
+
 export function defaultHighData(): HighData {
   return { textSources: [], textAnalysisProgress: "" };
 }
 
 export function defaultDataFor(level: SchoolLevel): ExamPrepData {
   return level === "중등" ? { level, middle: defaultMiddleData() } : { level, high: defaultHighData() };
-}
-
-export function newLesson(): LessonItem {
-  return { id: makeId(), name: "", bodyMemorized: false, dialogueMemorized: false, achievement: "", progress: "" };
 }
 
 export function newNamedItem(): NamedItem {
@@ -153,13 +158,25 @@ export type CategoryBreakdown = { label: string; done: number; total: number };
 // 학생 히스토리에서 그룹별로 따로 노출한다.
 export function computeCategoryBreakdown(data: ExamPrepData): CategoryBreakdown[] {
   if (data.level === "중등") {
-    const lessonDone = data.middle.lessons.reduce(
-      (sum, l) => sum + (l.bodyMemorized ? 1 : 0) + (l.dialogueMemorized ? 1 : 0),
+    // 고등과 동일하게 교과서/부교재 카테고리별 워크북 9단계를 합산하고,
+    // 과(Lesson)의 본문암기/대화문암기, 단어암기, 내신대비 5종은 각각
+    // 별도 그룹으로 보여준다.
+    const byCategory = MIDDLE_TEXT_CATEGORIES.map((cat) => {
+      const steps = data.middle.textSources.filter((t) => t.category === cat).flatMap((t) => t.steps);
+      return { label: cat, done: steps.filter((s) => s.done).length, total: steps.length };
+    });
+    const middleSources = data.middle.textSources;
+    const lessonDone = middleSources.reduce(
+      (sum, t) => sum + (t.bodyMemorized ? 1 : 0) + (t.dialogueMemorized ? 1 : 0),
       0
     );
+    const vocabAll = middleSources.flatMap((t) => t.vocab);
+    const practiceAll = MIDDLE_PRACTICE_CATEGORIES.flatMap((cat) => data.middle.practiceItems[cat]);
     return [
-      { label: "Lesson 암기", done: lessonDone, total: data.middle.lessons.length * 2 },
-      { label: "연습문제", done: data.middle.practiceItems.filter((i) => i.done).length, total: data.middle.practiceItems.length },
+      ...byCategory,
+      { label: "과별 암기", done: lessonDone, total: middleSources.length * 2 },
+      { label: "단어암기", done: vocabAll.filter((v) => v.done).length, total: vocabAll.length },
+      { label: "내신대비", done: practiceAll.filter((i) => i.done).length, total: practiceAll.length },
     ];
   }
   // 텍스트(교과서/부교재/모의고사/학교프린트) 카테고리별로 워크북 9단계를
