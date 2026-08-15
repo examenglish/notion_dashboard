@@ -234,7 +234,7 @@ export default function ExamPrepDirectorClient() {
               <select
                 value={levelFilter}
                 onChange={(e) => setLevelFilter(e.target.value as "" | SchoolLevel)}
-                className="h-8 w-16 shrink-0 rounded-md border border-input bg-background px-1.5 text-xs text-foreground"
+                className="h-8 w-24 shrink-0 rounded-md border border-input bg-background px-2 text-xs text-foreground"
               >
                 <option value="">전체</option>
                 <option value="중등">중등</option>
