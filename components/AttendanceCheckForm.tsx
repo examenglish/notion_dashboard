@@ -5,7 +5,7 @@ import { todayKST as todayStr } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
 import AbsenceReviewModal, { AbsenceReviewItem } from "./AbsenceReviewModal";
 
-type ClassOption = { id: string; name: string };
+type ClassOption = { id: string; name: string; type?: string };
 type RosterStudent = { id: string; name: string };
 type Flags = { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean };
 
@@ -32,6 +32,7 @@ export default function AttendanceCheckForm() {
   const [error, setError] = useState<string | null>(null);
   const [reviewItems, setReviewItems] = useState<AbsenceReviewItem[] | null>(null);
   const [hasExisting, setHasExisting] = useState(false);
+  const [includeExamClasses, setIncludeExamClasses] = useState(false);
 
   // 결석 체크 후 그 날짜(당일 포함)의 결석 검토 팝업을 바로 띄운다 —
   // 담당교사가 이미 지정된 건은 서버가 걸러서 내려주므로, 항목이 남아있으면
@@ -52,6 +53,10 @@ export default function AttendanceCheckForm() {
       .then((r) => r.json())
       .then(setClasses);
   }, []);
+
+  // 시험대비반은 기본적으로 목록에서 숨기되(체크박스로 펼쳐볼 수 있음), 이미
+  // 골라둔 반이 시험대비반이면 체크를 나중에 꺼도 선택값이 안 사라지게 한다.
+  const visibleClasses = classes.filter((c) => includeExamClasses || c.type !== "시험대비" || c.id === classId);
 
   useEffect(() => {
     if (!classId || !date) {
@@ -151,10 +156,16 @@ export default function AttendanceCheckForm() {
           <label htmlFor="acClass">반</label>
           <select id="acClass" value={classId} onChange={(e) => setClassId(e.target.value)}>
             <option value="">반 선택</option>
-            {classes.map((c) => (
-              <option key={c.id} value={c.id}>{stripClassSuffix(c.name)}</option>
+            {visibleClasses.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.type === "시험대비" ? `[시험대비] ${stripClassSuffix(c.name)}` : stripClassSuffix(c.name)}
+              </option>
             ))}
           </select>
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 400, marginTop: 4 }}>
+            <input type="checkbox" checked={includeExamClasses} onChange={(e) => setIncludeExamClasses(e.target.checked)} />
+            시험대비반 포함
+          </label>
         </div>
         <div>
           <label htmlFor="acPeriod">교시 (교시로 나뉜 반만)</label>

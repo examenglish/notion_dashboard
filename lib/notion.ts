@@ -255,6 +255,10 @@ export async function listClasses() {
     days: getMultiSelect(p, "요일"),
     time: getRichText(p, "시간"),
     level: getSelect(p, "레벨"),
+    // 시험기간에 학교/학년별로 임시 편성하는 시험대비반 구분 — 기존 반은
+    // 값이 없으므로 "정규"로 취급한다. 학생의 소속반은 원래 복수 선택
+    // 가능해서 시험대비반에 추가해도 원래 반 소속은 그대로 유지된다.
+    type: (getSelect(p, "구분") as string | null) ?? "정규",
     studentIds: getRelationIds(p, "소속학생"),
     assistantIds: getRelationIds(p, "담당조교"),
   }));
@@ -277,6 +281,7 @@ export async function createClass(input: {
   days?: string[];
   time?: string;
   level?: string;
+  type?: string;
 }): Promise<string> {
   const page = await notion.pages.create({
     parent: { data_source_id: DB.CLASS } as any,
@@ -291,6 +296,7 @@ export async function createClass(input: {
       ...(input.days && input.days.length > 0 ? { 요일: { multi_select: input.days.map((d) => ({ name: d })) } } : {}),
       ...(input.time ? { 시간: { rich_text: [{ text: { content: input.time } }] } } : {}),
       ...(input.level ? { 레벨: { select: { name: input.level } } } : {}),
+      구분: { select: { name: input.type === "시험대비" ? "시험대비" : "정규" } },
     } as any,
   });
   return page.id;
@@ -308,6 +314,7 @@ export async function updateClass(
     days?: string[];
     time?: string;
     level?: string;
+    type?: string;
   }
 ) {
   const properties: any = {};
@@ -319,6 +326,7 @@ export async function updateClass(
   if (input.days !== undefined) properties["요일"] = { multi_select: input.days.map((d) => ({ name: d })) };
   if (input.time !== undefined) properties["시간"] = { rich_text: [{ text: { content: input.time } }] };
   if (input.level !== undefined) properties["레벨"] = input.level ? { select: { name: input.level } } : { select: null };
+  if (input.type !== undefined) properties["구분"] = { select: { name: input.type === "시험대비" ? "시험대비" : "정규" } };
   await notion.pages.update({ page_id: classId, properties });
 }
 

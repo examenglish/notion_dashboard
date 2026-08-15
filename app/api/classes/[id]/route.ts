@@ -46,7 +46,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!body) {
     return NextResponse.json({ error: "invalid body" }, { status: 400 });
   }
-  const { name, teachers, level } = body;
+  const { name, teachers, level, type } = body;
   if (name !== undefined && !String(name).trim()) {
     return NextResponse.json({ error: "반이름을 입력해 주세요." }, { status: 400 });
   }
@@ -61,6 +61,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     days,
     time,
     level,
+    type: type !== undefined ? (type === "시험대비" ? "시험대비" : "정규") : undefined,
   });
   return NextResponse.json({ ok: true });
 }

@@ -63,6 +63,7 @@ export async function POST(req: NextRequest) {
     days,
     time,
     level: body?.level || undefined,
+    type: body?.type === "시험대비" ? "시험대비" : "정규",
   });
   return NextResponse.json({ ok: true, classId });
 }

@@ -17,7 +17,7 @@ import AbsenceReviewModal, { AbsenceReviewItem } from "./AbsenceReviewModal";
 import { todayKST as todayStr } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
 
-type ClassOption = { id: string; name: string };
+type ClassOption = { id: string; name: string; type?: string };
 type RosterStudent = { id: string; name: string };
 
 const SUBJECT_OPTIONS = ["문법", "독해", "서술형", "구문", "듣기", "모의고사", "어법", "내신대비"];
@@ -56,6 +56,7 @@ function ClassRecordForm() {
   const [saving, setSaving] = useState(false);
   const [existingProgressId, setExistingProgressId] = useState<string | null>(null);
   const [reviewItems, setReviewItems] = useState<AbsenceReviewItem[] | null>(null);
+  const [includeExamClasses, setIncludeExamClasses] = useState(false);
 
   // 결석 체크 후 그 날짜(당일 포함)의 결석 검토 팝업을 바로 띄운다 — 담당교사가
   // 이미 지정된 건은 서버가 걸러서 내려주므로, 항목이 남아있으면 실제로
@@ -78,6 +79,10 @@ function ClassRecordForm() {
         setClasses(list);
       });
   }, []);
+
+  // 시험대비반은 기본적으로 목록에서 숨기되(체크박스로 펼쳐볼 수 있음), 이미
+  // 골라둔 반이 시험대비반이면 체크를 나중에 꺼도 선택값이 안 사라지게 한다.
+  const visibleClasses = classes.filter((c) => includeExamClasses || c.type !== "시험대비" || c.id === classId);
 
   useEffect(() => {
     if (!classId) return;
@@ -311,10 +316,20 @@ function ClassRecordForm() {
                   }}
                 >
                   <option value="">반 선택</option>
-                  {classes.map((c) => (
-                    <option key={c.id} value={c.id}>{stripClassSuffix(c.name)}</option>
+                  {visibleClasses.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.type === "시험대비" ? `[시험대비] ${stripClassSuffix(c.name)}` : stripClassSuffix(c.name)}
+                    </option>
                   ))}
                 </select>
+                <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 400, marginTop: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={includeExamClasses}
+                    onChange={(e) => setIncludeExamClasses(e.target.checked)}
+                  />
+                  시험대비반 포함
+                </label>
               </div>
             </div>
 

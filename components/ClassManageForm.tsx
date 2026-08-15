@@ -12,12 +12,14 @@ type ClassFull = {
   days: string[];
   time: string;
   level: string | null;
+  type: string;
   studentIds: string[];
 };
 
 const MAX_TEACHERS = 3;
 
 const LEVEL_OPTIONS = ["초등", "중등", "고등"];
+const TYPE_OPTIONS = ["정규", "시험대비"];
 
 function confirmSave() {
   return window.confirm("저장하시겠습니까?");
@@ -55,6 +57,7 @@ export default function ClassManageForm() {
   const [dayHours, setDayHours] = useState<WorkHours>({});
   const [dayTeachers, setDayTeachers] = useState<DayTeachers>({});
   const [level, setLevel] = useState("");
+  const [classType, setClassType] = useState("정규");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +79,7 @@ export default function ClassManageForm() {
       setDayHours({});
       setDayTeachers({});
       setLevel("");
+      setClassType("정규");
       setDone(false);
       return;
     }
@@ -86,6 +90,7 @@ export default function ClassManageForm() {
       setDayHours(dayHoursFromClass(cls));
       setDayTeachers(cls.dayTeachers);
       setLevel(cls.level ?? "");
+      setClassType(cls.type || "정규");
     }
     setDone(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -163,7 +168,7 @@ export default function ClassManageForm() {
       const res = await fetch(isEdit ? `/api/classes/${selectedId}` : "/api/classes", {
         method: isEdit ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, teachers, dayHours, dayTeachers, level }),
+        body: JSON.stringify({ name, teachers, dayHours, dayTeachers, level, type: classType }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -215,13 +220,28 @@ export default function ClassManageForm() {
         <option value="">+ 새 반 추가</option>
         {classes.map((c) => (
           <option key={c.id} value={c.id}>
-            {stripClassSuffix(c.name)}
+            {c.type === "시험대비" ? `[시험대비] ${stripClassSuffix(c.name)}` : stripClassSuffix(c.name)}
           </option>
         ))}
       </select>
 
       <label htmlFor="className">반이름</label>
       <input id="className" type="text" value={name} onChange={(e) => setName(e.target.value)} required />
+
+      <label htmlFor="classType">구분</label>
+      <select id="classType" value={classType} onChange={(e) => setClassType(e.target.value)}>
+        {TYPE_OPTIONS.map((t) => (
+          <option key={t} value={t}>
+            {t}
+          </option>
+        ))}
+      </select>
+      {classType === "시험대비" && (
+        <p className="muted" style={{ marginTop: 2 }}>
+          시험대비반은 평소 수업기록/출결체크 화면의 반 목록에서 기본적으로 숨겨지고("시험대비반 포함" 체크 시에만
+          표시), 학생을 이 반에 추가해도 원래 소속반은 그대로 유지됩니다.
+        </p>
+      )}
 
       <TeacherMultiSelect selected={teachers} onChange={setTeachers} max={MAX_TEACHERS} roleFilter={["강사", "원장"]} />
 
