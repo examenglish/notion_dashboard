@@ -67,6 +67,7 @@ function ClickableRow({ onClick, children }: { onClick: () => void; children: Re
 export default function DirectorDashboardClient({
   today,
   role,
+  staffName,
   studentsCount,
   activeStudentsCount,
   attendanceRatePct,
@@ -85,6 +86,7 @@ export default function DirectorDashboardClient({
 }: {
   today: string;
   role: string;
+  staffName: string;
   studentsCount: number;
   activeStudentsCount: number;
   attendanceRatePct: number | null;
@@ -284,11 +286,17 @@ export default function DirectorDashboardClient({
             scheduleFlat.map((item, i) => {
               if (item.label === "행정실 문의") {
                 const inquiry = inquiryById.get(item.id);
-                if (inquiry) return <InquiryEditRow key={item.id} item={inquiry} onChanged={refreshSchedule} />;
+                if (inquiry)
+                  return (
+                    <InquiryEditRow key={item.id} item={inquiry} staffName={staffName} staffRole={role} onChanged={refreshSchedule} />
+                  );
               }
               if (item.label === "상담일지") {
                 const entry = counselingById.get(item.id);
-                if (entry) return <CounselingEditRow key={item.id} item={entry} onChanged={refreshSchedule} />;
+                if (entry)
+                  return (
+                    <CounselingEditRow key={item.id} item={entry} staffName={staffName} staffRole={role} onChanged={refreshSchedule} />
+                  );
               }
               return (
                 <ClickableRow key={i} onClick={() => setScheduleDetail(item)}>

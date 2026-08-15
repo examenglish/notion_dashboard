@@ -50,7 +50,7 @@ const NAV_ITEMS: NavItem[] = [
 // sidebar to opt into a Suspense boundary (Next.js requirement) — the
 // preview-test QA pages under /director aren't gated by getSession()/cookies
 // like the real pages, so without this wrapper they fail `next build`.
-export default function DirectorSidebar(props: { branchName: string }) {
+export default function DirectorSidebar(props: { branchName: string; role?: string }) {
   return (
     <Suspense fallback={<aside className="h-full w-60 shrink-0 border-r border-border bg-sidebar" />}>
       <DirectorSidebarInner {...props} />
@@ -58,12 +58,14 @@ export default function DirectorSidebar(props: { branchName: string }) {
   );
 }
 
-function DirectorSidebarInner({ branchName }: { branchName: string }) {
+function DirectorSidebarInner({ branchName, role = "원장" }: { branchName: string; role?: string }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const currentTab = searchParams.get("tab");
+  // 학생 레벨은 예전 화면에서도 원장 전용이었다 — 다른 역할에게는 숨긴다.
+  const navItems = NAV_ITEMS.filter((i) => i.href !== "/director/student-levels" || role === "원장");
   const [openKey, setOpenKey] = useState<string | null>(
-    NAV_ITEMS.find((i) => i.children && pathname.startsWith(i.href))?.href ?? null
+    navItems.find((i) => i.children && pathname.startsWith(i.href))?.href ?? null
   );
 
   return (
@@ -79,7 +81,7 @@ function DirectorSidebarInner({ branchName }: { branchName: string }) {
       </div>
 
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-2">
-        {NAV_ITEMS.map(({ href, label, icon: Icon, exact, children }) => {
+        {navItems.map(({ href, label, icon: Icon, exact, children }) => {
           const active = exact ? pathname === href : pathname.startsWith(href);
           const isOpen = openKey === href || (active && !!children);
           return (

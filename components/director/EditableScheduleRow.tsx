@@ -6,6 +6,7 @@ export type InquiryItem = {
   id: string;
   studentName: string;
   content: string;
+  enteredBy?: string;
 };
 
 export type CounselingItem = {
@@ -14,12 +15,27 @@ export type CounselingItem = {
   counselor: string;
   content: string;
   followUp: string;
+  enteredBy?: string;
 };
 
-// 원장이 항상 이 화면(원장 전용 /director)의 뷰어이므로, 서버(app/api/admin-inbox/[id],
-// app/api/counseling/[id])가 "본인 입력분 또는 원장"만 허용하는 규칙상 여기서는
-// 항상 통과한다 — 별도로 입력자 일치 여부를 클라이언트에서 검사할 필요는 없다.
-export function InquiryEditRow({ item, onChanged }: { item: InquiryItem; onChanged: () => void }) {
+// /director가 원장 전용이던 동안은 서버(app/api/admin-inbox/[id],
+// app/api/counseling/[id])의 "본인 입력분 또는 원장" 규칙이 뷰어=원장이라
+// 항상 통과했다. 이제 행정/강사/조교도 이 화면을 쓰므로, 서버와 같은 규칙을
+// 여기서도 적용해 본인이 못 고칠 항목엔 수정/삭제 버튼 자체를 숨긴다 — 눌러도
+// 403이 나는 죽은 버튼을 보여주지 않기 위함. (상담일지 삭제는 서버가 원장만
+// 허용 — 작성자 본인도 못 지운다.)
+export function InquiryEditRow({
+  item,
+  staffName,
+  staffRole,
+  onChanged,
+}: {
+  item: InquiryItem;
+  staffName: string;
+  staffRole: string;
+  onChanged: () => void;
+}) {
+  const canEdit = !item.enteredBy || item.enteredBy === staffName || staffRole === "원장";
   const [editing, setEditing] = useState(false);
   const [content, setContent] = useState(item.content);
   const [saving, setSaving] = useState(false);
@@ -71,23 +87,25 @@ export function InquiryEditRow({ item, onChanged }: { item: InquiryItem; onChang
     <div className="border-b border-border py-1.5 text-[13px] last:border-b-0">
       <div className="flex items-center justify-between gap-2">
         <span className="font-medium text-foreground">{item.studentName} · 행정실 문의</span>
-        <div className="flex shrink-0 gap-2">
-          <button
-            type="button"
-            onClick={() => setEditing((v) => !v)}
-            className="bg-transparent p-0 text-[11px] font-medium text-primary hover:underline"
-          >
-            {editing ? "닫기" : "수정"}
-          </button>
-          <button
-            type="button"
-            onClick={remove}
-            disabled={saving}
-            className="bg-transparent p-0 text-[11px] font-medium text-destructive hover:underline"
-          >
-            삭제
-          </button>
-        </div>
+        {canEdit && (
+          <div className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              onClick={() => setEditing((v) => !v)}
+              className="bg-transparent p-0 text-[11px] font-medium text-primary hover:underline"
+            >
+              {editing ? "닫기" : "수정"}
+            </button>
+            <button
+              type="button"
+              onClick={remove}
+              disabled={saving}
+              className="bg-transparent p-0 text-[11px] font-medium text-destructive hover:underline"
+            >
+              삭제
+            </button>
+          </div>
+        )}
       </div>
       {editing ? (
         <div className="mt-1 flex flex-col gap-1.5">
@@ -116,7 +134,19 @@ export function InquiryEditRow({ item, onChanged }: { item: InquiryItem; onChang
   );
 }
 
-export function CounselingEditRow({ item, onChanged }: { item: CounselingItem; onChanged: () => void }) {
+export function CounselingEditRow({
+  item,
+  staffName,
+  staffRole,
+  onChanged,
+}: {
+  item: CounselingItem;
+  staffName: string;
+  staffRole: string;
+  onChanged: () => void;
+}) {
+  const canEdit = !item.enteredBy || item.enteredBy === staffName || staffRole === "원장";
+  const canDelete = staffRole === "원장"; // 서버(app/api/counseling/[id] DELETE)가 원장만 허용
   const [editing, setEditing] = useState(false);
   const [content, setContent] = useState(item.content);
   const [followUp, setFollowUp] = useState(item.followUp);
@@ -171,23 +201,29 @@ export function CounselingEditRow({ item, onChanged }: { item: CounselingItem; o
         <span className="font-medium text-foreground">
           {item.studentName} · 상담일지{item.counselor ? ` (${item.counselor})` : ""}
         </span>
-        <div className="flex shrink-0 gap-2">
-          <button
-            type="button"
-            onClick={() => setEditing((v) => !v)}
-            className="bg-transparent p-0 text-[11px] font-medium text-primary hover:underline"
-          >
-            {editing ? "닫기" : "수정"}
-          </button>
-          <button
-            type="button"
-            onClick={remove}
-            disabled={saving}
-            className="bg-transparent p-0 text-[11px] font-medium text-destructive hover:underline"
-          >
-            삭제
-          </button>
-        </div>
+        {(canEdit || canDelete) && (
+          <div className="flex shrink-0 gap-2">
+            {canEdit && (
+              <button
+                type="button"
+                onClick={() => setEditing((v) => !v)}
+                className="bg-transparent p-0 text-[11px] font-medium text-primary hover:underline"
+              >
+                {editing ? "닫기" : "수정"}
+              </button>
+            )}
+            {canDelete && (
+              <button
+                type="button"
+                onClick={remove}
+                disabled={saving}
+                className="bg-transparent p-0 text-[11px] font-medium text-destructive hover:underline"
+              >
+                삭제
+              </button>
+            )}
+          </div>
+        )}
       </div>
       {editing ? (
         <div className="mt-1 flex flex-col gap-1.5">

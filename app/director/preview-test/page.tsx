@@ -9,7 +9,7 @@ import DirectorDashboardClient from "@/components/director/DirectorDashboardClie
 export default function PreviewTestPage() {
   return (
     <div className="director-shell flex h-screen bg-background text-foreground">
-      <DirectorSidebar branchName="이그잼영어학원 · 금정" />
+      <DirectorSidebar branchName="이그잼영어학원 · 금정" role="원장" />
       <div className="flex min-w-0 flex-1 flex-col">
         <DirectorTopbar
           staffName="김원장"
@@ -23,6 +23,7 @@ export default function PreviewTestPage() {
           <DirectorDashboardClient
             today="2026-08-14"
             role="원장"
+            staffName="김원장"
             studentsCount={184}
             activeStudentsCount={171}
             attendanceRatePct={94}

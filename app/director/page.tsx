@@ -34,7 +34,7 @@ function daysUntil(dateStr: string, today: string): number {
 export default async function DirectorDashboardPage() {
   const session = await getSession();
   if (!session) redirect("/login?next=/director");
-  if (session.role !== "원장") redirect("/dashboard");
+  if (!session.role || !["원장", "행정", "강사", "조교"].includes(session.role)) redirect("/dashboard");
 
   const today = todayKST();
   const branchName = process.env.NEXT_PUBLIC_BRANCH_NAME ?? "이그잼영어학원";
@@ -100,20 +100,21 @@ export default async function DirectorDashboardPage() {
 
   return (
     <div className="director-shell flex h-screen bg-background text-foreground">
-      <DirectorSidebar branchName={branchName} />
+      <DirectorSidebar branchName={branchName} role={session.role ?? ""} />
       <div className="flex min-w-0 flex-1 flex-col">
         <DirectorTopbar
           staffName={session.name}
           role={session.role ?? ""}
           dateLabel={formatDateLabel(today)}
           greetingTitle="전체 학원 현황"
-          greetingText={`${session.name} 원장님, 오늘 하루 현황입니다.`}
+          greetingText={`${session.name} ${session.role === "원장" ? "원장님" : "선생님"}, 오늘 하루 현황입니다.`}
         />
 
         <main className="flex-1 overflow-y-auto bg-muted/50 px-6 py-5">
           <DirectorDashboardClient
             today={today}
             role={session.role ?? ""}
+            staffName={session.name}
             studentsCount={students.length}
             activeStudentsCount={statusCounts["재원"] ?? 0}
             attendanceRatePct={attendanceRatePct}

@@ -14,7 +14,7 @@ export default async function DirectorStudentLevelsPage() {
 
   return (
     <div className="director-shell flex h-screen bg-background text-foreground">
-      <DirectorSidebar branchName={branchName} />
+      <DirectorSidebar branchName={branchName} role={session.role ?? ""} />
       <div className="flex min-w-0 flex-1 flex-col">
         <DirectorTopbar staffName={session.name} role={session.role ?? ""} dateLabel={formatDateLabel(todayKST())} />
 

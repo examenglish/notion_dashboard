@@ -27,7 +27,7 @@ function LoginForm() {
         setError(data.error ?? "로그인에 실패했습니다.");
         return;
       }
-      const defaultPath = data.role === "원장" ? "/director" : "/dashboard";
+      const defaultPath = "/director";
       router.push(data.mustChangePin ? "/change-pin" : params.get("next") ?? defaultPath);
       router.refresh();
     } catch {

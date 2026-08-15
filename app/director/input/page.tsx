@@ -8,13 +8,13 @@ import { todayKST, formatDateLabel } from "@/lib/date";
 export default async function DirectorInputPage() {
   const session = await getSession();
   if (!session) redirect("/login?next=/director/input");
-  if (session.role !== "원장") redirect("/dashboard");
+  if (!session.role || !["원장", "행정", "강사", "조교"].includes(session.role)) redirect("/dashboard");
 
   const branchName = process.env.NEXT_PUBLIC_BRANCH_NAME ?? "이그잼영어학원";
 
   return (
     <div className="director-shell flex h-screen bg-background text-foreground">
-      <DirectorSidebar branchName={branchName} />
+      <DirectorSidebar branchName={branchName} role={session.role ?? ""} />
       <div className="flex min-w-0 flex-1 flex-col">
         <DirectorTopbar staffName={session.name} role={session.role ?? ""} dateLabel={formatDateLabel(todayKST())} />
 
