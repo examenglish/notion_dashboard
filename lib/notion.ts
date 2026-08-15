@@ -2897,6 +2897,54 @@ export async function getExamPrepTemplate(input: {
   };
 }
 
+// 같은 학교+학년은 학교에서 내려주는 시험범위가 원래 하나뿐이라, 한 학생
+// 시트에서 정리한 시험범위를 나머지 학생들에게도 밀어 넣을 수 있게 한다.
+// getAllExamPrepEntries()가 이미 "시험대비 시트가 실제로 존재하는 학생"만
+// 반환하므로, 아직 시트를 만든 적 없는 학생은 자동으로 제외되고(새 페이지를
+// 만들어버리는 일이 없음) — 시험범위 외 다른 필드(체크리스트/시험명 등)는
+// 건드리지 않아 기존 데이터 손실을 최소화한다.
+async function getExamRangeSyncTargets(input: { school: string; grade: string; excludeStudentId: string }) {
+  const entries = await getAllExamPrepEntries();
+  return entries.filter(
+    (e) => e.student.id !== input.excludeStudentId && e.student.school === input.school && e.student.grade === input.grade
+  );
+}
+
+// 실제로 적용하기 전에 "누가 어떤 값에서 바뀌는지" 미리 보여주기 위한 목록.
+export async function getExamRangeSyncPreview(input: {
+  school: string;
+  grade: string;
+  excludeStudentId: string;
+}): Promise<{ studentId: string; studentName: string; examRange: string }[]> {
+  const targets = await getExamRangeSyncTargets(input);
+  return targets.map((e) => ({
+    studentId: e.student.id,
+    studentName: e.student.name,
+    examRange: getRichText(e.page, "시험범위"),
+  }));
+}
+
+export async function syncExamRange(input: {
+  school: string;
+  grade: string;
+  excludeStudentId: string;
+  examRange: string;
+}): Promise<{ studentId: string; studentName: string }[]> {
+  const targets = await getExamRangeSyncTargets(input);
+  await Promise.all(
+    targets.map((e) =>
+      notion.pages.update({
+        page_id: e.page.id,
+        properties: {
+          시험범위: { rich_text: chunkRichText(input.examRange) },
+          갱신일: { date: { start: todayKST() } },
+        },
+      })
+    )
+  );
+  return targets.map((e) => ({ studentId: e.student.id, studentName: e.student.name }));
+}
+
 // 시험결과 입력/저장 — 기존 DB⑦시험성적에 이어서 기록한다(대시보드의
 // "직전 학교시험 점수"/성적 추이 차트가 그대로 이 데이터를 함께 사용).
 export async function createExamScore(input: {

@@ -511,6 +511,7 @@ export function ExamPrepEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
+  const [rangeSyncing, setRangeSyncing] = useState(false);
 
   // 사용자가 항목을 조금만 고쳐도(체크박스 하나라도) 자동으로 저장되도록,
   // 데이터 로딩으로 인한 state 변경은 건너뛰고 실제 편집만 디바운스 저장한다.
@@ -619,7 +620,7 @@ export function ExamPrepEditor({
       .then((d) => setScores(d.examScores ?? []));
   }
 
-  async function handleSave() {
+  async function handleSave(): Promise<boolean> {
     setError(null);
     setSaving(true);
     try {
@@ -640,16 +641,70 @@ export function ExamPrepEditor({
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         setError(d.error ?? "저장에 실패했습니다.");
-        return;
+        return false;
       }
       const result = await res.json();
       setSheet((prev) => (prev ? { ...prev, id: result.id, progress: result.progress } : prev));
       setSavedFlash(true);
       onSaved();
+      return true;
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // 같은 학교+학년은 시험범위가 학교에서 내려오는 값 하나뿐이라, 이 학생
+  // 시트에서 정리한 시험범위를 나머지 학생들에게도 그대로 맞춰준다.
+  // 데이터 손실을 막기 위해: (1) 미리보기로 대상과 기존 값을 보여주고
+  // 확인받은 뒤에만 적용, (2) 시험범위 외 다른 필드는 절대 건드리지 않음,
+  // (3) 아직 시트가 없는 학생은 서버에서 자동으로 제외(새로 만들지 않음).
+  async function handleSyncRange() {
+    if (!sheet?.school || !sheet?.grade) return;
+    if (!examRange.trim()) {
+      window.alert("먼저 시험범위를 입력해주세요.");
+      return;
+    }
+    setRangeSyncing(true);
+    setError(null);
+    try {
+      const saved = await handleSave();
+      if (!saved) return;
+
+      const params = new URLSearchParams({ school: sheet.school, grade: sheet.grade, excludeStudentId: studentId });
+      const previewRes = await fetch(`/api/exam-prep/range-sync?${params}`);
+      const preview: { studentId: string; studentName: string; examRange: string }[] = await previewRes.json();
+
+      if (preview.length === 0) {
+        window.alert("같은 학교·학년의 다른 학생 시험대비 시트가 없습니다.");
+        return;
+      }
+
+      const lines = preview.map((p) => `- ${p.studentName}: "${p.examRange || "(비어있음)"}" → "${examRange}"`).join("\n");
+      const ok = window.confirm(
+        `${sheet.school} ${sheet.grade} 학생 ${preview.length}명의 시험범위를 아래와 같이 동기화합니다. 시험범위 외 다른 항목은 바뀌지 않습니다.\n\n${lines}\n\n계속할까요?`
+      );
+      if (!ok) return;
+
+      const res = await fetch("/api/exam-prep/range-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ school: sheet.school, grade: sheet.grade, excludeStudentId: studentId, examRange }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error ?? "동기화에 실패했습니다.");
+        return;
+      }
+      const { updated } = await res.json();
+      window.alert(`${updated.length}명의 시험범위를 동기화했습니다.`);
+      onSaved();
     } catch {
       setError("네트워크 오류가 발생했습니다.");
     } finally {
-      setSaving(false);
+      setRangeSyncing(false);
     }
   }
 
@@ -776,13 +831,26 @@ export function ExamPrepEditor({
       <div className="field-row">
         <div>
           <label>시험범위</label>
-          <input
-            type="text"
-            list="examRangeOptions"
-            placeholder="예: 1~3과, 모의고사 18-24"
-            value={examRange}
-            onChange={(e) => setExamRange(e.target.value)}
-          />
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              type="text"
+              list="examRangeOptions"
+              placeholder="예: 1~3과, 모의고사 18-24"
+              value={examRange}
+              onChange={(e) => setExamRange(e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <button
+              type="button"
+              className="secondary"
+              disabled={rangeSyncing || !examRange.trim()}
+              onClick={handleSyncRange}
+              style={{ padding: "4px 10px", fontSize: 12, whiteSpace: "nowrap" }}
+              title="같은 학교·학년 다른 학생들의 시험범위를 이 값으로 맞춥니다"
+            >
+              {rangeSyncing ? "동기화 중..." : "학년 전체 동기화"}
+            </button>
+          </div>
         </div>
         <div>
           <TeacherMultiSelect selected={teachers} onChange={setTeachers} />
