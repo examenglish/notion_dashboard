@@ -213,8 +213,21 @@ function ClassRecordForm() {
     setShowPreview(true);
   }
 
-  async function actuallySave(briefingTexts?: Record<string, string>): Promise<{ ok: boolean; error?: string }> {
+  async function actuallySave(briefingTexts?: Record<string, string>): Promise<{ ok: boolean; error?: string; cancelled?: boolean }> {
     const isEdit = !!existingProgressId;
+    // 같은 반을 같은 날 여러 교시로 나눠 기록할 때, 교시를 잘못 고르거나
+    // 안 고르면 조회가 다른 교시(또는 "교시 구분 없음")의 기존 기록을 찾아와
+    // 조용히 편집 모드로 바뀐다 — 그 상태로 저장을 누르면 새 기록이 아니라
+    // 기존 기록이 통째로 덮어써지므로, 편집 모드로 저장할 때는 어떤 교시의
+    // 어떤 기록을 덮어쓰는지 짚어주고 한 번 더 확인받는다.
+    if (isEdit) {
+      const periodLabel = period || "교시 구분 없음";
+      const className = selectedClassName || manualClassName.trim() || "이 반";
+      const ok = window.confirm(
+        `${date} ${className} (${periodLabel})에 이미 저장된 기록이 있습니다.\n저장하면 그 기존 기록을 덮어씁니다 — 교시를 잘못 고른 건 아닌지 확인해주세요.\n계속할까요?`
+      );
+      if (!ok) return { ok: false, cancelled: true };
+    }
     try {
       const res = await fetch("/api/class-record", {
         method: isEdit ? "PATCH" : "POST",
@@ -254,13 +267,15 @@ function ClassRecordForm() {
   }
 
   async function handleDirectSave() {
-    if (!confirmSave()) return;
+    // 편집(기존 기록 불러온 상태) 저장은 actuallySave 안에서 교시를 짚어주는
+    // 전용 확인을 이미 거치므로, 여기서는 새 기록 저장일 때만 일반 확인을 묻는다.
+    if (!existingProgressId && !confirmSave()) return;
     setError(null);
     setDone(false);
     setSaving(true);
     const res = await actuallySave();
     setSaving(false);
-    if (!res.ok) setError(res.error ?? "저장에 실패했습니다.");
+    if (!res.ok && !res.cancelled) setError(res.error ?? "저장에 실패했습니다.");
   }
 
   const selectedClassName = stripClassSuffix(classes.find((c) => c.id === classId)?.name ?? "");
@@ -272,8 +287,9 @@ function ClassRecordForm() {
       <form className="card" onSubmit={(e) => e.preventDefault()}>
         <h2>오늘 수업 기록 <span className="title-lab-tag">(실험실)</span></h2>
         {existingProgressId && (
-          <p className="muted" style={{ marginTop: -4 }}>
-            이미 저장된 기록을 불러왔습니다 — 수정 후 저장하면 기존 기록이 업데이트됩니다.
+          <p className="muted" style={{ marginTop: -4, color: "#b45309" }}>
+            이미 저장된 <strong>{period || "교시 구분 없음"}</strong> 기록을 불러왔습니다 — 수정 후 저장하면 기존 기록을
+            덮어씁니다. 다른 교시를 기록하려면 위 "교시"를 먼저 맞게 골라주세요.
           </p>
         )}
 

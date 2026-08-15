@@ -59,7 +59,7 @@ export default function DailyBriefingPreviewModal({
   };
   classes: ClassOption[];
   onClose: () => void;
-  onSave: (texts: Record<string, string>) => Promise<{ ok: boolean; error?: string }>;
+  onSave: (texts: Record<string, string>) => Promise<{ ok: boolean; error?: string; cancelled?: boolean }>;
 }) {
   const [viewDate, setViewDate] = useState(draft.date);
   const [viewClassId, setViewClassId] = useState(draft.classId);
@@ -101,7 +101,7 @@ export default function DailyBriefingPreviewModal({
     const res = await onSave(editedTexts);
     setSaving(false);
     if (!res.ok) {
-      setSaveError(res.error ?? "저장에 실패했습니다.");
+      if (!res.cancelled) setSaveError(res.error ?? "저장에 실패했습니다.");
       return;
     }
     setSaved(true);

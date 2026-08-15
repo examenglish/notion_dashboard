@@ -31,6 +31,7 @@ export default function AttendanceCheckForm() {
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reviewItems, setReviewItems] = useState<AbsenceReviewItem[] | null>(null);
+  const [hasExisting, setHasExisting] = useState(false);
 
   // 결석 체크 후 그 날짜(당일 포함)의 결석 검토 팝업을 바로 띄운다 —
   // 담당교사가 이미 지정된 건은 서버가 걸러서 내려주므로, 항목이 남아있으면
@@ -55,6 +56,7 @@ export default function AttendanceCheckForm() {
   useEffect(() => {
     if (!classId || !date) {
       setRoster([]);
+      setHasExisting(false);
       return;
     }
     let cancelled = false;
@@ -69,6 +71,7 @@ export default function AttendanceCheckForm() {
         if (cancelled) return;
         setRoster(list);
         const rec = data?.existing;
+        setHasExisting(!!rec);
         const plannedAbsentIds = new Set<string>(data?.plannedAbsentIds ?? []);
         setPerStudent(
           Object.fromEntries(
@@ -96,7 +99,17 @@ export default function AttendanceCheckForm() {
   }
 
   async function handleSave() {
-    if (!confirmSave()) return;
+    // 교시를 잘못 고르면(또는 안 고르면) 다른 교시(또는 담당교사/다른 조교)가
+    // 이미 체크해둔 기록을 불러와 덮어쓸 수 있다 — 이미 기록이 있을 때는
+    // 교시를 짚어주고 한 번 더 확인받는다.
+    if (hasExisting) {
+      const periodLabel = period || "교시 구분 없음";
+      if (!window.confirm(`${date} (${periodLabel})에 이미 체크된 기록이 있습니다.\n저장하면 그 기록의 결석/단어테스트 체크를 덮어씁니다 — 교시를 잘못 고른 건 아닌지 확인해주세요.\n계속할까요?`)) {
+        return;
+      }
+    } else if (!confirmSave()) {
+      return;
+    }
     setError(null);
     setDone(false);
     setSaving(true);
@@ -153,6 +166,13 @@ export default function AttendanceCheckForm() {
           </select>
         </div>
       </div>
+
+      {!loadingRoster && hasExisting && (
+        <p className="muted" style={{ color: "#b45309" }}>
+          이미 저장된 <strong>{period || "교시 구분 없음"}</strong> 체크 기록을 불러왔습니다 — 저장하면 그 기록을
+          덮어씁니다. 다른 교시를 체크하려면 위 "교시"를 먼저 맞게 골라주세요.
+        </p>
+      )}
 
       {loadingRoster && <p className="muted">명단 불러오는 중...</p>}
       {!loadingRoster && classId && roster.length === 0 && <p className="muted">이 반에 등록된 학생이 없습니다.</p>}
