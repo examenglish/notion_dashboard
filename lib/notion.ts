@@ -915,6 +915,7 @@ export type DailyOutcomeStudent = {
   school: string;
   grade: string | null;
   className: string;
+  status?: string;
 };
 
 // 원장 대시보드 "오늘 결석"/"미완료 과제" 타일의 더보기 팝업용 — 이름까지
@@ -924,6 +925,7 @@ export async function getDailyOutcomeDetail(date: string): Promise<{
   absentStudents: DailyOutcomeStudent[];
   incompleteHomeworkStudents: DailyOutcomeStudent[];
   vocabRetestStudents: DailyOutcomeStudent[];
+  attendedStudents: DailyOutcomeStudent[];
 }> {
   const [records, students, classes] = await Promise.all([
     queryAllPages({
@@ -954,10 +956,16 @@ export async function getDailyOutcomeDetail(date: string): Promise<{
   const absentStudents: DailyOutcomeStudent[] = [];
   const incompleteHomeworkStudents: DailyOutcomeStudent[] = [];
   const vocabRetestStudents: DailyOutcomeStudent[] = [];
+  const attendedStudents: DailyOutcomeStudent[] = [];
   for (const r of records as any[]) {
-    if (getSelect(r, "출결") === "결석") {
+    const status = getSelect(r, "출결");
+    if (status === "결석") {
       const s = resolve(r);
       if (s) absentStudents.push(s);
+    }
+    if (status === "출석" || status === "지각") {
+      const s = resolve(r);
+      if (s) attendedStudents.push({ ...s, status });
     }
     if (!getCheckbox(r, "과제여부")) {
       const s = resolve(r);
@@ -968,7 +976,7 @@ export async function getDailyOutcomeDetail(date: string): Promise<{
       if (s) vocabRetestStudents.push(s);
     }
   }
-  return { absentStudents, incompleteHomeworkStudents, vocabRetestStudents };
+  return { absentStudents, incompleteHomeworkStudents, vocabRetestStudents, attendedStudents };
 }
 
 // "오늘의 일정": alarms + new-student events + makeup/retest sessions due today.

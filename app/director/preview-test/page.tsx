@@ -32,14 +32,14 @@ export default function PreviewTestPage() {
             vocabRetestCount={11}
             homeworkIncompleteCount={9}
             scheduleFlat={[
-              { id: "s1", label: "보강", studentName: "김민준", detail: "18:00" },
-              { id: "s2", label: "재시", studentName: "이서연", detail: "19:30" },
-              { id: "s3", label: "신입생 상담", studentName: "박도윤", detail: "15:00 레벨테스트" },
-              { id: "s4", label: "클리닉", studentName: "최지우", detail: "17:00" },
-              { id: "s5", label: "조치사항", studentName: "정하은", detail: "학부모 연락 필요" },
-              { id: "s6", label: "복습", studentName: "한소율", detail: "16:00" },
-              { id: "q1", label: "상담일지", studentName: "오지훈", detail: "진로 상담" },
-              { id: "i1", label: "행정실 문의", studentName: "강명아", detail: "교재 문의" },
+              { id: "s1", label: "보강", kind: "todo", studentName: "김민준", detail: "18:00", time: "18:00", memo: "", owner: "-" },
+              { id: "s2", label: "재시", kind: "todo", studentName: "이서연", detail: "19:30", time: "19:30", memo: "", owner: "-" },
+              { id: "s3", label: "신입생 상담", kind: "todo", studentName: "박도윤", detail: "15:00 레벨테스트", time: "15:00", memo: "레벨테스트", owner: "-" },
+              { id: "s4", label: "클리닉", kind: "todo", studentName: "최지우", detail: "17:00", time: "17:00", memo: "", owner: "-" },
+              { id: "s5", label: "조치사항", kind: "student", studentName: "정하은", detail: "학부모 연락 필요", time: null, memo: null, owner: null },
+              { id: "s6", label: "복습", kind: "todo", studentName: "한소율", detail: "16:00", time: "16:00", memo: "", owner: "-" },
+              { id: "q1", label: "상담일지", kind: "counseling", studentName: "오지훈", detail: "진로 상담", time: null, memo: null, owner: null },
+              { id: "i1", label: "행정실 문의", kind: "inquiry", studentName: "강명아", detail: "교재 문의", time: null, memo: null, owner: null },
             ]}
             scheduleTotal={14}
             inquiriesToday={[{ id: "i1", studentName: "강명아", content: "교재 문의 — 다음 학기 교재 언제 나오는지 물어봄" }]}

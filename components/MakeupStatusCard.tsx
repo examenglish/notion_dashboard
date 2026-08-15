@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { todayKST } from "@/lib/date";
 import ScheduleConfirmModal from "./ScheduleConfirmModal";
+import StaffPicker from "./StaffPicker";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 
 export type MakeupScheduleItem = {
@@ -35,6 +36,7 @@ function MakeupRow({
   const [editing, setEditing] = useState(false);
   const [date, setDate] = useState(item.date ?? todayKST());
   const [time, setTime] = useState(item.time);
+  const [ownerName, setOwnerName] = useState(item.ownerName ?? "");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +45,7 @@ function MakeupRow({
   function startEdit() {
     setDate(item.date ?? todayKST());
     setTime(item.time);
+    setOwnerName(item.ownerName ?? "");
     setError(null);
     setEditing(true);
   }
@@ -55,7 +58,7 @@ function MakeupRow({
       const res = await fetch(`/api/schedule-entry/${item.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date, time }),
+        body: JSON.stringify({ date, time, ownerName }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -99,7 +102,7 @@ function MakeupRow({
         {showOwner && <span className="muted"> · 담당: {item.ownerName}</span>}
         <br />
         {editing ? (
-          <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "flex-end", marginTop: 6, flexWrap: "wrap" }}>
             <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ maxWidth: 150 }} />
             <input
               type="text"
@@ -108,6 +111,9 @@ function MakeupRow({
               onChange={(e) => setTime(e.target.value)}
               style={{ maxWidth: 110 }}
             />
+            <div style={{ maxWidth: 160 }}>
+              <StaffPicker value={ownerName} onChange={setOwnerName} label="담당자" date={date} time={time} />
+            </div>
             <button type="button" disabled={saving || !date || !time.trim()} onClick={save}>
               {saving ? "저장 중..." : "저장"}
             </button>

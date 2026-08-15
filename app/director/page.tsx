@@ -13,16 +13,26 @@ import DirectorSidebar from "@/components/director/DirectorSidebar";
 import DirectorTopbar from "@/components/director/DirectorTopbar";
 import DirectorDashboardClient from "@/components/director/DirectorDashboardClient";
 
-const SCHEDULE_GROUPS: { key: string; label: string; detail: (item: any) => string }[] = [
-  { key: "alarms", label: "조치사항", detail: (i) => i.content || "-" },
-  { key: "firstDays", label: "신입생 첫등원", detail: (i) => i.classTime || "-" },
-  { key: "newStudentEvents", label: "신입생 상담", detail: (i) => i.memo || i.time || "-" },
-  { key: "makeupClasses", label: "보강", detail: (i) => i.time || "미확정" },
-  { key: "retests", label: "재시", detail: (i) => i.time || "미확정" },
-  { key: "clinicTasks", label: "클리닉", detail: (i) => i.time || "-" },
-  { key: "reviewTasks", label: "복습", detail: (i) => i.time || "-" },
-  { key: "counseling", label: "상담일지", detail: (i) => i.content || "-" },
-  { key: "inquiries", label: "행정실 문의", detail: (i) => i.content || "-" },
+// kind는 클라이언트가 "오늘 일정" 항목을 눌렀을 때 어떤 수정/삭제 경로를
+// 태울지 결정한다 — "todo"는 DB⑱할일관리 소속이라 /api/schedule-entry로
+// 시간·메모·담당자 수정 + 삭제가 가능하고, "counseling"/"inquiry"는 이미
+// 있는 CounselingEditRow/InquiryEditRow를 그대로 쓴다. "student"(조치사항/
+// 신입생 첫등원)는 DB②학생마스터 필드라 여기서 수정 대상으로 다루지 않는다.
+const SCHEDULE_GROUPS: {
+  key: string;
+  label: string;
+  kind: "todo" | "student" | "counseling" | "inquiry";
+  detail: (item: any) => string;
+}[] = [
+  { key: "alarms", label: "조치사항", kind: "student", detail: (i) => i.content || "-" },
+  { key: "firstDays", label: "신입생 첫등원", kind: "student", detail: (i) => i.classTime || "-" },
+  { key: "newStudentEvents", label: "신입생 상담", kind: "todo", detail: (i) => i.memo || i.time || "-" },
+  { key: "makeupClasses", label: "보강", kind: "todo", detail: (i) => i.time || "미확정" },
+  { key: "retests", label: "재시", kind: "todo", detail: (i) => i.time || "미확정" },
+  { key: "clinicTasks", label: "클리닉", kind: "todo", detail: (i) => i.time || "-" },
+  { key: "reviewTasks", label: "복습", kind: "todo", detail: (i) => i.time || "-" },
+  { key: "counseling", label: "상담일지", kind: "counseling", detail: (i) => i.content || "-" },
+  { key: "inquiries", label: "행정실 문의", kind: "inquiry", detail: (i) => i.content || "-" },
 ];
 
 function daysUntil(dateStr: string, today: string): number {
@@ -88,12 +98,16 @@ export default async function DirectorDashboardPage() {
     .filter((s) => s.gapDays === null || s.gapDays >= 30)
     .sort((a, b) => (b.gapDays ?? 9999) - (a.gapDays ?? 9999));
 
-  const scheduleFlat = SCHEDULE_GROUPS.flatMap(({ key, label, detail }) =>
+  const scheduleFlat = SCHEDULE_GROUPS.flatMap(({ key, label, kind, detail }) =>
     ((todaySchedule as any)[key] as any[]).map((item) => ({
       id: item.id as string,
       label,
+      kind,
       studentName: item.studentName ?? "-",
       detail: detail(item),
+      time: item.time ?? null,
+      memo: item.memo ?? null,
+      owner: item.owner ?? null,
     }))
   );
   const scheduleTotal = scheduleFlat.length;
