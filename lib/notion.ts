@@ -68,6 +68,18 @@ export function getRichText(page: Page, prop: string): string {
   return arr.map((t: any) => t.plain_text).join("");
 }
 
+// Notion rich_text 블록 하나는 2000자를 넘길 수 없다 — 그보다 긴 문자열은
+// 여러 블록으로 쪼개서 써야 한다(읽을 때는 getRichText가 이어붙여준다).
+const NOTION_RICH_TEXT_LIMIT = 2000;
+function chunkRichText(content: string): { text: { content: string } }[] {
+  if (content.length <= NOTION_RICH_TEXT_LIMIT) return [{ text: { content } }];
+  const chunks: { text: { content: string } }[] = [];
+  for (let i = 0; i < content.length; i += NOTION_RICH_TEXT_LIMIT) {
+    chunks.push({ text: { content: content.slice(i, i + NOTION_RICH_TEXT_LIMIT) } });
+  }
+  return chunks;
+}
+
 export function getSelect(page: Page, prop: string): string | null {
   return page.properties?.[prop]?.select?.name ?? null;
 }
@@ -2756,7 +2768,10 @@ export async function saveExamPrepSheet(input: {
     담당교사: { rich_text: [{ text: { content: joinTeachers(input.teachers) } }] },
     진행률: { number: progress },
     취약부분: { rich_text: [{ text: { content: input.weakPoints } }] },
-    데이터: { rich_text: [{ text: { content: JSON.stringify(input.data) } }] },
+    // 텍스트별 워크북 9단계 체크리스트를 전부 담다 보니 Notion의 rich_text
+    // 블록당 2000자 제한을 쉽게 넘어 저장이 실패했다 — 2000자씩 여러 블록으로
+    // 나눠 담는다(getRichText가 읽을 때 이미 여러 블록을 이어붙이도록 돼 있음).
+    데이터: { rich_text: chunkRichText(JSON.stringify(input.data)) },
     갱신일: { date: { start: todayKST() } },
     시험일: input.examDate ? { date: { start: input.examDate } } : { date: null },
   };
