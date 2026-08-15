@@ -32,16 +32,25 @@ export type MiddleData = {
   practiceItems: NamedItem[]; // 자주틀리는문제/기출문제/추가문제/백발백중/적중백
 };
 
+export type TextCategory = "교과서" | "부교재" | "모의고사" | "학교프린트";
+
+// 교과서/부교재/모의고사(회차별)/학교프린트(건별) — 다루는 "텍스트" 하나하나가
+// 이 타입 인스턴스 하나다. 텍스트를 하나 잡으면 워크북 9단계(8단계+변형문제)와
+// 그 텍스트 범위의 단어암기를 반드시 마쳐야 한다는 게 실제 학원 운영 규칙이라,
+// 텍스트 종류에 상관없이 모든 텍스트가 이 두 체크리스트를 달고 다닌다.
+export type TextSource = {
+  id: string;
+  category: TextCategory;
+  label: string; // 텍스트 이름 (예: "능률(김성곤)", "2025년 9월 모의고사", "OO중 2학기 프린트")
+  detail: string; // 부가정보 (범위/출처 등)
+  steps: NamedItem[]; // 워크북 9단계(WORKBOOK_STEP_LABELS 고정) — 이 텍스트에서 반드시 거쳐야 하는 공정
+  vocab: NamedItem[]; // 이 텍스트 범위의 단어암기 체크리스트(범위별로 자유롭게 추가)
+  memo: string;
+};
+
 export type HighData = {
-  textbook: string;
-  supplementary: string;
-  mockExams: NamedItem[]; // 기출모의고사
-  mockExams2: NamedItem[]; // 기출모의고사2
-  schoolPrints: NamedItem[]; // 학교프린트(출처)
-  vocabItems: NamedItem[]; // 해당범위당 단어암기
+  textSources: TextSource[]; // 교과서/부교재/모의고사/학교프린트 전부 이 배열 하나로 관리
   textAnalysisProgress: string; // 본문분석 및 진도
-  workbook: NamedItem[]; // 워크북 (영어빈칸/동사형/어법/순서배열/영작/주제문/제목/요약문)
-  transformedProblems: NamedItem[]; // 변형문제
 };
 
 export type ExamPrepData =
@@ -95,7 +104,9 @@ function namedItem(label: string): NamedItem {
 }
 
 export const MIDDLE_PRACTICE_LABELS = ["자주 틀리는 문제", "기출문제", "추가문제", "백발백중", "적중백"];
-export const HIGH_WORKBOOK_LABELS = ["영어빈칸", "동사형", "어법", "순서배열", "영작", "주제문", "제목", "요약문"];
+// 워크북 8단계 + 변형문제 = 텍스트 하나당 반드시 거쳐야 하는 9단계 공정.
+export const WORKBOOK_STEP_LABELS = ["영어빈칸", "동사형", "어법", "순서배열", "영작", "주제문", "제목", "요약문", "변형문제"];
+export const TEXT_CATEGORIES: TextCategory[] = ["교과서", "부교재", "모의고사", "학교프린트"];
 
 export function defaultMiddleData(): MiddleData {
   return {
@@ -107,18 +118,20 @@ export function defaultMiddleData(): MiddleData {
   };
 }
 
-export function defaultHighData(): HighData {
+export function newTextSource(category: TextCategory, label = ""): TextSource {
   return {
-    textbook: "",
-    supplementary: "",
-    mockExams: [],
-    mockExams2: [],
-    schoolPrints: [],
-    vocabItems: [],
-    textAnalysisProgress: "",
-    workbook: HIGH_WORKBOOK_LABELS.map(namedItem),
-    transformedProblems: [],
+    id: makeId(),
+    category,
+    label,
+    detail: "",
+    steps: WORKBOOK_STEP_LABELS.map(namedItem),
+    vocab: [],
+    memo: "",
   };
+}
+
+export function defaultHighData(): HighData {
+  return { textSources: [], textAnalysisProgress: "" };
 }
 
 export function defaultDataFor(level: SchoolLevel): ExamPrepData {
@@ -149,15 +162,14 @@ export function computeCategoryBreakdown(data: ExamPrepData): CategoryBreakdown[
       { label: "연습문제", done: data.middle.practiceItems.filter((i) => i.done).length, total: data.middle.practiceItems.length },
     ];
   }
-  const lists: [string, NamedItem[]][] = [
-    ["기출모의고사", data.high.mockExams],
-    ["기출모의고사2", data.high.mockExams2],
-    ["학교프린트", data.high.schoolPrints],
-    ["단어암기", data.high.vocabItems],
-    ["워크북", data.high.workbook],
-    ["변형문제", data.high.transformedProblems],
-  ];
-  return lists.map(([label, items]) => ({ label, done: items.filter((i) => i.done).length, total: items.length }));
+  // 텍스트(교과서/부교재/모의고사/학교프린트) 카테고리별로 워크북 9단계를
+  // 합산해서 보여주고, 단어암기는 텍스트 종류와 무관하게 전체 합산 하나로.
+  const byCategory = TEXT_CATEGORIES.map((cat) => {
+    const steps = data.high.textSources.filter((t) => t.category === cat).flatMap((t) => t.steps);
+    return { label: cat, done: steps.filter((s) => s.done).length, total: steps.length };
+  });
+  const vocabAll = data.high.textSources.flatMap((t) => t.vocab);
+  return [...byCategory, { label: "단어암기", done: vocabAll.filter((v) => v.done).length, total: vocabAll.length }];
 }
 
 // 0~100 진행률 — computeCategoryBreakdown의 그룹별 완료/전체를 모두 합산한

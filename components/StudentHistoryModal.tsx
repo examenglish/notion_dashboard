@@ -21,6 +21,16 @@ type InquiryEntry = { id: string; date: string | null; type: string | null; cont
 type ClinicEntry = { id: string; date: string | null; assistant: string; content: string; nextPrep: string; source: "record" | "task" };
 type ReviewEntry = { id: string; date: string | null; content: string; done: boolean };
 type CategoryBreakdown = { label: string; done: number; total: number };
+type ExamPrepTextSource = {
+  id: string;
+  category: string;
+  label: string;
+  detail: string;
+  stepsDone: number;
+  stepsTotal: number;
+  vocabDone: number;
+  vocabTotal: number;
+};
 type ExamPrepSummary = {
   level: "중등" | "고등";
   examTitle: string;
@@ -31,6 +41,7 @@ type ExamPrepSummary = {
   weakPoints: string;
   updatedAt: string | null;
   categories: CategoryBreakdown[];
+  textSources: ExamPrepTextSource[];
 };
 
 type History = {
@@ -363,6 +374,40 @@ export default function StudentHistoryModal({
                   {history.examPrep.weakPoints && (
                     <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
                       취약부분: {history.examPrep.weakPoints}
+                    </div>
+                  )}
+                  {history.examPrep.textSources.length > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      {history.examPrep.textSources.map((t) => (
+                        <div
+                          key={t.id}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            flexWrap: "wrap",
+                            padding: "4px 0",
+                            borderTop: "1px solid var(--border)",
+                            fontSize: 12,
+                          }}
+                        >
+                          <span className="badge" style={{ fontSize: 11 }}>{t.category}</span>
+                          <strong>{t.label || "이름 미입력"}</strong>
+                          {t.detail && <span className="muted">({t.detail})</span>}
+                          <span
+                            className="badge"
+                            style={{ background: categoryColor(t.stepsDone, t.stepsTotal), color: "#fff", fontSize: 11 }}
+                          >
+                            워크북 {t.stepsDone}/{t.stepsTotal}
+                          </span>
+                          <span
+                            className="badge"
+                            style={{ background: categoryColor(t.vocabDone, t.vocabTotal), color: "#fff", fontSize: 11 }}
+                          >
+                            단어암기 {t.vocabDone}/{t.vocabTotal}
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>

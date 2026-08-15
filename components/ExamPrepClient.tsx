@@ -12,12 +12,31 @@ import {
   type LessonItem,
   type NamedItem,
   type SchoolLevel,
+  type TextSource,
+  type TextCategory,
+  type HighData,
+  TEXT_CATEGORIES,
   defaultDataFor,
   newLesson,
   newNamedItem,
+  newTextSource,
   computeProgress,
   computeCategoryBreakdown,
 } from "@/lib/examPrep";
+
+// 같은 학교/학년 템플릿에서 가져온 교과서·부교재 이름을, 그 카테고리가
+// 아직 하나도 없을 때만 새 TextSource로 추가한다 — 이미 있는 텍스트의
+// 워크북/단어암기 진행 상황을 덮어쓰지 않기 위해 "없으면 추가"만 한다.
+function withAutoTextSources(high: HighData, tpl: { textbook: string; supplementary: string }): HighData {
+  let sources = high.textSources;
+  if (tpl.textbook && !sources.some((t) => t.category === "교과서")) {
+    sources = [...sources, newTextSource("교과서", tpl.textbook)];
+  }
+  if (tpl.supplementary && !sources.some((t) => t.category === "부교재")) {
+    sources = [...sources, newTextSource("부교재", tpl.supplementary)];
+  }
+  return { ...high, textSources: sources };
+}
 
 export type OverviewRow = {
   studentId: string;
@@ -161,6 +180,159 @@ function NamedItemList({
             삭제
           </button>
         </div>
+      ))}
+    </div>
+  );
+}
+
+// 텍스트(교과서/부교재/모의고사/학교프린트) 하나가 반드시 거쳐야 하는
+// 워크북 9단계 — 라벨은 고정이라(WORKBOOK_STEP_LABELS) 이름 편집 없이
+// 체크박스만 토글하는 컴팩트한 칩 형태로 보여준다.
+function WorkbookSteps({ steps, onChange }: { steps: NamedItem[]; onChange: (steps: NamedItem[]) => void }) {
+  const doneCount = steps.filter((s) => s.done).length;
+  return (
+    <div>
+      <span className="muted" style={{ fontSize: 11 }}>
+        워크북 {doneCount}/{steps.length}
+      </span>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 4 }}>
+        {steps.map((s, i) => (
+          <label
+            key={s.id}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 3,
+              fontSize: 12,
+              border: "1px solid var(--border)",
+              borderRadius: 999,
+              padding: "2px 8px",
+              background: s.done ? "var(--success-tint)" : "#fff",
+              color: s.done ? "var(--success)" : "var(--text)",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={s.done}
+              onChange={() => onChange(steps.map((it, idx) => (idx === i ? { ...it, done: !it.done } : it)))}
+              style={{ margin: 0 }}
+            />
+            {s.label}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// 텍스트 하나(교과서 1권, 모의고사 1회차 등) — 이름/범위와 워크북 9단계,
+// 그 범위의 단어암기 체크리스트를 함께 관리한다.
+function TextSourceEditor({
+  source,
+  onChange,
+  onRemove,
+  labelDatalistId,
+}: {
+  source: TextSource;
+  onChange: (next: TextSource) => void;
+  onRemove: () => void;
+  labelDatalistId?: string;
+}) {
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 10, marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          type="text"
+          placeholder="텍스트 이름"
+          value={source.label}
+          onChange={(e) => onChange({ ...source, label: e.target.value })}
+          list={labelDatalistId}
+          style={{ flex: "1 1 140px" }}
+        />
+        <input
+          type="text"
+          placeholder="범위 · 출처"
+          value={source.detail}
+          onChange={(e) => onChange({ ...source, detail: e.target.value })}
+          style={{ flex: "1 1 120px" }}
+        />
+        <button type="button" className="secondary" onClick={onRemove} style={{ padding: "4px 8px", fontSize: 12 }}>
+          삭제
+        </button>
+      </div>
+
+      <div style={{ marginTop: 8 }}>
+        <WorkbookSteps steps={source.steps} onChange={(steps) => onChange({ ...source, steps })} />
+      </div>
+
+      <div style={{ marginTop: 8 }}>
+        <span className="muted" style={{ fontSize: 11 }}>
+          단어암기
+        </span>
+        <NamedItemList
+          items={source.vocab}
+          onChange={(vocab) => onChange({ ...source, vocab })}
+          addLabel="범위 추가"
+          detailPlaceholder="범위 (예: 1-20)"
+        />
+      </div>
+
+      <input
+        type="text"
+        placeholder="메모"
+        value={source.memo}
+        onChange={(e) => onChange({ ...source, memo: e.target.value })}
+        style={{ marginTop: 6, width: "100%" }}
+      />
+    </div>
+  );
+}
+
+// 카테고리(교과서/부교재/모의고사/학교프린트) 하나에 속한 텍스트 여러 건을
+// 묶어 보여주고, 새 텍스트를 추가할 수 있게 한다.
+function TextSourceGroup({
+  category,
+  sources,
+  onChange,
+  labelDatalistId,
+}: {
+  category: TextCategory;
+  sources: TextSource[];
+  onChange: (sources: TextSource[]) => void;
+  labelDatalistId?: string;
+}) {
+  function update(id: string, next: TextSource) {
+    onChange(sources.map((s) => (s.id === id ? next : s)));
+  }
+  function remove(id: string) {
+    onChange(sources.filter((s) => s.id !== id));
+  }
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <p style={{ margin: 0, fontWeight: 600 }}>{category}</p>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => onChange([...sources, newTextSource(category)])}
+          style={{ padding: "4px 10px", fontSize: 12 }}
+        >
+          + {category} 추가
+        </button>
+      </div>
+      {sources.length === 0 && (
+        <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          등록된 {category}가 없습니다.
+        </p>
+      )}
+      {sources.map((s) => (
+        <TextSourceEditor
+          key={s.id}
+          source={s}
+          onChange={(next) => update(s.id, next)}
+          onRemove={() => remove(s.id)}
+          labelDatalistId={labelDatalistId}
+        />
       ))}
     </div>
   );
@@ -391,11 +563,7 @@ export function ExamPrepEditor({
                 }
                 return {
                   level: "고등",
-                  high: {
-                    ...prev.high,
-                    textbook: prev.high.textbook || tpl.latest.textbook,
-                    supplementary: prev.high.supplementary || tpl.latest.supplementary,
-                  },
+                  high: withAutoTextSources(prev.high, tpl.latest),
                 };
               });
             }
@@ -423,7 +591,7 @@ export function ExamPrepEditor({
       }
       return {
         level: "고등",
-        high: { ...prev.high, textbook: template.latest.textbook, supplementary: template.latest.supplementary },
+        high: withAutoTextSources(prev.high, template.latest),
       };
     });
   }
@@ -431,7 +599,7 @@ export function ExamPrepEditor({
   function switchLevel(next: SchoolLevel) {
     if (next === level) return;
     if (data.level !== "중등" && data.level !== "고등") return;
-    const hasContent = data.level === "중등" ? data.middle.lessons.length > 0 : data.high.mockExams.length > 0;
+    const hasContent = data.level === "중등" ? data.middle.lessons.length > 0 : data.high.textSources.length > 0;
     if (hasContent && !window.confirm("학교급을 변경하면 입력해둔 세부 항목이 초기화됩니다. 계속할까요?")) return;
     setLevel(next);
     setData(defaultDataFor(next));
@@ -558,6 +726,11 @@ export function ExamPrepEditor({
           <option key={o} value={o} />
         ))}
       </datalist>
+      <datalist id="schoolPrintItemLabels">
+        {(template?.schoolPrintItemLabels ?? []).map((o) => (
+          <option key={o} value={o} />
+        ))}
+      </datalist>
 
       <div className="field-row">
         <div>
@@ -650,27 +823,6 @@ export function ExamPrepEditor({
 
       {level === "고등" && data.level === "고등" && (
         <>
-          <div className="field-row">
-            <div>
-              <label>교과서</label>
-              <input
-                type="text"
-                list="textbookOptions"
-                value={data.high.textbook}
-                onChange={(e) => setData({ level: "고등", high: { ...data.high, textbook: e.target.value } })}
-              />
-            </div>
-            <div>
-              <label>부교재</label>
-              <input
-                type="text"
-                list="supplementaryOptions"
-                value={data.high.supplementary}
-                onChange={(e) => setData({ level: "고등", high: { ...data.high, supplementary: e.target.value } })}
-              />
-            </div>
-          </div>
-
           <label>본문분석 및 진도</label>
           <textarea
             value={data.high.textAnalysisProgress}
@@ -678,58 +830,26 @@ export function ExamPrepEditor({
             style={{ minHeight: 50 }}
           />
 
-          <p style={{ marginTop: 16, marginBottom: 4, fontWeight: 600 }}>기출모의고사 (범위 문항)</p>
-          <NamedItemList
-            items={data.high.mockExams}
-            onChange={(mockExams) => setData({ level: "고등", high: { ...data.high, mockExams } })}
-            addLabel="모의고사 추가"
-            detailPlaceholder="문항범위 (예: 18-24)"
-          />
-
-          <p style={{ marginBottom: 4, fontWeight: 600 }}>기출모의고사2</p>
-          <NamedItemList
-            items={data.high.mockExams2}
-            onChange={(mockExams2) => setData({ level: "고등", high: { ...data.high, mockExams2 } })}
-            addLabel="모의고사 추가"
-            detailPlaceholder="문항범위 (예: 29-32)"
-          />
-
-          <p style={{ marginBottom: 4, fontWeight: 600 }}>학교 프린트 (출처)</p>
-          <NamedItemList
-            items={data.high.schoolPrints}
-            onChange={(schoolPrints) => setData({ level: "고등", high: { ...data.high, schoolPrints } })}
-            addLabel="프린트 추가"
-            detailPlaceholder="출처"
-            labelDatalist={
-              template?.schoolPrintItemLabels?.length
-                ? { id: "schoolPrintItemLabels", options: template.schoolPrintItemLabels }
-                : undefined
-            }
-          />
-
-          <p style={{ marginBottom: 4, fontWeight: 600 }}>해당범위 단어암기</p>
-          <NamedItemList
-            items={data.high.vocabItems}
-            onChange={(vocabItems) => setData({ level: "고등", high: { ...data.high, vocabItems } })}
-            addLabel="범위 추가"
-            detailPlaceholder="범위 (예: Lesson 1-3)"
-          />
-
-          <p style={{ marginBottom: 4, fontWeight: 600 }}>
-            워크북 (영어빈칸 · 동사형 · 어법 · 순서배열 · 영작 · 주제문 · 제목 · 요약문)
+          <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>
+            교과서·부교재·모의고사·학교프린트로 다루는 텍스트마다 워크북 9단계(영어빈칸 · 동사형 · 어법 · 순서배열 ·
+            영작 · 주제문 · 제목 · 요약문 · 변형문제)와 단어암기를 반드시 마쳐야 합니다. 텍스트를 여러 건 등록할 수
+            있어요.
           </p>
-          <NamedItemList
-            items={data.high.workbook}
-            onChange={(workbook) => setData({ level: "고등", high: { ...data.high, workbook } })}
-            addLabel="단계 추가"
-          />
 
-          <p style={{ marginBottom: 4, fontWeight: 600 }}>변형문제</p>
-          <NamedItemList
-            items={data.high.transformedProblems}
-            onChange={(transformedProblems) => setData({ level: "고등", high: { ...data.high, transformedProblems } })}
-            addLabel="항목 추가"
-          />
+          {TEXT_CATEGORIES.map((cat) => (
+            <TextSourceGroup
+              key={cat}
+              category={cat}
+              sources={data.high.textSources.filter((t) => t.category === cat)}
+              onChange={(catSources) => {
+                const others = data.high.textSources.filter((t) => t.category !== cat);
+                setData({ level: "고등", high: { ...data.high, textSources: [...others, ...catSources] } });
+              }}
+              labelDatalistId={
+                cat === "교과서" ? "textbookOptions" : cat === "부교재" ? "supplementaryOptions" : cat === "학교프린트" ? "schoolPrintItemLabels" : undefined
+              }
+            />
+          ))}
         </>
       )}
 

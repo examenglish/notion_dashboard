@@ -17,11 +17,15 @@ import {
   type ExamPrepSheet,
   type ExamPrepTemplate,
   type SchoolLevel,
+  type HighData,
+  type TextSource,
+  type TextCategory,
   computeCategoryBreakdown,
   computeProgress,
   defaultDataFor,
   joinTeachers,
   levelFromGrade,
+  newTextSource,
   splitTeachers,
 } from "./examPrep";
 
@@ -639,6 +643,23 @@ export async function getStudentFullHistory(studentId: string) {
     }))
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
 
+  // 고등은 텍스트(교과서/부교재/모의고사/학교프린트)별로 워크북 9단계·단어암기를
+  // 따로 관리하므로, 전체기록에서도 카테고리 합산 뿐 아니라 텍스트별 진행 상황을
+  // 바로 볼 수 있게 함께 내려준다.
+  const textSources =
+    examPrepSheet.data.level === "고등"
+      ? examPrepSheet.data.high.textSources.map((t) => ({
+          id: t.id,
+          category: t.category,
+          label: t.label,
+          detail: t.detail,
+          stepsDone: t.steps.filter((s) => s.done).length,
+          stepsTotal: t.steps.length,
+          vocabDone: t.vocab.filter((v) => v.done).length,
+          vocabTotal: t.vocab.length,
+        }))
+      : [];
+
   const examPrep = examPrepSheet.id
     ? {
         level: examPrepSheet.level,
@@ -650,6 +671,7 @@ export async function getStudentFullHistory(studentId: string) {
         weakPoints: examPrepSheet.weakPoints,
         updatedAt: examPrepSheet.updatedAt,
         categories: computeCategoryBreakdown(examPrepSheet.data),
+        textSources,
       }
     : null;
 
@@ -2624,11 +2646,39 @@ export async function uploadMaterialFile(
 // 범위를 바꿔가며 같은 시트를 이어서 편집한다(진도/기출 DB③④처럼 날짜별
 // 이력을 남기지 않음).
 
+// 고등 데이터 구조를 "텍스트(교과서/부교재/모의고사/학교프린트)마다 워크북
+// 9단계+단어암기를 각각 추적"하는 형태로 재설계하면서 예전에 저장된 시트
+// (textbook/supplementary가 단일 문자열, mockExams/schoolPrints가 워크북과
+// 무관한 평평한 목록)를 새 구조로 옮겨준다. 예전엔 이 세분화 자체가 없었으므로
+// 완료 여부를 지어내지 않고 텍스트 이름/범위만 옮기고 9단계는 전부 미완료로
+// 시작한다 — 그래서 마이그레이션 직후 진행률이 예전보다 낮게 보일 수 있는데,
+// 이건 새로 생긴 더 세밀한 기준을 적용한 정직한 결과다.
+function migrateHighData(rawHigh: any): HighData {
+  if (rawHigh && Array.isArray(rawHigh.textSources)) {
+    return { textSources: rawHigh.textSources as TextSource[], textAnalysisProgress: rawHigh.textAnalysisProgress ?? "" };
+  }
+  const sources: TextSource[] = [];
+  if (rawHigh?.textbook) sources.push(newTextSource("교과서", rawHigh.textbook));
+  if (rawHigh?.supplementary) sources.push(newTextSource("부교재", rawHigh.supplementary));
+  for (const list of [rawHigh?.mockExams, rawHigh?.mockExams2]) {
+    for (const item of Array.isArray(list) ? list : []) {
+      if (!item?.label) continue;
+      sources.push({ ...newTextSource("모의고사", item.label), detail: item.detail ?? "" });
+    }
+  }
+  for (const item of Array.isArray(rawHigh?.schoolPrints) ? rawHigh.schoolPrints : []) {
+    if (!item?.label) continue;
+    sources.push({ ...newTextSource("학교프린트", item.label), detail: item.detail ?? "" });
+  }
+  return { textSources: sources, textAnalysisProgress: rawHigh?.textAnalysisProgress ?? "" };
+}
+
 function parseExamPrepData(raw: string, level: SchoolLevel): ExamPrepData {
   if (raw) {
     try {
       const parsed = JSON.parse(raw);
-      if (parsed && (parsed.level === "중등" || parsed.level === "고등")) return parsed as ExamPrepData;
+      if (parsed?.level === "중등") return parsed as ExamPrepData;
+      if (parsed?.level === "고등") return { level: "고등", high: migrateHighData(parsed.high) };
     } catch {
       // 손상된 JSON이면 빈 시트로 대체
     }
@@ -2798,6 +2848,11 @@ export async function getExamPrepTemplate(input: {
   const uniq = (vals: (string | null | undefined)[]) =>
     Array.from(new Set(vals.filter((v): v is string => !!v && v.trim() !== "")));
 
+  // 고등은 이제 교과서/부교재/학교프린트도 여러 건일 수 있어(모의고사처럼),
+  // 카테고리별 텍스트 이름만 뽑아 자동입력/자동완성 후보로 쓴다.
+  const highLabels = (data: ExamPrepData, category: TextCategory): string[] =>
+    data.level === "고등" ? data.high.textSources.filter((t) => t.category === category).map((t) => t.label) : [];
+
   // getAllExamPrepEntries()는 갱신일 내림차순이므로 matches[0]/parsed[0]가 최신.
   const latest = parsed[0];
   return {
@@ -2806,20 +2861,24 @@ export async function getExamPrepTemplate(input: {
       examTitle: getRichText(latest.page, "시험명"),
       examRange: getRichText(latest.page, "시험범위"),
       teachers: splitTeachers(getRichText(latest.page, "담당교사")),
-      textbook: latest.data.level === "중등" ? latest.data.middle.textbook : latest.data.high.textbook,
-      supplementary: latest.data.level === "중등" ? latest.data.middle.supplementary : latest.data.high.supplementary,
-      schoolPrint: latest.data.level === "중등" ? latest.data.middle.schoolPrint : "",
+      textbook: latest.data.level === "중등" ? latest.data.middle.textbook : highLabels(latest.data, "교과서").join(", "),
+      supplementary:
+        latest.data.level === "중등" ? latest.data.middle.supplementary : highLabels(latest.data, "부교재").join(", "),
+      schoolPrint:
+        latest.data.level === "중등" ? latest.data.middle.schoolPrint : highLabels(latest.data, "학교프린트").join(", "),
     },
     examTitleOptions: uniq(parsed.map((p) => getRichText(p.page, "시험명"))),
     examRangeOptions: uniq(parsed.map((p) => getRichText(p.page, "시험범위"))),
-    textbookOptions: uniq(parsed.map((p) => (p.data.level === "중등" ? p.data.middle.textbook : p.data.high.textbook))),
+    textbookOptions: uniq(
+      parsed.flatMap((p) => (p.data.level === "중등" ? [p.data.middle.textbook] : highLabels(p.data, "교과서")))
+    ),
     supplementaryOptions: uniq(
-      parsed.map((p) => (p.data.level === "중등" ? p.data.middle.supplementary : p.data.high.supplementary))
+      parsed.flatMap((p) => (p.data.level === "중등" ? [p.data.middle.supplementary] : highLabels(p.data, "부교재")))
     ),
-    schoolPrintOptions: uniq(parsed.map((p) => (p.data.level === "중등" ? p.data.middle.schoolPrint : ""))),
-    schoolPrintItemLabels: uniq(
-      parsed.flatMap((p) => (p.data.level === "고등" ? p.data.high.schoolPrints.map((i) => i.label) : []))
+    schoolPrintOptions: uniq(
+      parsed.flatMap((p) => (p.data.level === "중등" ? [p.data.middle.schoolPrint] : highLabels(p.data, "학교프린트")))
     ),
+    schoolPrintItemLabels: uniq(parsed.flatMap((p) => highLabels(p.data, "학교프린트"))),
   };
 }
 
