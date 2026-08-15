@@ -229,12 +229,12 @@ export default function ExamPrepDirectorClient() {
           </Card>
         ) : (
           <Card className="flex h-full flex-col">
-            <CardHeader className="flex-col items-stretch gap-2.5 sm:flex-row sm:items-center sm:justify-between">
-              <CardTitle>현황판 · 진도표</CardTitle>
+            <CardHeader className="flex-row flex-nowrap items-center justify-between gap-2">
+              <CardTitle className="truncate">현황판 · 진도표</CardTitle>
               <select
                 value={levelFilter}
                 onChange={(e) => setLevelFilter(e.target.value as "" | SchoolLevel)}
-                className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                className="h-8 w-16 shrink-0 rounded-md border border-input bg-background px-1.5 text-xs text-foreground"
               >
                 <option value="">전체</option>
                 <option value="중등">중등</option>
