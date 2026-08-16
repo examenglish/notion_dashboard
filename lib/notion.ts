@@ -1391,6 +1391,57 @@ export async function getClassProgressForEdit(classId: string, date: string, per
   };
 }
 
+// 날짜 범위 안에서 "이 날 수업이 있었어야 할 반인데 진도/브리핑 기록이 아직
+// 없는" 반×날짜 조합을 찾는다. 반의 요일 설정(days)으로 "있어야 할 수업일"을
+// 계산하고, 그 범위의 실제 저장 기록(반+날짜만 대조 — 교시가 나뉜 반이라도
+// 어느 한 교시라도 기록이 있으면 "입력됨"으로 취급하는 단순화된 판정이다)과
+// 비교해 빠진 것만 남긴다. 범위가 너무 넓으면 Notion 조회량이 커지므로
+// 최대 92일(약 3개월)로 제한한다.
+const CLASS_RECORD_GAP_MAX_DAYS = 92;
+
+export async function findClassRecordGaps(from: string, to: string, includeExamClasses = false) {
+  const fromDate = new Date(`${from}T00:00:00Z`);
+  const toDate = new Date(`${to}T00:00:00Z`);
+  if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || fromDate > toDate) {
+    throw new Error("날짜 범위가 올바르지 않습니다.");
+  }
+  const spanDays = Math.round((toDate.getTime() - fromDate.getTime()) / 86400000) + 1;
+  if (spanDays > CLASS_RECORD_GAP_MAX_DAYS) {
+    throw new Error(`조회 기간은 최대 ${CLASS_RECORD_GAP_MAX_DAYS}일까지 가능합니다.`);
+  }
+
+  const KOREAN_WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
+  const [allClasses, recordPages] = await Promise.all([
+    listClasses(),
+    queryAllPages({
+      data_source_id: DB.CLASS_PROGRESS,
+      filter: { and: [{ property: "날짜", date: { on_or_after: from } }, { property: "날짜", date: { on_or_before: to } }] },
+    }),
+  ]);
+
+  const filledKeys = new Set<string>();
+  for (const p of recordPages as any[]) {
+    const date = getDate(p, "날짜");
+    if (!date) continue;
+    for (const classId of getRelationIds(p, "반")) filledKeys.add(`${classId}|${date}`);
+  }
+
+  const classes = allClasses.filter((c) => (includeExamClasses ? true : c.type !== "시험대비") && c.days.length > 0);
+
+  const gaps: { classId: string; className: string; date: string; weekday: string }[] = [];
+  for (let cursor = new Date(fromDate); cursor <= toDate; cursor = new Date(cursor.getTime() + 86400000)) {
+    const dateStr = cursor.toISOString().slice(0, 10);
+    const weekday = KOREAN_WEEKDAYS[cursor.getUTCDay()];
+    for (const c of classes) {
+      if (!c.days.includes(weekday)) continue;
+      if (filledKeys.has(`${c.id}|${dateStr}`)) continue;
+      gaps.push({ classId: c.id, className: c.name, date: dateStr, weekday });
+    }
+  }
+  gaps.sort((a, b) => (a.date === b.date ? a.className.localeCompare(b.className, "ko") : a.date.localeCompare(b.date)));
+  return gaps;
+}
+
 // Updates an existing 오늘 수업 기록 in place: the shared 반별진도 page plus
 // each student's 일일기록 row. Students already covered by an existing row
 // are updated; any newly-called-up 다른반 student gets a fresh row appended

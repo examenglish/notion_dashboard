@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { stripClassSuffix, parseWorkHours, WEEKDAYS, type WorkHours, type DayTeachers } from "@/lib/format";
 import TeacherMultiSelect from "./TeacherMultiSelect";
+import ClassStudentAssignPanel from "./ClassStudentAssignPanel";
 
 type ClassFull = {
   id: string;
@@ -211,6 +212,7 @@ export default function ClassManageForm() {
   const canDelete = !!selectedClass && selectedClass.studentIds.length === 0;
 
   return (
+    <>
     <form className="card" onSubmit={handleSubmit}>
       <h2>반 관리 <span className="title-lab-tag">(실험실)</span></h2>
       <p className="muted">반을 선택하면 반명을 포함해 정보를 수정할 수 있고, "새 반 추가"를 선택하면 새로 만듭니다.</p>
@@ -337,5 +339,14 @@ export default function ClassManageForm() {
         )}
       </div>
     </form>
+    {selectedId && (
+      <ClassStudentAssignPanel
+        key={selectedId}
+        classId={selectedId}
+        className={selectedClass ? stripClassSuffix(selectedClass.name) : ""}
+        onChanged={loadClasses}
+      />
+    )}
+    </>
   );
 }

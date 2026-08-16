@@ -12,6 +12,7 @@ import StaffScheduleForm from "./StaffScheduleForm";
 import ClassManageForm from "./ClassManageForm";
 import AssignClinicTaskForm from "./AssignClinicTaskForm";
 import QuickScheduleForm from "./QuickScheduleForm";
+import ClassRecordGapFinder from "./ClassRecordGapFinder";
 import MakeupStatusCard from "./MakeupStatusCard";
 import AbsenceReviewModal, { AbsenceReviewItem } from "./AbsenceReviewModal";
 import { todayKST as todayStr } from "@/lib/date";
@@ -28,11 +29,19 @@ function confirmSave() {
   return window.confirm("저장하시겠습니까?");
 }
 
-function ClassRecordForm() {
+function ClassRecordForm({
+  canEditExisting,
+  initialClassId,
+  initialDate,
+}: {
+  canEditExisting: boolean;
+  initialClassId?: string;
+  initialDate?: string;
+}) {
   const [classes, setClasses] = useState<ClassOption[]>([]);
-  const [classId, setClassId] = useState("");
+  const [classId, setClassId] = useState(initialClassId ?? "");
   const [manualClassName, setManualClassName] = useState("");
-  const [date, setDate] = useState(todayStr());
+  const [date, setDate] = useState(initialDate ?? todayStr());
   const [period, setPeriod] = useState("");
   const [subjects, setSubjects] = useState<string[]>([]);
   const [progress, setProgress] = useState("");
@@ -121,8 +130,24 @@ function ClassRecordForm() {
       const plannedAbsentIds = data?.plannedAbsentIds ?? [];
       if (!rec) {
         setExistingProgressId(null);
-        // 아직 이 반/날짜의 수업 기록이 없어도, 행정실에 "결석예정"으로 이미
-        // 접수된 학생은 결석 체크를 미리 반영해 강사가 다시 체크하지 않게 한다.
+        // 같은 반을 켜둔 채 날짜만 바꾼 경우, 이 분기(그 날짜엔 기존 기록이
+        // 없음)는 롯스터가 바뀔 때만 도는 초기화 effect를 타지 않는다 —
+        // 그대로 두면 이전 날짜에 입력했던 진도/과제 텍스트와 학생별
+        // 결석·지각·단어미통과·과제미완료 체크가 새 날짜 입력에 섞여
+        // 들어간다. 그래서 여기서 명시적으로 빈 상태로 리셋한다.
+        setSubjects([]);
+        setProgress("");
+        setHomework("");
+        setNextAssignment("");
+        setNotice("");
+        setExtraStudents([]);
+        setPerStudent(
+          Object.fromEntries(
+            rosterList.map((s) => [s.id, { vocabFail: false, homeworkIncomplete: false, absent: false, late: false, individualNotice: "" }])
+          )
+        );
+        // 행정실에 "결석예정"으로 이미 접수된 학생은 결석 체크를 미리
+        // 반영해 강사가 다시 체크하지 않게 한다.
         if (plannedAbsentIds.length > 0) {
           setPerStudent((cur) => {
             const next = { ...cur };
@@ -285,13 +310,20 @@ function ClassRecordForm() {
 
   const selectedClassName = stripClassSuffix(classes.find((c) => c.id === classId)?.name ?? "");
   const hasClass = !!classId || !!manualClassName.trim();
-  const canSave = hasClass && (classId ? fullRoster.length > 0 : true) && !saving;
+  const isLocked = !!existingProgressId && !canEditExisting;
+  const canSave = hasClass && (classId ? fullRoster.length > 0 : true) && !saving && !isLocked;
 
   return (
     <>
       <form className="card" onSubmit={(e) => e.preventDefault()}>
         <h2>오늘 수업 기록 <span className="title-lab-tag">(실험실)</span></h2>
-        {existingProgressId && (
+        {existingProgressId && isLocked && (
+          <p className="muted" style={{ marginTop: -4, color: "#b91c1c" }}>
+            이미 저장된 <strong>{period || "교시 구분 없음"}</strong> 기록입니다. 저장된 기록의 수정은 원장/행정만 할 수
+            있어요 — 내용을 고칠 일이 있으면 원장/행정에게 요청해주세요.
+          </p>
+        )}
+        {existingProgressId && !isLocked && (
           <p className="muted" style={{ marginTop: -4, color: "#b45309" }}>
             이미 저장된 <strong>{period || "교시 구분 없음"}</strong> 기록을 불러왔습니다 — 수정 후 저장하면 기존 기록을
             덮어씁니다. 다른 교시를 기록하려면 위 "교시"를 먼저 맞게 골라주세요.
@@ -353,6 +385,7 @@ function ClassRecordForm() {
               <option value="3교시">3교시</option>
             </select>
 
+            <fieldset disabled={isLocked} style={{ border: 0, padding: 0, margin: 0 }}>
             <label>수업과목</label>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 4 }}>
               {SUBJECT_OPTIONS.map((s) => (
@@ -414,9 +447,10 @@ function ClassRecordForm() {
                 {saving ? "저장 중..." : existingProgressId ? "수정 저장" : "저장"}
               </button>
             </div>
+            </fieldset>
           </div>
 
-          <div>
+          <fieldset disabled={isLocked} style={{ border: 0, padding: 0, margin: 0 }}>
             <label>학생별 체크 ({selectedClassName || "반 선택"})</label>
             {loadingRoster && <p className="muted">명단 불러오는 중...</p>}
             {!loadingRoster && roster.length === 0 && extraStudents.length === 0 && (
@@ -494,7 +528,7 @@ function ClassRecordForm() {
             <div style={{ marginTop: 12 }}>
               <StudentPicker studentId={extraPickerId} onChange={addExtraStudent} label="다른 반 학생 호출 (개별 기록 추가)" allowEmpty />
             </div>
-          </div>
+          </fieldset>
         </div>
       </form>
 
@@ -1116,6 +1150,11 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
   const [tab, setTab] = useState<TabKey>(initialTab);
   const activeTab = tabs.some((t) => t.key === tab) ? tab : tabs[0].key;
 
+  // 미입력 반 찾기에서 항목을 고르면 그 반/날짜로 기록폼을 다시 채워 넣는다
+  // — key를 바꿔 ClassRecordForm을 새로 마운트시키는 방식으로, 폼 내부 상태를
+  // 밖에서 직접 건드리지 않고도 초기값만 갈아끼운다.
+  const [recordPrefill, setRecordPrefill] = useState<{ classId: string; date: string; key: number } | null>(null);
+
   return (
     <div className="page">
       <div className="input-tabbar">
@@ -1160,7 +1199,17 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
 
       {activeTab === "records" && (
         <>
-          {!isAssistant && <ClassRecordForm />}
+          {!isAssistant && (
+            <ClassRecordGapFinder onPick={(classId, date) => setRecordPrefill({ classId, date, key: Date.now() })} />
+          )}
+          {!isAssistant && (
+            <ClassRecordForm
+              key={recordPrefill?.key ?? "default"}
+              canEditExisting={isAdminLike}
+              initialClassId={recordPrefill?.classId}
+              initialDate={recordPrefill?.date}
+            />
+          )}
           {(isAssistant || isAdminLike) && <AttendanceCheckForm />}
           {(isAssistant || isAdminLike) && <AssistantClinicForm role={role} />}
         </>
