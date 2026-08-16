@@ -245,6 +245,28 @@ export async function updateStaffPin(staffId: string, newPin: string) {
   revalidateTag(STAFF_CACHE_TAG);
 }
 
+// 강사/조교 계정 등록. 이름 중복(동명이인 오인/중복 로그인 계정 방지)을
+// 막기 위해 캐시가 아니라 매번 최신 명단을 직접 조회해서 확인한다. 최초
+// 비밀번호는 그대로 PIN에 저장하고 "비번변경필요"를 켜서, 등록된 직원이
+// 처음 로그인할 때 반드시 자기 비밀번호로 바꾸도록 유도한다.
+export async function createStaff(name: string, role: "강사" | "조교", pin: string) {
+  const res: any = await notion.dataSources.query({ data_source_id: DB.STAFF, page_size: 100 });
+  const dup = res.results.find((p: any) => getTitle(p, "이름") === name);
+  if (dup) throw new Error(`이미 "${name}" 이름의 계정이 있습니다.`);
+
+  const created = await notion.pages.create({
+    parent: { data_source_id: DB.STAFF } as any,
+    properties: {
+      이름: { title: [{ text: { content: name } }] },
+      역할: { select: { name: role } },
+      PIN: { rich_text: [{ text: { content: pin } }] },
+      비번변경필요: { checkbox: true },
+    } as any,
+  });
+  revalidateTag(STAFF_CACHE_TAG);
+  return created.id;
+}
+
 export async function listClasses() {
   const results = await queryAllPages({ data_source_id: DB.CLASS });
   return results.map((p: any) => ({

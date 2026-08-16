@@ -9,6 +9,7 @@ import AssistantClinicForm from "./AssistantClinicForm";
 import AttendanceCheckForm from "./AttendanceCheckForm";
 import ClassAssistantAssignForm from "./ClassAssistantAssignForm";
 import StaffScheduleForm from "./StaffScheduleForm";
+import StaffRegisterForm from "./StaffRegisterForm";
 import ClassManageForm from "./ClassManageForm";
 import AssignClinicTaskForm from "./AssignClinicTaskForm";
 import QuickScheduleForm from "./QuickScheduleForm";
@@ -1193,6 +1194,7 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
           {isAdminLike && <ClassManageForm />}
           {isAdminLike && <ClassAssistantAssignForm />}
           {isAdminLike && <StaffScheduleForm />}
+          {isAdminLike && <StaffRegisterForm />}
           {!isAssistant && <AssignClinicTaskForm />}
         </div>
       )}
