@@ -23,6 +23,15 @@ export function shiftDate(dateStr: string, delta: number): string {
   return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
 }
 
+// 오늘(KST)부터 dateStr까지 남은 날짜 수 — 미래면 양수, 지났으면 음수, 오늘이면 0.
+export function daysUntilKST(dateStr: string): number {
+  const [y1, m1, d1] = todayKST().split("-").map(Number);
+  const [y2, m2, d2] = dateStr.split("-").map(Number);
+  const a = Date.UTC(y1, m1 - 1, d1);
+  const b = Date.UTC(y2, m2 - 1, d2);
+  return Math.round((b - a) / 86400000);
+}
+
 export function formatDateLabel(dateStr: string): string {
   const [y, m, d] = dateStr.split("-").map(Number);
   const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];

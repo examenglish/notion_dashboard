@@ -64,9 +64,22 @@ type SchoolExamRangeEntry = {
   grade: string;
   examTitle: string;
   examRange: string;
+  examStartDate: string | null;
+  examEndDate: string | null;
   units: Record<TextCategory, CategoryUnits>;
   updatedAt: string | null;
 };
+
+// 오늘(KST 날짜 문자열 today)부터 dateStr까지 남은 날짜 — 서버의
+// daysUntilKST와 동일 계산이지만, 패널은 이미 갖고 있는 로컬 날짜로 즉시
+// 표시해야 해서(서버 왕복 없이) 클라이언트에도 둔다.
+function daysUntil(dateStr: string): number {
+  const today = new Date();
+  const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(today);
+  const [y1, m1, d1] = todayStr.split("-").map(Number);
+  const [y2, m2, d2] = dateStr.split("-").map(Number);
+  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000);
+}
 
 type CategoryForm = { name: string; unitsText: string };
 function emptyCategoryForm(): CategoryForm {
@@ -104,6 +117,8 @@ function SchoolExamRangePanel({
   const [loading, setLoading] = useState(false);
   const [examTitle, setExamTitle] = useState("");
   const [examRange, setExamRange] = useState("");
+  const [examStartDate, setExamStartDate] = useState("");
+  const [examEndDate, setExamEndDate] = useState("");
   const [unitsForm, setUnitsForm] = useState<Record<TextCategory, CategoryForm>>(emptyUnitsForm());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -129,6 +144,8 @@ function SchoolExamRangePanel({
         setHistory(d.history);
         setExamTitle(d.latest?.examTitle ?? "");
         setExamRange(d.latest?.examRange ?? "");
+        setExamStartDate(d.latest?.examStartDate ?? "");
+        setExamEndDate(d.latest?.examEndDate ?? "");
         const form = emptyUnitsForm();
         for (const cat of TEXT_CATEGORIES) {
           const u = d.latest?.units?.[cat];
@@ -157,7 +174,7 @@ function SchoolExamRangePanel({
       const res = await fetch("/api/school-exam-range", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ school, grade, examTitle, examRange, units }),
+        body: JSON.stringify({ school, grade, examTitle, examRange, examStartDate: examStartDate || null, examEndDate: examEndDate || null, units }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -215,6 +232,20 @@ function SchoolExamRangePanel({
                       <span className="font-medium">{latest.examTitle}</span> — {latest.examRange || "(범위 미입력)"}
                       {latest.updatedAt && <span className="ml-2 text-xs text-muted-foreground">{latest.updatedAt} 갱신</span>}
                     </p>
+                    {latest.examStartDate && (
+                      <p className="text-xs">
+                        <span className="font-semibold text-primary">
+                          {(() => {
+                            const d = daysUntil(latest.examStartDate);
+                            return d > 0 ? `D-${d}` : d === 0 ? "D-DAY" : `D+${-d}`;
+                          })()}
+                        </span>
+                        <span className="ml-2 text-muted-foreground">
+                          {latest.examStartDate}
+                          {latest.examEndDate && latest.examEndDate !== latest.examStartDate ? ` ~ ${latest.examEndDate}` : ""}
+                        </span>
+                      </p>
+                    )}
                     {categories.map((cat) => {
                       const u = latest.units[cat];
                       if (!u || (u.units.length === 0 && !u.name)) return null;
@@ -256,6 +287,26 @@ function SchoolExamRangePanel({
                     rows={3}
                     className="w-full rounded-md border border-input bg-background px-2.5 py-2 text-sm text-foreground"
                   />
+                </div>
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <label className="mb-1 block text-xs font-medium text-muted-foreground">시험 시작일 (D-day 기준)</label>
+                    <input
+                      type="date"
+                      value={examStartDate}
+                      onChange={(e) => setExamStartDate(e.target.value)}
+                      className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="mb-1 block text-xs font-medium text-muted-foreground">시험 종료일</label>
+                    <input
+                      type="date"
+                      value={examEndDate}
+                      onChange={(e) => setExamEndDate(e.target.value)}
+                      className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
+                    />
+                  </div>
                 </div>
 
                 {categories.map((cat) => (
@@ -609,7 +660,19 @@ export default function ExamPrepDirectorClient() {
                             </div>
                           </td>
                           <td className="py-2 text-foreground">
-                            {r.examTitle || "-"}
+                            <div className="flex items-center gap-1.5">
+                              <span>{r.examTitle || "-"}</span>
+                              {r.examDDay != null && (
+                                <span
+                                  className={cn(
+                                    "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+                                    r.examDDay <= 0 ? "bg-destructive/10 text-destructive" : "bg-accent text-accent-foreground"
+                                  )}
+                                >
+                                  {r.examDDay > 0 ? `D-${r.examDDay}` : r.examDDay === 0 ? "D-DAY" : `D+${-r.examDDay}`}
+                                </span>
+                              )}
+                            </div>
                             {r.examRange && <div className="text-xs text-muted-foreground">{r.examRange}</div>}
                           </td>
                           <td className="py-2 text-foreground">{r.teachers.length > 0 ? r.teachers.join(", ") : "-"}</td>

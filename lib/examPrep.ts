@@ -70,6 +70,8 @@ export type ExamPrepSheet = {
   examTitle: string;
   examRange: string;
   examDate: string | null;
+  examEndDate: string | null;
+  examDDay: number | null;
   teachers: string[];
   progress: number;
   weakPoints: string;

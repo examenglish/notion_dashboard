@@ -1,6 +1,6 @@
 import { Client } from "@notionhq/client";
 import { unstable_cache, revalidateTag } from "next/cache";
-import { todayKST } from "./date";
+import { todayKST, daysUntilKST } from "./date";
 import { formatBriefingText } from "./briefingFormat";
 import {
   stripClassSuffix,
@@ -2843,10 +2843,11 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
     }),
   ]);
 
-  // 시험범위는 더 이상 학생별로 따로 관리하지 않는다 — 같은 학교+학년이면
-  // 항상 같은 값이라, DB⑩학교별시험범위에서 최신 값을 읽어와 그대로 보여준다
-  // (편집은 그 테이블에서만; 개별 학생 시트에서는 읽기 전용).
+  // 시험범위·시험일은 더 이상 학생별로 따로 관리하지 않는다 — 같은
+  // 학교+학년이면 항상 같은 값이라, DB⑩학교별시험범위에서 최신 값을 읽어와
+  // 그대로 보여준다(편집은 그 테이블에서만; 개별 학생 시트에서는 읽기 전용).
   const schoolExamRange = await getSchoolExamRange(student.school, student.grade ?? "");
+  const examDDay = schoolExamRange?.examStartDate ? daysUntilKST(schoolExamRange.examStartDate) : null;
 
   const fallbackLevel = levelFromGrade(student.grade) ?? "중등";
   const page = (res.results[0] as any) ?? null;
@@ -2860,7 +2861,9 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
       level: fallbackLevel,
       examTitle: "",
       examRange: schoolExamRange?.examRange ?? "",
-      examDate: null,
+      examDate: schoolExamRange?.examStartDate ?? null,
+      examEndDate: schoolExamRange?.examEndDate ?? null,
+      examDDay,
       teachers: [],
       progress: 0,
       weakPoints: "",
@@ -2879,7 +2882,9 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
     level,
     examTitle: getRichText(page, "시험명"),
     examRange: schoolExamRange?.examRange ?? "",
-    examDate: getDate(page, "시험일"),
+    examDate: schoolExamRange?.examStartDate ?? null,
+    examEndDate: schoolExamRange?.examEndDate ?? null,
+    examDDay,
     teachers: splitTeachers(getRichText(page, "담당교사")),
     progress: getNumber(page, "진행률") ?? 0,
     weakPoints: getRichText(page, "취약부분"),
@@ -2973,7 +2978,11 @@ export async function listExamPrepOverview() {
       level,
       examTitle: getRichText(p, "시험명"),
       examRange: schoolRangeMap.get(`${s.school}|${s.grade ?? ""}`)?.examRange ?? "",
-      examDate: getDate(p, "시험일"),
+      examDate: schoolRangeMap.get(`${s.school}|${s.grade ?? ""}`)?.examStartDate ?? null,
+      examDDay: (() => {
+        const start = schoolRangeMap.get(`${s.school}|${s.grade ?? ""}`)?.examStartDate;
+        return start ? daysUntilKST(start) : null;
+      })(),
       teachers: splitTeachers(getRichText(p, "담당교사")),
       progress: getNumber(p, "진행률") ?? 0,
       weakPoints: getRichText(p, "취약부분"),
@@ -3060,6 +3069,8 @@ export type SchoolExamRangeEntry = {
   grade: string;
   examTitle: string;
   examRange: string;
+  examStartDate: string | null;
+  examEndDate: string | null;
   // 카테고리별 "단원 틀"만 학교+학년 단위로 동기화한다 — 어떤 단원이
   // 있는지만 맞추고, 단원별 워크북 진도·단어암기는 절대 건드리지 않는다.
   units: Record<TextCategory, CategoryUnits>;
@@ -3084,6 +3095,8 @@ function parseSchoolExamRangeEntry(page: any): SchoolExamRangeEntry {
     grade: getSelect(page, "학년") ?? "",
     examTitle: getRichText(page, "시험명"),
     examRange: getRichText(page, "시험범위"),
+    examStartDate: getDate(page, "시험시작일"),
+    examEndDate: getDate(page, "시험종료일"),
     units,
     updatedAt: getDate(page, "갱신일"),
   };
@@ -3137,6 +3150,8 @@ export async function upsertSchoolExamRange(input: {
   grade: string;
   examTitle: string;
   examRange: string;
+  examStartDate: string | null;
+  examEndDate: string | null;
   units: Record<TextCategory, CategoryUnits>;
 }): Promise<SchoolExamRangeEntry> {
   const existing = (await getSchoolExamRangeEntriesFor(input.school, input.grade)).find(
@@ -3149,6 +3164,8 @@ export async function upsertSchoolExamRange(input: {
     학년: { select: { name: input.grade } },
     시험명: { rich_text: [{ text: { content: input.examTitle } }] },
     시험범위: { rich_text: chunkRichText(input.examRange) },
+    시험시작일: input.examStartDate ? { date: { start: input.examStartDate } } : { date: null },
+    시험종료일: input.examEndDate ? { date: { start: input.examEndDate } } : { date: null },
     갱신일: { date: { start: updatedAt } },
   };
   for (const cat of TEXT_CATEGORIES) {
@@ -3166,6 +3183,8 @@ export async function upsertSchoolExamRange(input: {
     grade: input.grade,
     examTitle: input.examTitle,
     examRange: input.examRange,
+    examStartDate: input.examStartDate,
+    examEndDate: input.examEndDate,
     units: cleanUnits,
     updatedAt,
   };

@@ -54,6 +54,8 @@ export async function POST(req: NextRequest) {
       grade: body.grade,
       examTitle: body.examTitle,
       examRange: body.examRange,
+      examStartDate: typeof body.examStartDate === "string" && body.examStartDate ? body.examStartDate : null,
+      examEndDate: typeof body.examEndDate === "string" && body.examEndDate ? body.examEndDate : null,
       units: parseUnitsBody(body),
     });
     return NextResponse.json(entry);

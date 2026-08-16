@@ -57,6 +57,7 @@ export type OverviewRow = {
   examTitle: string;
   examRange: string;
   examDate: string | null;
+  examDDay: number | null;
   teachers: string[];
   progress: number;
   weakPoints: string;
@@ -834,8 +835,33 @@ export function ExamPrepEditor({
           />
         </div>
         <div>
-          <label>시험일</label>
-          <input type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} />
+          <label>시험일 (학교 단위로 관리 · 읽기 전용)</label>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {sheet?.examDDay != null && (
+              <span
+                className="badge"
+                style={{
+                  background: sheet.examDDay <= 0 ? "var(--danger-tint, #fde2e2)" : "var(--accent-tint, #e7eff8)",
+                  color: sheet.examDDay <= 0 ? "var(--danger, #c0392b)" : "var(--primary, #004ea2)",
+                  fontWeight: 700,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {sheet.examDDay > 0 ? `D-${sheet.examDDay}` : sheet.examDDay === 0 ? "D-DAY" : `D+${-sheet.examDDay}`}
+              </span>
+            )}
+            <input
+              type="text"
+              readOnly
+              value={
+                examDate
+                  ? examDate + (sheet?.examEndDate && sheet.examEndDate !== examDate ? ` ~ ${sheet.examEndDate}` : "")
+                  : "학교별시험범위에 등록된 날짜가 없습니다"
+              }
+              title="이 값은 '학교별 시험범위 입력'에서 학교+학년 단위로 관리됩니다. 여기서는 수정할 수 없어요."
+              style={{ flex: 1, color: examDate ? undefined : "var(--muted-foreground, #94a3b8)" }}
+            />
+          </div>
         </div>
       </div>
       <div className="field-row">
