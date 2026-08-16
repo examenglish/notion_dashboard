@@ -2762,6 +2762,14 @@ export async function uploadMaterialFile(
 // 완료 여부를 지어내지 않고 텍스트 이름/범위만 옮기고 9단계는 전부 미완료로
 // 시작한다 — 그래서 마이그레이션 직후 진행률이 예전보다 낮게 보일 수 있는데,
 // 이건 새로 생긴 더 세밀한 기준을 적용한 정직한 결과다.
+// "18-40" 처럼 숫자범위/목록으로만 이루어진 문자열인지 — 옛날 모의고사
+// 데이터의 detail이 이 모양이면(번호 여러 개를 통째로 한 항목에 뭉쳐놓은
+// 것) 지금 방식(번호 하나=항목 하나, 회차명은 detail)으로 풀어써야
+// "학교별 시험범위 입력"과 같은 모양이 되어 특이 케이스가 안 생긴다.
+function isNumberRangeText(text: string): boolean {
+  return /^\s*\d+\s*[-~]?\s*\d*(\s*,\s*\d+\s*[-~]?\s*\d*)*\s*$/.test(text) && /\d/.test(text);
+}
+
 function migrateHighData(rawHigh: any): HighData {
   if (rawHigh && Array.isArray(rawHigh.textSources)) {
     return { textSources: rawHigh.textSources as TextSource[], textAnalysisProgress: rawHigh.textAnalysisProgress ?? "" };
@@ -2772,7 +2780,17 @@ function migrateHighData(rawHigh: any): HighData {
   for (const list of [rawHigh?.mockExams, rawHigh?.mockExams2]) {
     for (const item of Array.isArray(list) ? list : []) {
       if (!item?.label) continue;
-      sources.push({ ...newTextSource("모의고사", item.label), detail: item.detail ?? "" });
+      const detail = item.detail ?? "";
+      if (detail && isNumberRangeText(detail)) {
+        // 예: label="2606 H2", detail="18-40" → "18번"~"40번" 각각을
+        // 회차명 "2606 H2"를 공유하는 독립 항목으로 펼친다(지금 화면의
+        // "번호 범위로 추가"가 만드는 모양과 동일해서 그룹 접기도 그대로 먹힘).
+        for (const label of parseNumberRange(detail)) {
+          sources.push({ ...newTextSource("모의고사", label), detail: item.label });
+        }
+      } else {
+        sources.push({ ...newTextSource("모의고사", item.label), detail });
+      }
     }
   }
   for (const item of Array.isArray(rawHigh?.schoolPrints) ? rawHigh.schoolPrints : []) {
