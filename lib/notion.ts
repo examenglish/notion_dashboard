@@ -57,6 +57,7 @@ export const DB = {
   CLINIC: process.env.NOTION_DB_CLINIC!,
   MATERIAL: process.env.NOTION_DB_MATERIAL!,
   EXAM_PREP: process.env.NOTION_DB_EXAM_PREP!,
+  SCHOOL_EXAM_RANGE: process.env.NOTION_DB_SCHOOL_EXAM_RANGE!,
 };
 
 // ---- Property value extraction helpers ----
@@ -2839,6 +2840,11 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
     }),
   ]);
 
+  // 시험범위는 더 이상 학생별로 따로 관리하지 않는다 — 같은 학교+학년이면
+  // 항상 같은 값이라, DB⑩학교별시험범위에서 최신 값을 읽어와 그대로 보여준다
+  // (편집은 그 테이블에서만; 개별 학생 시트에서는 읽기 전용).
+  const schoolExamRange = await getSchoolExamRange(student.school, student.grade ?? "");
+
   const fallbackLevel = levelFromGrade(student.grade) ?? "중등";
   const page = (res.results[0] as any) ?? null;
   if (!page) {
@@ -2850,7 +2856,7 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
       grade: student.grade,
       level: fallbackLevel,
       examTitle: "",
-      examRange: "",
+      examRange: schoolExamRange?.examRange ?? "",
       examDate: null,
       teachers: [],
       progress: 0,
@@ -2869,7 +2875,7 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
     grade: student.grade,
     level,
     examTitle: getRichText(page, "시험명"),
-    examRange: getRichText(page, "시험범위"),
+    examRange: schoolExamRange?.examRange ?? "",
     examDate: getDate(page, "시험일"),
     teachers: splitTeachers(getRichText(page, "담당교사")),
     progress: getNumber(page, "진행률") ?? 0,
@@ -2947,7 +2953,11 @@ async function getAllExamPrepEntries(): Promise<{ page: any; student: Awaited<Re
 
 // 현황판/진도표 — 시험대비 시트가 있는 모든 학생을 한 번에 모아온다.
 export async function listExamPrepOverview() {
-  const [entries, examMap] = await Promise.all([getAllExamPrepEntries(), latestExamScoreMap()]);
+  const [entries, examMap, schoolRangeMap] = await Promise.all([
+    getAllExamPrepEntries(),
+    latestExamScoreMap(),
+    getSchoolExamRangeLatestMap(),
+  ]);
 
   return entries.map(({ page: p, student: s }) => {
     const level = (getSelect(p, "학교급") as SchoolLevel | null) ?? "중등";
@@ -2959,7 +2969,7 @@ export async function listExamPrepOverview() {
       grade: s.grade,
       level,
       examTitle: getRichText(p, "시험명"),
-      examRange: getRichText(p, "시험범위"),
+      examRange: schoolRangeMap.get(`${s.school}|${s.grade ?? ""}`)?.examRange ?? "",
       examDate: getDate(p, "시험일"),
       teachers: splitTeachers(getRichText(p, "담당교사")),
       progress: getNumber(p, "진행률") ?? 0,
@@ -2972,8 +2982,9 @@ export async function listExamPrepOverview() {
 }
 
 // 같은 학교+학년 학생들의 시험대비 시트를 모아 시험대비명/교과서/부교재/
-// 학교프린트/시험범위/담당교사 표기를 통일할 수 있도록 자동입력 값과
-// 자동완성 후보를 만든다. 대상이 하나도 없으면 null.
+// 학교프린트/담당교사 표기를 통일할 수 있도록 자동입력 값과 자동완성 후보를
+// 만든다. 시험범위는 DB⑩학교별시험범위(getSchoolExamRange)가 담당하므로
+// 여기서는 다루지 않는다. 대상이 하나도 없으면 null.
 export async function getExamPrepTemplate(input: {
   school: string;
   grade: string;
@@ -3010,14 +3021,12 @@ export async function getExamPrepTemplate(input: {
     level: latest.level,
     latest: {
       examTitle: getRichText(latest.page, "시험명"),
-      examRange: getRichText(latest.page, "시험범위"),
       teachers: splitTeachers(getRichText(latest.page, "담당교사")),
       textbook: labelsOf(latest.data, "교과서").join(", "),
       supplementary: labelsOf(latest.data, "부교재").join(", "),
       schoolPrint: schoolPrintOf(latest.data),
     },
     examTitleOptions: uniq(parsed.map((p) => getRichText(p.page, "시험명"))),
-    examRangeOptions: uniq(parsed.map((p) => getRichText(p.page, "시험범위"))),
     textbookOptions: uniq(parsed.flatMap((p) => labelsOf(p.data, "교과서"))),
     supplementaryOptions: uniq(parsed.flatMap((p) => labelsOf(p.data, "부교재"))),
     schoolPrintOptions: uniq(parsed.map((p) => schoolPrintOf(p.data))),
@@ -3025,52 +3034,101 @@ export async function getExamPrepTemplate(input: {
   };
 }
 
-// 같은 학교+학년은 학교에서 내려주는 시험범위가 원래 하나뿐이라, 한 학생
-// 시트에서 정리한 시험범위를 나머지 학생들에게도 밀어 넣을 수 있게 한다.
-// getAllExamPrepEntries()가 이미 "시험대비 시트가 실제로 존재하는 학생"만
-// 반환하므로, 아직 시트를 만든 적 없는 학생은 자동으로 제외되고(새 페이지를
-// 만들어버리는 일이 없음) — 시험범위 외 다른 필드(체크리스트/시험명 등)는
-// 건드리지 않아 기존 데이터 손실을 최소화한다.
-async function getExamRangeSyncTargets(input: { school: string; grade: string; excludeStudentId: string }) {
-  const entries = await getAllExamPrepEntries();
-  return entries.filter(
-    (e) => e.student.id !== input.excludeStudentId && e.student.school === input.school && e.student.grade === input.grade
-  );
-}
-
-// 실제로 적용하기 전에 "누가 어떤 값에서 바뀌는지" 미리 보여주기 위한 목록.
-export async function getExamRangeSyncPreview(input: {
+// ---- DB⑩학교별시험범위 — 학교+학년 단위로 관리하는 시험범위 ----
+// 학교 하나가 학기마다 시험(중간/기말 등)을 여러 번 치르므로 항목이 계속
+// 쌓인다. "현재" 값은 갱신일이 가장 최근인 항목으로 가린다. 학생 시트는
+// 이 값을 읽기 전용으로만 보여주고(개별 진도·교과서 등 다른 필드는 절대
+// 건드리지 않음), 실제 수정은 "학교 찾기" 화면에서 이 테이블에만 한다.
+export type SchoolExamRangeEntry = {
+  id: string;
   school: string;
   grade: string;
-  excludeStudentId: string;
-}): Promise<{ studentId: string; studentName: string; examRange: string }[]> {
-  const targets = await getExamRangeSyncTargets(input);
-  return targets.map((e) => ({
-    studentId: e.student.id,
-    studentName: e.student.name,
-    examRange: getRichText(e.page, "시험범위"),
-  }));
-}
-
-export async function syncExamRange(input: {
-  school: string;
-  grade: string;
-  excludeStudentId: string;
+  examTitle: string;
   examRange: string;
-}): Promise<{ studentId: string; studentName: string }[]> {
-  const targets = await getExamRangeSyncTargets(input);
-  await Promise.all(
-    targets.map((e) =>
-      notion.pages.update({
-        page_id: e.page.id,
-        properties: {
-          시험범위: { rich_text: chunkRichText(input.examRange) },
-          갱신일: { date: { start: todayKST() } },
-        },
-      })
-    )
+  updatedAt: string | null;
+};
+
+function parseSchoolExamRangeEntry(page: any): SchoolExamRangeEntry {
+  return {
+    id: page.id,
+    school: getRichText(page, "학교"),
+    grade: getSelect(page, "학년") ?? "",
+    examTitle: getRichText(page, "시험명"),
+    examRange: getRichText(page, "시험범위"),
+    updatedAt: getDate(page, "갱신일"),
+  };
+}
+
+async function getSchoolExamRangeEntriesFor(school: string, grade?: string): Promise<SchoolExamRangeEntry[]> {
+  const filters: any[] = [{ property: "학교", rich_text: { equals: school } }];
+  if (grade) filters.push({ property: "학년", select: { equals: grade } });
+  const results = await queryAllPages({
+    data_source_id: DB.SCHOOL_EXAM_RANGE,
+    filter: filters.length > 1 ? { and: filters } : filters[0],
+    sorts: [{ property: "갱신일", direction: "descending" }],
+  });
+  return (results as any[]).map(parseSchoolExamRangeEntry);
+}
+
+// 학생 시트/현황판이 읽기 전용으로 표시할 "현재" 시험범위.
+export async function getSchoolExamRange(school: string, grade: string): Promise<SchoolExamRangeEntry | null> {
+  if (!school || !grade) return null;
+  const entries = await getSchoolExamRangeEntriesFor(school, grade);
+  return entries[0] ?? null;
+}
+
+// "학교 찾기" 관리 화면 — 학교+학년 하나의 현재값+과거 이력을 모두 보여준다.
+export async function getSchoolExamRangeHistory(school: string, grade: string): Promise<SchoolExamRangeEntry[]> {
+  return getSchoolExamRangeEntriesFor(school, grade);
+}
+
+// 현황판/진도표가 학생마다 따로 조회하지 않도록, 학교+학년별 "현재" 값을
+// 한 번에 맵으로 만들어준다.
+export async function getSchoolExamRangeLatestMap(): Promise<Map<string, SchoolExamRangeEntry>> {
+  const results = await queryAllPages({
+    data_source_id: DB.SCHOOL_EXAM_RANGE,
+    sorts: [{ property: "갱신일", direction: "descending" }],
+  });
+  const map = new Map<string, SchoolExamRangeEntry>();
+  for (const page of results as any[]) {
+    const entry = parseSchoolExamRangeEntry(page);
+    const key = `${entry.school}|${entry.grade}`;
+    if (!map.has(key)) map.set(key, entry); // 갱신일 내림차순이라 먼저 만난 게 최신
+  }
+  return map;
+}
+
+// 학교+학년+시험명이 같은 항목이 이미 있으면 시험범위만 갱신하고, 없으면
+// 새 항목(=새 시험 회차)을 만든다 — 과거 시험범위는 이력으로 남는다.
+export async function upsertSchoolExamRange(input: {
+  school: string;
+  grade: string;
+  examTitle: string;
+  examRange: string;
+}): Promise<SchoolExamRangeEntry> {
+  const existing = (await getSchoolExamRangeEntriesFor(input.school, input.grade)).find(
+    (e) => e.examTitle === input.examTitle
   );
-  return targets.map((e) => ({ studentId: e.student.id, studentName: e.student.name }));
+  const updatedAt = todayKST();
+  const properties: any = {
+    학교: { rich_text: [{ text: { content: input.school } }] },
+    학년: { select: { name: input.grade } },
+    시험명: { rich_text: [{ text: { content: input.examTitle } }] },
+    시험범위: { rich_text: chunkRichText(input.examRange) },
+    갱신일: { date: { start: updatedAt } },
+  };
+  if (existing) {
+    await notion.pages.update({ page_id: existing.id, properties });
+    return { ...existing, examRange: input.examRange, updatedAt };
+  }
+  const page = await notion.pages.create({
+    parent: { data_source_id: DB.SCHOOL_EXAM_RANGE } as any,
+    properties: {
+      제목: { title: [{ text: { content: `${input.school} ${input.grade} ${input.examTitle}` } }] },
+      ...properties,
+    } as any,
+  });
+  return { id: page.id, school: input.school, grade: input.grade, examTitle: input.examTitle, examRange: input.examRange, updatedAt };
 }
 
 // 시험결과 입력/저장 — 기존 DB⑦시험성적에 이어서 기록한다(대시보드의

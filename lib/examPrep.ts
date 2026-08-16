@@ -77,21 +77,20 @@ export type ExamPrepSheet = {
   data: ExamPrepData;
 };
 
-// 같은 학교+학년 학생들 사이에서 시험대비명/교과서/부교재/학교프린트/시험범위
+// 같은 학교+학년 학생들 사이에서 시험대비명/교과서/부교재/학교프린트
 // 표기가 제각각이 되지 않도록, 이미 입력된 값들을 모아 자동입력/자동완성에
-// 쓰는 응답 형태. getExamPrepTemplate(lib/notion.ts)이 채워준다.
+// 쓰는 응답 형태. getExamPrepTemplate(lib/notion.ts)이 채워준다. 시험범위는
+// DB⑩학교별시험범위(SchoolExamRangeEntry)가 따로 담당한다.
 export type ExamPrepTemplate = {
   level: SchoolLevel;
   latest: {
     examTitle: string;
-    examRange: string;
     teachers: string[];
     textbook: string;
     supplementary: string;
     schoolPrint: string;
   };
   examTitleOptions: string[];
-  examRangeOptions: string[];
   textbookOptions: string[];
   supplementaryOptions: string[];
   schoolPrintOptions: string[];

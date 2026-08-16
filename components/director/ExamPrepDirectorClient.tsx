@@ -57,6 +57,188 @@ function BrowseColumn({ title, width, children }: { title: string; width: number
   );
 }
 
+type SchoolExamRangeEntry = {
+  id: string;
+  school: string;
+  grade: string;
+  examTitle: string;
+  examRange: string;
+  updatedAt: string | null;
+};
+
+// 학교+학년 단위로 시험범위를 관리하는 패널. 여기서 저장하면 그 학교·학년
+// 학생들의 시험대비 시트에 읽기 전용으로 즉시 반영된다(개별 진도는 안 건드림).
+function SchoolExamRangePanel({
+  school,
+  grades,
+  affectedCount,
+}: {
+  school: string;
+  grades: string[];
+  affectedCount: (grade: string) => number;
+}) {
+  const [grade, setGrade] = useState(grades[0] ?? "");
+  const [latest, setLatest] = useState<SchoolExamRangeEntry | null>(null);
+  const [history, setHistory] = useState<SchoolExamRangeEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [examTitle, setExamTitle] = useState("");
+  const [examRange, setExamRange] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!grades.includes(grade)) setGrade(grades[0] ?? "");
+  }, [grades, grade]);
+
+  useEffect(() => {
+    if (!school || !grade) return;
+    setLoading(true);
+    setError(null);
+    const params = new URLSearchParams({ school, grade });
+    fetch(`/api/school-exam-range?${params}`)
+      .then((r) => r.json())
+      .then((d: { latest: SchoolExamRangeEntry | null; history: SchoolExamRangeEntry[] }) => {
+        setLatest(d.latest);
+        setHistory(d.history);
+        setExamTitle(d.latest?.examTitle ?? "");
+        setExamRange(d.latest?.examRange ?? "");
+      })
+      .finally(() => setLoading(false));
+  }, [school, grade]);
+
+  async function handleSave() {
+    if (!examTitle.trim()) {
+      window.alert("시험명을 입력해주세요 (예: 2026 2학기 중간고사).");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/school-exam-range", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ school, grade, examTitle, examRange }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error ?? "저장에 실패했습니다.");
+        return;
+      }
+      const entry: SchoolExamRangeEntry = await res.json();
+      setLatest(entry);
+      setHistory((prev) => [entry, ...prev.filter((h) => h.examTitle !== entry.examTitle)]);
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="flex h-full flex-col">
+      <CardHeader>
+        <CardTitle>{school} · 학교별 시험범위</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          여기서 저장하면 이 학교·학년 학생들의 시험대비 시트에 읽기 전용으로 바로 반영됩니다. 개별 학생의 교과서·워크북
+          진도는 전혀 건드리지 않습니다.
+        </p>
+      </CardHeader>
+      <CardContent className="flex-1 space-y-4 overflow-y-auto pt-1">
+        <div className="flex flex-wrap gap-1.5">
+          {grades.map((g) => (
+            <button
+              key={g}
+              type="button"
+              onClick={() => setGrade(g)}
+              className={cn(
+                "rounded-md border px-2.5 py-1 text-xs font-medium",
+                g === grade ? "border-primary bg-accent text-accent-foreground" : "border-border bg-transparent text-foreground hover:bg-muted"
+              )}
+            >
+              {g} ({affectedCount(g)}명)
+            </button>
+          ))}
+        </div>
+
+        {loading ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">불러오는 중...</p>
+        ) : (
+          grade && (
+            <>
+              <div className="rounded-md border border-border p-3">
+                <p className="text-xs font-medium text-muted-foreground">
+                  현재 값 · 대상 학생 {affectedCount(grade)}명
+                </p>
+                {latest ? (
+                  <p className="mt-1 text-sm text-foreground">
+                    <span className="font-medium">{latest.examTitle}</span> — {latest.examRange || "(범위 미입력)"}
+                    {latest.updatedAt && <span className="ml-2 text-xs text-muted-foreground">{latest.updatedAt} 갱신</span>}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-sm text-muted-foreground">아직 등록된 시험범위가 없습니다.</p>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">시험명</label>
+                  <input
+                    type="text"
+                    list="schoolExamTitleHistory"
+                    placeholder="예: 2026 2학기 중간고사"
+                    value={examTitle}
+                    onChange={(e) => setExamTitle(e.target.value)}
+                    className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
+                  />
+                  <datalist id="schoolExamTitleHistory">
+                    {Array.from(new Set(history.map((h) => h.examTitle))).map((t) => (
+                      <option key={t} value={t} />
+                    ))}
+                  </datalist>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">시험범위</label>
+                  <textarea
+                    placeholder="예: 1~3과, 모의고사 18-24"
+                    value={examRange}
+                    onChange={(e) => setExamRange(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-md border border-input bg-background px-2.5 py-2 text-sm text-foreground"
+                  />
+                </div>
+                {error && <p className="text-xs text-destructive">{error}</p>}
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                >
+                  {saving ? "저장 중..." : "이 학교·학년에 저장"}
+                </button>
+              </div>
+
+              {history.length > 0 && (
+                <div>
+                  <p className="mb-1 text-xs font-medium text-muted-foreground">이력</p>
+                  <div className="space-y-1">
+                    {history.map((h) => (
+                      <div key={h.id} className="rounded-md border border-border px-2.5 py-1.5 text-xs">
+                        <span className="font-medium text-foreground">{h.examTitle}</span>
+                        <span className="ml-2 text-muted-foreground">{h.examRange || "(범위 미입력)"}</span>
+                        {h.updatedAt && <span className="ml-2 text-muted-foreground">· {h.updatedAt}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // /director/exam-prep 전용 — 학생 관리 화면과 같은 새 디자인 톤을 쓰되, 학교를
 // 누르면 그 오른쪽에 학년 열이, 학년을 누르면 그 오른쪽에 학생 열이 나타나는
 // 캐스케이드(Finder 컬럼 뷰) 방식으로 찾는다. 과목별 세부 입력폼
@@ -71,6 +253,7 @@ export default function ExamPrepDirectorClient() {
   const [selectedGrade, setSelectedGrade] = useState("");
   const [query, setQuery] = useState("");
   const [levelFilter, setLevelFilter] = useState<"" | SchoolLevel>("");
+  const [rangeSchool, setRangeSchool] = useState("");
 
   function reloadOverview() {
     fetch("/api/exam-prep")
@@ -118,62 +301,96 @@ export default function ExamPrepDirectorClient() {
     return [...overview].filter((r) => (levelFilter ? r.level === levelFilter : true)).sort((a, b) => a.progress - b.progress);
   }, [overview, levelFilter]);
 
+  const rangeGrades = useMemo(() => {
+    if (!rangeSchool) return [];
+    const set = new Set(
+      allStudents.filter((s) => s.school === rangeSchool).map((s) => s.grade).filter((g): g is string => !!g)
+    );
+    return Array.from(set).sort(gradeSort);
+  }, [allStudents, rangeSchool]);
+
+  function rangeAffectedCount(grade: string) {
+    return allStudents.filter((s) => s.school === rangeSchool && s.grade === grade).length;
+  }
+
   function reset() {
     setSelectedSchool("");
     setSelectedGrade("");
     setStudentId("");
     setQuery("");
+    setRangeSchool("");
+  }
+
+  function selectRangeSchool(school: string) {
+    reset();
+    setRangeSchool(school);
   }
 
   return (
     <div className="flex items-start gap-4" style={{ height: "calc(100vh - 8.5rem)" }}>
-      <Card className="flex h-full flex-col" style={{ width: 170, flexShrink: 0 }}>
-        <CardHeader className="flex-col items-stretch gap-2.5">
-          <CardTitle className="text-[13px] font-normal text-muted-foreground">시험대비 · 학생 찾기</CardTitle>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              type="search"
-              placeholder="이름으로 검색"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="pl-8 text-[13px] placeholder:font-normal"
-            />
-          </div>
-        </CardHeader>
-        <CardContent className="flex-1 space-y-0.5 overflow-y-auto pt-0.5">
-          {query.trim() !== "" ? (
-            searchResults.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">검색 결과가 없습니다.</p>
+      <div className="flex h-full flex-col gap-4" style={{ width: 170, flexShrink: 0 }}>
+        <Card className="flex flex-1 flex-col overflow-hidden">
+          <CardHeader className="flex-col items-stretch gap-2.5">
+            <CardTitle className="text-[13px] font-normal text-muted-foreground">시험대비 · 학생 찾기</CardTitle>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="search"
+                placeholder="이름으로 검색"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="pl-8 text-[13px] placeholder:font-normal"
+              />
+            </div>
+          </CardHeader>
+          <CardContent className="flex-1 space-y-0.5 overflow-y-auto pt-0.5">
+            {query.trim() !== "" ? (
+              searchResults.length === 0 ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">검색 결과가 없습니다.</p>
+              ) : (
+                searchResults.map((s) => (
+                  <BrowseRow
+                    key={s.id}
+                    label={s.name}
+                    meta={`${s.school} ${s.grade ?? ""}`}
+                    onClick={() => {
+                      setRangeSchool("");
+                      setStudentId(s.id);
+                      setQuery("");
+                    }}
+                  />
+                ))
+              )
             ) : (
-              searchResults.map((s) => (
+              schools.map((s) => (
                 <BrowseRow
-                  key={s.id}
-                  label={s.name}
-                  meta={`${s.school} ${s.grade ?? ""}`}
+                  key={s}
+                  label={s}
+                  active={selectedSchool === s}
                   onClick={() => {
-                    setStudentId(s.id);
-                    setQuery("");
+                    setRangeSchool("");
+                    setSelectedSchool(s);
+                    setSelectedGrade("");
+                    setStudentId("");
                   }}
                 />
               ))
-            )
-          ) : (
-            schools.map((s) => (
-              <BrowseRow
-                key={s}
-                label={s}
-                active={selectedSchool === s}
-                onClick={() => {
-                  setSelectedSchool(s);
-                  setSelectedGrade("");
-                  setStudentId("");
-                }}
-              />
-            ))
-          )}
-        </CardContent>
-      </Card>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="flex flex-1 flex-col overflow-hidden">
+          <CardHeader>
+            <CardTitle className="text-[13px] font-normal text-muted-foreground">학교 찾기</CardTitle>
+          </CardHeader>
+          <CardContent className="flex-1 space-y-0.5 overflow-y-auto pt-0.5">
+            {schools.length === 0 && <p className="py-6 text-center text-xs text-muted-foreground">학교 없음</p>}
+            {schools.map((s) => (
+              <BrowseRow key={s} label={s} active={rangeSchool === s} onClick={() => selectRangeSchool(s)} />
+            ))}
+          </CardContent>
+        </Card>
+      </div>
 
       {!query.trim() && selectedSchool && (
         <BrowseColumn title="학년" width={80}>
@@ -204,7 +421,9 @@ export default function ExamPrepDirectorClient() {
       )}
 
       <div className="h-full min-w-0 flex-1">
-        {studentId ? (
+        {rangeSchool ? (
+          <SchoolExamRangePanel school={rangeSchool} grades={rangeGrades} affectedCount={rangeAffectedCount} />
+        ) : studentId ? (
           <Card className="flex h-full flex-col">
             <CardHeader>
               <CardTitle>학생 상세 · 시험대비</CardTitle>
