@@ -5,7 +5,7 @@ import { Search } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ExamPrepEditor, ProgressBar, CategoryChips, type OverviewRow } from "@/components/ExamPrepClient";
-import type { SchoolLevel } from "@/lib/examPrep";
+import { TEXT_CATEGORIES, MIDDLE_TEXT_CATEGORIES, levelFromGrade, type SchoolLevel, type TextCategory } from "@/lib/examPrep";
 import { cn } from "@/lib/utils";
 
 type StudentBrief = { id: string; name: string; school: string; grade: string | null };
@@ -57,19 +57,38 @@ function BrowseColumn({ title, width, children }: { title: string; width: number
   );
 }
 
+type CategoryUnits = { name: string; units: string[] };
 type SchoolExamRangeEntry = {
   id: string;
   school: string;
   grade: string;
   examTitle: string;
   examRange: string;
-  textbookName: string;
-  textbookUnits: string[];
+  units: Record<TextCategory, CategoryUnits>;
   updatedAt: string | null;
 };
 
-// 학교+학년 단위로 시험범위를 관리하는 패널. 여기서 저장하면 그 학교·학년
-// 학생들의 시험대비 시트에 읽기 전용으로 즉시 반영된다(개별 진도는 안 건드림).
+type CategoryForm = { name: string; unitsText: string };
+function emptyCategoryForm(): CategoryForm {
+  return { name: "", unitsText: "" };
+}
+function emptyUnitsForm(): Record<TextCategory, CategoryForm> {
+  const form = {} as Record<TextCategory, CategoryForm>;
+  for (const cat of TEXT_CATEGORIES) form[cat] = emptyCategoryForm();
+  return form;
+}
+
+const CATEGORY_UNITS_PLACEHOLDER: Record<TextCategory, string> = {
+  교과서: "예: 1과, 2과, 3과",
+  부교재: "예: 1강, 2강, 3강",
+  모의고사: "예: 2025년 6월 모의고사, 2025년 9월 모의고사",
+  학교프린트: "예: 1학기 중간대비 프린트",
+};
+
+// 학교+학년 단위로 시험범위·교과서/부교재/모의고사/학교프린트 단원 틀을
+// 관리하는 패널. 여기서 저장하면 그 학교·학년 학생들의 시험대비 시트에
+// 읽기 전용(시험범위)/자동 추가(단원 틀)로 즉시 반영된다 — 단원별 워크북
+// 진도·단어암기 등 개별 진행상황은 절대 건드리지 않는다.
 function SchoolExamRangePanel({
   school,
   grades,
@@ -85,10 +104,12 @@ function SchoolExamRangePanel({
   const [loading, setLoading] = useState(false);
   const [examTitle, setExamTitle] = useState("");
   const [examRange, setExamRange] = useState("");
-  const [textbookName, setTextbookName] = useState("");
-  const [textbookUnitsText, setTextbookUnitsText] = useState("");
+  const [unitsForm, setUnitsForm] = useState<Record<TextCategory, CategoryForm>>(emptyUnitsForm());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const level = levelFromGrade(grade);
+  const categories = level === "중등" ? MIDDLE_TEXT_CATEGORIES : TEXT_CATEGORIES;
 
   useEffect(() => {
     if (!grades.includes(grade)) setGrade(grades[0] ?? "");
@@ -106,8 +127,12 @@ function SchoolExamRangePanel({
         setHistory(d.history);
         setExamTitle(d.latest?.examTitle ?? "");
         setExamRange(d.latest?.examRange ?? "");
-        setTextbookName(d.latest?.textbookName ?? "");
-        setTextbookUnitsText((d.latest?.textbookUnits ?? []).join(", "));
+        const form = emptyUnitsForm();
+        for (const cat of TEXT_CATEGORIES) {
+          const u = d.latest?.units?.[cat];
+          form[cat] = { name: u?.name ?? "", unitsText: (u?.units ?? []).join(", ") };
+        }
+        setUnitsForm(form);
       })
       .finally(() => setLoading(false));
   }, [school, grade]);
@@ -120,14 +145,17 @@ function SchoolExamRangePanel({
     setSaving(true);
     setError(null);
     try {
-      const textbookUnits = textbookUnitsText
-        .split(",")
-        .map((u) => u.trim())
-        .filter(Boolean);
+      const units: Record<TextCategory, CategoryUnits> = {} as Record<TextCategory, CategoryUnits>;
+      for (const cat of TEXT_CATEGORIES) {
+        units[cat] = {
+          name: unitsForm[cat].name,
+          units: unitsForm[cat].unitsText.split(",").map((u) => u.trim()).filter(Boolean),
+        };
+      }
       const res = await fetch("/api/school-exam-range", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ school, grade, examTitle, examRange, textbookName, textbookUnits }),
+        body: JSON.stringify({ school, grade, examTitle, examRange, units }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -149,8 +177,8 @@ function SchoolExamRangePanel({
       <CardHeader>
         <CardTitle>{school} · 학교별 시험범위</CardTitle>
         <p className="text-xs text-muted-foreground">
-          여기서 저장하면 이 학교·학년 학생들의 시험대비 시트에 읽기 전용으로 바로 반영됩니다. 개별 학생의 교과서·워크북
-          진도는 전혀 건드리지 않습니다.
+          여기서 저장하면 이 학교·학년 학생들의 시험대비 시트에 시험범위는 읽기 전용으로, 교과서·부교재·모의고사·
+          학교프린트는 없는 단원만 자동 추가로 반영됩니다. 개별 학생의 워크북·단어암기 진행상황은 전혀 건드리지 않습니다.
         </p>
       </CardHeader>
       <CardContent className="flex-1 space-y-4 overflow-y-auto pt-1">
@@ -175,7 +203,7 @@ function SchoolExamRangePanel({
         ) : (
           grade && (
             <>
-              <div className="rounded-md border border-border p-3">
+              <div className="rounded-md border border-border p-3 space-y-1">
                 <p className="text-xs font-medium text-muted-foreground">
                   현재 값 · 대상 학생 {affectedCount(grade)}명
                 </p>
@@ -185,10 +213,15 @@ function SchoolExamRangePanel({
                       <span className="font-medium">{latest.examTitle}</span> — {latest.examRange || "(범위 미입력)"}
                       {latest.updatedAt && <span className="ml-2 text-xs text-muted-foreground">{latest.updatedAt} 갱신</span>}
                     </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      교과서: {latest.textbookName || "(교재명 미입력)"} ·{" "}
-                      {latest.textbookUnits.length > 0 ? latest.textbookUnits.join(", ") : "(단원 미입력)"}
-                    </p>
+                    {categories.map((cat) => {
+                      const u = latest.units[cat];
+                      if (!u || (u.units.length === 0 && !u.name)) return null;
+                      return (
+                        <p key={cat} className="text-xs text-muted-foreground">
+                          {cat}: {u.name || "(이름 미입력)"} · {u.units.length > 0 ? u.units.join(", ") : "(단원 미입력)"}
+                        </p>
+                      );
+                    })}
                   </>
                 ) : (
                   <p className="mt-1 text-sm text-muted-foreground">아직 등록된 시험범위가 없습니다.</p>
@@ -222,28 +255,37 @@ function SchoolExamRangePanel({
                     className="w-full rounded-md border border-input bg-background px-2.5 py-2 text-sm text-foreground"
                   />
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">교과서명</label>
-                  <input
-                    type="text"
-                    placeholder="예: 영어2 능률(오)"
-                    value={textbookName}
-                    onChange={(e) => setTextbookName(e.target.value)}
-                    className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                    교과서 단원 (쉼표로 구분 — 없는 단원만 학생 시트에 자동 추가, 기존 진도는 안 건드림)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="예: 1과, 2과, 3과"
-                    value={textbookUnitsText}
-                    onChange={(e) => setTextbookUnitsText(e.target.value)}
-                    className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
-                  />
-                </div>
+
+                {categories.map((cat) => (
+                  <div key={cat} className="rounded-md border border-border p-2.5 space-y-2">
+                    <p className="text-xs font-semibold text-foreground">{cat}</p>
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                        {cat} 이름 (공통 교재명 — 없으면 비워두세요)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={cat === "교과서" || cat === "부교재" ? "예: 영어2 능률(오)" : "선택사항"}
+                        value={unitsForm[cat].name}
+                        onChange={(e) => setUnitsForm((prev) => ({ ...prev, [cat]: { ...prev[cat], name: e.target.value } }))}
+                        className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                        {cat} 단원 (쉼표로 구분 — 없는 단원만 학생 시트에 자동 추가, 기존 진도는 안 건드림)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={CATEGORY_UNITS_PLACEHOLDER[cat]}
+                        value={unitsForm[cat].unitsText}
+                        onChange={(e) => setUnitsForm((prev) => ({ ...prev, [cat]: { ...prev[cat], unitsText: e.target.value } }))}
+                        className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
+                      />
+                    </div>
+                  </div>
+                ))}
+
                 {error && <p className="text-xs text-destructive">{error}</p>}
                 <button
                   type="button"
@@ -427,7 +469,7 @@ export default function ExamPrepDirectorClient() {
 
         <Card className="flex flex-1 flex-col overflow-hidden">
           <CardHeader className="flex-col items-stretch gap-2.5">
-            <CardTitle className="text-[13px] font-normal text-muted-foreground">학교 찾기</CardTitle>
+            <CardTitle className="text-[13px] font-normal text-muted-foreground">학교별 시험범위 입력</CardTitle>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input

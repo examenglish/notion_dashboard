@@ -23,6 +23,8 @@ import {
   type TextCategory,
   type PracticeCategory,
   MIDDLE_PRACTICE_CATEGORIES,
+  TEXT_CATEGORIES,
+  MIDDLE_TEXT_CATEGORIES,
   computeCategoryBreakdown,
   computeProgress,
   defaultDataFor,
@@ -2862,7 +2864,7 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
       progress: 0,
       weakPoints: "",
       updatedAt: null,
-      data: mergeSchoolTextbookUnits(defaultDataFor(fallbackLevel), schoolExamRange),
+      data: mergeSchoolUnits(defaultDataFor(fallbackLevel), schoolExamRange),
     };
   }
 
@@ -2881,7 +2883,7 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
     progress: getNumber(page, "진행률") ?? 0,
     weakPoints: getRichText(page, "취약부분"),
     updatedAt: getDate(page, "갱신일"),
-    data: mergeSchoolTextbookUnits(parseExamPrepData(getRichText(page, "데이터"), level), schoolExamRange),
+    data: mergeSchoolUnits(parseExamPrepData(getRichText(page, "데이터"), level), schoolExamRange),
   };
 }
 
@@ -3039,31 +3041,49 @@ export async function getExamPrepTemplate(input: {
 // 쌓인다. "현재" 값은 갱신일이 가장 최근인 항목으로 가린다. 학생 시트는
 // 이 값을 읽기 전용으로만 보여주고(개별 진도·교과서 등 다른 필드는 절대
 // 건드리지 않음), 실제 수정은 "학교 찾기" 화면에서 이 테이블에만 한다.
+export type CategoryUnits = { name: string; units: string[] };
+
+// 카테고리(교과서/부교재/모의고사/학교프린트)별로 노션 속성 이름이 다르다 —
+// "OO명"(공통 교재명/시리즈명, 모의고사·학교프린트는 보통 비워둠)과
+// "OO단원"(쉼표로 구분된 단원/회차/항목 목록).
+const CATEGORY_PROPS: Record<TextCategory, { name: string; units: string }> = {
+  교과서: { name: "교과서명", units: "교과서단원" },
+  부교재: { name: "부교재명", units: "부교재단원" },
+  모의고사: { name: "모의고사명", units: "모의고사단원" },
+  학교프린트: { name: "학교프린트명", units: "학교프린트단원" },
+};
+
 export type SchoolExamRangeEntry = {
   id: string;
   school: string;
   grade: string;
   examTitle: string;
   examRange: string;
-  // 교과서 단원 "틀"만 학교+학년 단위로 동기화한다 — 어떤 단원이 있는지만
-  // 맞추고, 단원별 워크북 진도·단어암기는 절대 건드리지 않는다.
-  textbookName: string;
-  textbookUnits: string[];
+  // 카테고리별 "단원 틀"만 학교+학년 단위로 동기화한다 — 어떤 단원이
+  // 있는지만 맞추고, 단원별 워크북 진도·단어암기는 절대 건드리지 않는다.
+  units: Record<TextCategory, CategoryUnits>;
   updatedAt: string | null;
 };
 
 function parseSchoolExamRangeEntry(page: any): SchoolExamRangeEntry {
+  const units = {} as Record<TextCategory, CategoryUnits>;
+  for (const cat of TEXT_CATEGORIES) {
+    const props = CATEGORY_PROPS[cat];
+    units[cat] = {
+      name: getRichText(page, props.name),
+      units: getRichText(page, props.units)
+        .split(",")
+        .map((u) => u.trim())
+        .filter(Boolean),
+    };
+  }
   return {
     id: page.id,
     school: getRichText(page, "학교"),
     grade: getSelect(page, "학년") ?? "",
     examTitle: getRichText(page, "시험명"),
     examRange: getRichText(page, "시험범위"),
-    textbookName: getRichText(page, "교과서명"),
-    textbookUnits: getRichText(page, "교과서단원")
-      .split(",")
-      .map((u) => u.trim())
-      .filter(Boolean),
+    units,
     updatedAt: getDate(page, "갱신일"),
   };
 }
@@ -3108,38 +3128,42 @@ export async function getSchoolExamRangeLatestMap(): Promise<Map<string, SchoolE
 }
 
 // 학교+학년+시험명이 같은 항목이 이미 있으면 갱신하고, 없으면 새 항목(=새
-// 시험 회차)을 만든다 — 과거 시험범위는 이력으로 남는다. 교과서명/단원은
-// "학교 찾기" 화면이 매번 최신값으로 채운 채로 보내주므로 그대로 저장하면
-// 시험 회차가 바뀌어도 자연히 이어진다.
+// 시험 회차)을 만든다 — 과거 시험범위는 이력으로 남는다. 카테고리별 명칭/
+// 단원은 "학교별 시험범위 입력" 화면이 매번 최신값으로 채운 채로 보내주므로
+// 그대로 저장하면 시험 회차가 바뀌어도 자연히 이어진다.
 export async function upsertSchoolExamRange(input: {
   school: string;
   grade: string;
   examTitle: string;
   examRange: string;
-  textbookName: string;
-  textbookUnits: string[];
+  units: Record<TextCategory, CategoryUnits>;
 }): Promise<SchoolExamRangeEntry> {
   const existing = (await getSchoolExamRangeEntriesFor(input.school, input.grade)).find(
     (e) => e.examTitle === input.examTitle
   );
   const updatedAt = todayKST();
-  const textbookUnitsJoined = input.textbookUnits.map((u) => u.trim()).filter(Boolean).join(", ");
+  const cleanUnits = {} as Record<TextCategory, CategoryUnits>;
   const properties: any = {
     학교: { rich_text: [{ text: { content: input.school } }] },
     학년: { select: { name: input.grade } },
     시험명: { rich_text: [{ text: { content: input.examTitle } }] },
     시험범위: { rich_text: chunkRichText(input.examRange) },
-    교과서명: { rich_text: [{ text: { content: input.textbookName } }] },
-    교과서단원: { rich_text: chunkRichText(textbookUnitsJoined) },
     갱신일: { date: { start: updatedAt } },
   };
+  for (const cat of TEXT_CATEGORIES) {
+    const raw = input.units[cat] ?? { name: "", units: [] };
+    const cleanedList = raw.units.map((u) => u.trim()).filter(Boolean);
+    cleanUnits[cat] = { name: raw.name, units: cleanedList };
+    const props = CATEGORY_PROPS[cat];
+    properties[props.name] = { rich_text: [{ text: { content: raw.name } }] };
+    properties[props.units] = { rich_text: chunkRichText(cleanedList.join(", ")) };
+  }
   const resultBase = {
     school: input.school,
     grade: input.grade,
     examTitle: input.examTitle,
     examRange: input.examRange,
-    textbookName: input.textbookName,
-    textbookUnits: input.textbookUnits.map((u) => u.trim()).filter(Boolean),
+    units: cleanUnits,
     updatedAt,
   };
   if (existing) {
@@ -3156,29 +3180,44 @@ export async function upsertSchoolExamRange(input: {
   return { ...resultBase, id: page.id };
 }
 
-// DB⑩의 교과서단원 "틀"을 학생의 기존 교과서 텍스트에 병합한다 — 없는
-// 단원만 새로 추가하고(steps/vocab은 빈 상태로 시작), 이미 있는 단원의
-// 워크북 진도·단어암기·메모는 절대 건드리지 않는다.
-function mergeSchoolTextbookUnits(data: ExamPrepData, entry: SchoolExamRangeEntry | null): ExamPrepData {
-  if (!entry || entry.textbookUnits.length === 0) return data;
+// DB⑩의 카테고리별 "단원 틀"을 학생의 기존 텍스트에 병합한다 — 없는 단원만
+// 새로 추가하고(steps/vocab은 빈 상태로 시작), 이미 있는 단원의 워크북
+// 진도·단어암기·메모는 절대 건드리지 않는다. 중등은 교과서/부교재만,
+// 고등은 교과서/부교재/모의고사/학교프린트 네 카테고리 모두 대상.
+function mergeSchoolUnits(data: ExamPrepData, entry: SchoolExamRangeEntry | null): ExamPrepData {
+  if (!entry) return data;
   if (data.level === "중등") {
-    const existingLabels = new Set(data.middle.textSources.filter((t) => t.category === "교과서").map((t) => t.label));
-    const missing = entry.textbookUnits.filter((u) => !existingLabels.has(u));
-    if (missing.length === 0) return data;
-    const added = missing.map((label) => ({ ...newMiddleTextSource("교과서", label), detail: entry.textbookName }));
-    return { level: "중등", middle: { ...data.middle, textSources: [...data.middle.textSources, ...added] } };
+    let textSources = data.middle.textSources;
+    for (const cat of MIDDLE_TEXT_CATEGORIES) {
+      const catUnits = entry.units[cat];
+      if (!catUnits || catUnits.units.length === 0) continue;
+      const existingLabels = new Set(textSources.filter((t) => t.category === cat).map((t) => t.label));
+      const missing = catUnits.units.filter((u) => !existingLabels.has(u));
+      if (missing.length === 0) continue;
+      const added = missing.map((label) => ({ ...newMiddleTextSource(cat, label), detail: catUnits.name }));
+      textSources = [...textSources, ...added];
+    }
+    if (textSources === data.middle.textSources) return data;
+    return { level: "중등", middle: { ...data.middle, textSources } };
   }
-  const existingLabels = new Set(data.high.textSources.filter((t) => t.category === "교과서").map((t) => t.label));
-  const missing = entry.textbookUnits.filter((u) => !existingLabels.has(u));
-  if (missing.length === 0) return data;
-  const added = missing.map((label) => ({ ...newTextSource("교과서", label), detail: entry.textbookName }));
-  return { level: "고등", high: { ...data.high, textSources: [...data.high.textSources, ...added] } };
+  let textSources = data.high.textSources;
+  for (const cat of TEXT_CATEGORIES) {
+    const catUnits = entry.units[cat];
+    if (!catUnits || catUnits.units.length === 0) continue;
+    const existingLabels = new Set(textSources.filter((t) => t.category === cat).map((t) => t.label));
+    const missing = catUnits.units.filter((u) => !existingLabels.has(u));
+    if (missing.length === 0) continue;
+    const added = missing.map((label) => ({ ...newTextSource(cat, label), detail: catUnits.name }));
+    textSources = [...textSources, ...added];
+  }
+  if (textSources === data.high.textSources) return data;
+  return { level: "고등", high: { ...data.high, textSources } };
 }
 
 // 워크북 9단계 체크는 학생마다 실제 진도가 달라서 학교 단위로 상시
 // 동기화하지 않는다 — 대신 "다같이 여기까지 나갔다"는 순간 한 번, 그
 // 단원을 이미 가진 다른 학생들에게 지금 체크 상태를 복사해준다(단원이
-// 없는 학생은 건드리지 않음 — 그건 mergeSchoolTextbookUnits의 몫). 복사
+// 없는 학생은 건드리지 않음 — 그건 mergeSchoolUnits의 몫). 복사
 // 이후엔 각자 시트에서 다시 자유롭게 개별 조정할 수 있다.
 export async function broadcastTextSourceSteps(input: {
   school: string;
