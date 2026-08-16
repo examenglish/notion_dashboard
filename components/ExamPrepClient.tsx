@@ -242,6 +242,7 @@ function TextSourceEditor({
   onRemove,
   labelDatalistId,
   middleFields,
+  onBroadcast,
 }: {
   source: TextSource;
   onChange: (next: TextSource) => void;
@@ -250,6 +251,10 @@ function TextSourceEditor({
   // 중등 교과서/부교재의 과(Lesson) 전용 — 본문암기/대화문암기/성취도를
   // 추가로 보여준다(고등에서는 안 씀).
   middleFields?: boolean;
+  // 같은 학교·학년의 다른 학생 중 이 단원을 이미 가진 학생들에게, 지금
+  // 워크북 체크 상태를 한 번 복사한다(상시 동기화 아님 — 학생마다 실제
+  // 진도가 다르므로).
+  onBroadcast?: () => void;
 }) {
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 10, marginTop: 8 }}>
@@ -269,6 +274,18 @@ function TextSourceEditor({
           onChange={(e) => onChange({ ...source, detail: e.target.value })}
           style={{ flex: "1 1 120px" }}
         />
+        {onBroadcast && (
+          <button
+            type="button"
+            className="secondary"
+            onClick={onBroadcast}
+            disabled={!source.label.trim()}
+            title="같은 학교·학년에서 이 단원을 이미 가진 다른 학생들에게 지금 체크 상태를 한 번 적용합니다"
+            style={{ padding: "4px 8px", fontSize: 12 }}
+          >
+            전체 적용
+          </button>
+        )}
         <button type="button" className="secondary" onClick={onRemove} style={{ padding: "4px 8px", fontSize: 12 }}>
           삭제
         </button>
@@ -340,12 +357,14 @@ function TextSourceGroup({
   onChange,
   labelDatalistId,
   middleFields,
+  onBroadcastSource,
 }: {
   category: TextCategory;
   sources: TextSource[];
   onChange: (sources: TextSource[]) => void;
   labelDatalistId?: string;
   middleFields?: boolean;
+  onBroadcastSource?: (source: TextSource) => void;
 }) {
   function update(id: string, next: TextSource) {
     onChange(sources.map((s) => (s.id === id ? next : s)));
@@ -380,6 +399,7 @@ function TextSourceGroup({
           onRemove={() => remove(s.id)}
           labelDatalistId={labelDatalistId}
           middleFields={middleFields}
+          onBroadcast={onBroadcastSource ? () => onBroadcastSource(s) : undefined}
         />
       ))}
     </div>
@@ -560,6 +580,44 @@ export function ExamPrepEditor({
         high: { ...prev.high, textSources: addAutoTextSources(prev.high.textSources, template.latest, newTextSource) },
       };
     });
+  }
+
+  // 상시 동기화가 아니라 "지금 이 순간" 한 번 — 같은 학교·학년에서 이
+  // 단원을 이미 가진 다른 학생들에게 현재 워크북 체크 상태를 복사한다.
+  // 이후엔 각자 시트에서 다시 자유롭게 개별 조정할 수 있다.
+  async function handleBroadcastSteps(source: TextSource) {
+    if (!sheet?.school || !sheet?.grade || !source.label.trim()) return;
+    const ok = window.confirm(
+      `${sheet.school} ${sheet.grade}에서 "${source.label}" 단원을 이미 가진 다른 학생들에게 지금 워크북 체크 상태를 적용합니다. 계속할까요?`
+    );
+    if (!ok) return;
+    try {
+      const res = await fetch("/api/exam-prep/broadcast-steps", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          school: sheet.school,
+          grade: sheet.grade,
+          excludeStudentId: studentId,
+          category: source.category,
+          label: source.label,
+          steps: source.steps.map((s) => ({ label: s.label, done: s.done })),
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        window.alert(d.error ?? "적용에 실패했습니다.");
+        return;
+      }
+      const { updated } = await res.json();
+      window.alert(
+        updated.length === 0
+          ? "이 단원을 가진 다른 학생이 없습니다."
+          : `${updated.map((u: { studentName: string }) => u.studentName).join(", ")} (${updated.length}명)에게 적용했습니다.`
+      );
+    } catch {
+      window.alert("네트워크 오류가 발생했습니다.");
+    }
   }
 
   function switchLevel(next: SchoolLevel) {
@@ -780,6 +838,7 @@ export function ExamPrepEditor({
               }}
               labelDatalistId={cat === "교과서" ? "textbookOptions" : "supplementaryOptions"}
               middleFields
+              onBroadcastSource={handleBroadcastSteps}
             />
           ))}
 
@@ -829,6 +888,7 @@ export function ExamPrepEditor({
               labelDatalistId={
                 cat === "교과서" ? "textbookOptions" : cat === "부교재" ? "supplementaryOptions" : cat === "학교프린트" ? "schoolPrintItemLabels" : undefined
               }
+              onBroadcastSource={handleBroadcastSteps}
             />
           ))}
         </>

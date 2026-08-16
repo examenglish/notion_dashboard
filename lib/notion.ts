@@ -3175,6 +3175,57 @@ function mergeSchoolTextbookUnits(data: ExamPrepData, entry: SchoolExamRangeEntr
   return { level: "고등", high: { ...data.high, textSources: [...data.high.textSources, ...added] } };
 }
 
+// 워크북 9단계 체크는 학생마다 실제 진도가 달라서 학교 단위로 상시
+// 동기화하지 않는다 — 대신 "다같이 여기까지 나갔다"는 순간 한 번, 그
+// 단원을 이미 가진 다른 학생들에게 지금 체크 상태를 복사해준다(단원이
+// 없는 학생은 건드리지 않음 — 그건 mergeSchoolTextbookUnits의 몫). 복사
+// 이후엔 각자 시트에서 다시 자유롭게 개별 조정할 수 있다.
+export async function broadcastTextSourceSteps(input: {
+  school: string;
+  grade: string;
+  excludeStudentId: string;
+  category: TextCategory;
+  label: string;
+  steps: { label: string; done: boolean }[];
+}): Promise<{ studentId: string; studentName: string }[]> {
+  const entries = await getAllExamPrepEntries();
+  const targets = entries.filter(
+    (e) => e.student.id !== input.excludeStudentId && e.student.school === input.school && e.student.grade === input.grade
+  );
+  const doneByLabel = new Map(input.steps.map((s) => [s.label, s.done]));
+
+  const results = await Promise.all(
+    targets.map(async (e) => {
+      const level = (getSelect(e.page, "학교급") as SchoolLevel | null) ?? "중등";
+      const data = parseExamPrepData(getRichText(e.page, "데이터"), level);
+      const sources = data.level === "중등" ? data.middle.textSources : data.high.textSources;
+      const idx = sources.findIndex((t) => t.category === input.category && t.label === input.label);
+      if (idx === -1) return null; // 이 단원이 없는 학생은 건드리지 않음
+
+      const nextSource: TextSource = {
+        ...sources[idx],
+        steps: sources[idx].steps.map((s) => (doneByLabel.has(s.label) ? { ...s, done: doneByLabel.get(s.label)! } : s)),
+      };
+      const nextSources = sources.map((t, i) => (i === idx ? nextSource : t));
+      const nextData: ExamPrepData =
+        data.level === "중등"
+          ? { level: "중등", middle: { ...data.middle, textSources: nextSources } }
+          : { level: "고등", high: { ...data.high, textSources: nextSources } };
+
+      await notion.pages.update({
+        page_id: e.page.id,
+        properties: {
+          데이터: { rich_text: chunkRichText(JSON.stringify(nextData)) },
+          진행률: { number: computeProgress(nextData) },
+          갱신일: { date: { start: todayKST() } },
+        },
+      });
+      return { studentId: e.student.id, studentName: e.student.name };
+    })
+  );
+  return results.filter((r): r is { studentId: string; studentName: string } => r !== null);
+}
+
 // 시험결과 입력/저장 — 기존 DB⑦시험성적에 이어서 기록한다(대시보드의
 // "직전 학교시험 점수"/성적 추이 차트가 그대로 이 데이터를 함께 사용).
 export async function createExamScore(input: {
