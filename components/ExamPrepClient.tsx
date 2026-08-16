@@ -386,6 +386,15 @@ function TextSourceGroup({
   }
   const addLabel = middleFields ? "과 추가" : `${category} 추가`;
 
+  // 모의고사/부교재는 회차·교재별로 항목이 많이 쌓여 스크롤이 길어지므로,
+  // 같은 detail(회차명·교재명)끼리 묶어서 접고 펼 수 있게 한다. detail이
+  // 비어있는 항목은 묶을 기준이 없어 그냥 그대로(펼친 채) 보여준다.
+  const groupable = category === "모의고사" || category === "부교재";
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  function toggleGroup(key: string) {
+    setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
+
   // 모의고사 독해는 "18-45" 범위로만 나올 때가 있어, 번호 하나하나(21번,
   // 22번 ...)를 워크북 진도가 독립적인 항목으로 한 번에 만들어준다.
   const [rangeName, setRangeName] = useState("");
@@ -444,17 +453,99 @@ function TextSourceGroup({
           등록된 {category}가 없습니다.
         </p>
       )}
-      {sources.map((s) => (
-        <TextSourceEditor
-          key={s.id}
-          source={s}
-          onChange={(next) => update(s.id, next)}
-          onRemove={() => remove(s.id)}
-          labelDatalistId={labelDatalistId}
-          middleFields={middleFields}
-          onBroadcast={onBroadcastSource ? () => onBroadcastSource(s) : undefined}
-        />
-      ))}
+      {!groupable &&
+        sources.map((s) => (
+          <TextSourceEditor
+            key={s.id}
+            source={s}
+            onChange={(next) => update(s.id, next)}
+            onRemove={() => remove(s.id)}
+            labelDatalistId={labelDatalistId}
+            middleFields={middleFields}
+            onBroadcast={onBroadcastSource ? () => onBroadcastSource(s) : undefined}
+          />
+        ))}
+      {groupable &&
+        (() => {
+          const groupOrder: string[] = [];
+          const groups = new Map<string, TextSource[]>();
+          const loose: TextSource[] = [];
+          for (const s of sources) {
+            const key = s.detail.trim();
+            if (!key) {
+              loose.push(s);
+              continue;
+            }
+            if (!groups.has(key)) {
+              groups.set(key, []);
+              groupOrder.push(key);
+            }
+            groups.get(key)!.push(s);
+          }
+          return (
+            <>
+              {loose.map((s) => (
+                <TextSourceEditor
+                  key={s.id}
+                  source={s}
+                  onChange={(next) => update(s.id, next)}
+                  onRemove={() => remove(s.id)}
+                  labelDatalistId={labelDatalistId}
+                  middleFields={middleFields}
+                  onBroadcast={onBroadcastSource ? () => onBroadcastSource(s) : undefined}
+                />
+              ))}
+              {groupOrder.map((key) => {
+                const group = groups.get(key)!;
+                const isCollapsed = collapsed[key] ?? true;
+                const stepsDone = group.reduce((sum, s) => sum + s.steps.filter((st) => st.done).length, 0);
+                const stepsTotal = group.reduce((sum, s) => sum + s.steps.length, 0);
+                return (
+                  <div key={key} style={{ marginTop: 8, border: "1px solid var(--border)", borderRadius: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(key)}
+                      style={{
+                        display: "flex",
+                        width: "100%",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "8px 10px",
+                        background: "var(--bg)",
+                        border: "none",
+                        borderRadius: 8,
+                        cursor: "pointer",
+                        textAlign: "left",
+                      }}
+                    >
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>
+                        {isCollapsed ? "▶" : "▼"} {key} ({group.length}건)
+                      </span>
+                      <span className="muted" style={{ fontSize: 12 }}>
+                        워크북 {stepsDone}/{stepsTotal}
+                      </span>
+                    </button>
+                    {!isCollapsed && (
+                      <div style={{ padding: "0 8px 8px 8px" }}>
+                        {group.map((s) => (
+                          <TextSourceEditor
+                            key={s.id}
+                            source={s}
+                            onChange={(next) => update(s.id, next)}
+                            onRemove={() => remove(s.id)}
+                            labelDatalistId={labelDatalistId}
+                            middleFields={middleFields}
+                            onBroadcast={onBroadcastSource ? () => onBroadcastSource(s) : undefined}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          );
+        })()}
     </div>
   );
 }
