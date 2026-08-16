@@ -512,13 +512,14 @@ function TextSourceGroup({
                         alignItems: "center",
                         padding: "8px 10px",
                         background: "var(--bg)",
+                        color: "var(--text)",
                         border: "none",
                         borderRadius: 8,
                         cursor: "pointer",
                         textAlign: "left",
                       }}
                     >
-                      <span style={{ fontSize: 13, fontWeight: 600 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>
                         {isCollapsed ? "▶" : "▼"} {key} ({group.length}건)
                       </span>
                       <span className="muted" style={{ fontSize: 12 }}>
