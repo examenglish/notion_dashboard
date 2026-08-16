@@ -18,7 +18,7 @@ export type NamedItem = {
 // 중등 내신대비 문제풀이 5종 — 특정 과(Lesson)에 매인 게 아니라 시험범위
 // 전체에 걸쳐 도는 별도 교재/프린트라 워크북 9단계를 씌우지 않고, 카테고리별
 // 완료 체크리스트로만 관리한다(카테고리당 여러 건 등록 가능).
-export const MIDDLE_PRACTICE_CATEGORIES = ["자주 틀리는 문제", "기출문제", "추가문제", "백발백중", "적중백"] as const;
+export const MIDDLE_PRACTICE_CATEGORIES = ["자주 틀리는 문제", "기출문제", "백발백중", "적중백", "추가문제"] as const;
 export type PracticeCategory = (typeof MIDDLE_PRACTICE_CATEGORIES)[number];
 
 export type MiddleData = {

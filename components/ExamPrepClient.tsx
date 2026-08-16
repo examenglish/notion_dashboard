@@ -280,7 +280,7 @@ function TextSourceEditor({
             className="secondary"
             onClick={onBroadcast}
             disabled={!source.label.trim()}
-            title="같은 학교·학년에서 이 단원을 이미 가진 다른 학생들에게 지금 체크 상태를 한 번 적용합니다"
+            title="같은 학교·학년에서 이 단원을 이미 가진, 내가 담당교사로 등록된 다른 학생들에게만 지금 체크 상태를 한 번 적용합니다"
             style={{ padding: "4px 8px", fontSize: 12 }}
           >
             전체 적용
@@ -588,7 +588,7 @@ export function ExamPrepEditor({
   async function handleBroadcastSteps(source: TextSource) {
     if (!sheet?.school || !sheet?.grade || !source.label.trim()) return;
     const ok = window.confirm(
-      `${sheet.school} ${sheet.grade}에서 "${source.label}" 단원을 이미 가진 다른 학생들에게 지금 워크북 체크 상태를 적용합니다. 계속할까요?`
+      `${sheet.school} ${sheet.grade}에서 "${source.label}" 단원을 이미 가진, 내가 담당교사로 등록된 다른 학생들에게만 지금 워크북 체크 상태를 적용합니다. 계속할까요?`
     );
     if (!ok) return;
     try {
@@ -612,7 +612,7 @@ export function ExamPrepEditor({
       const { updated } = await res.json();
       window.alert(
         updated.length === 0
-          ? "이 단원을 가진 다른 학생이 없습니다."
+          ? "이 단원을 가진, 내가 담당교사로 등록된 다른 학생이 없습니다."
           : `${updated.map((u: { studentName: string }) => u.studentName).join(", ")} (${updated.length}명)에게 적용했습니다.`
       );
     } catch {
@@ -814,15 +814,7 @@ export function ExamPrepEditor({
 
       {level === "중등" && data.level === "중등" && (
         <>
-          <label>학교 프린트</label>
-          <input
-            type="text"
-            list="schoolPrintOptions"
-            value={data.middle.schoolPrint}
-            onChange={(e) => setData({ level: "중등", middle: { ...data.middle, schoolPrint: e.target.value } })}
-          />
-
-          <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>
+          <p className="muted" style={{ fontSize: 12 }}>
             교과서·부교재는 과(Lesson)마다 워크북 9단계(영어빈칸 · 동사형 · 어법 · 순서배열 · 영작 · 주제문 · 제목 ·
             요약문 · 변형문제)와 단어암기, 본문암기·대화문암기·성취도를 관리합니다. 과를 여러 건 등록할 수 있어요.
           </p>
@@ -841,6 +833,14 @@ export function ExamPrepEditor({
               onBroadcastSource={handleBroadcastSteps}
             />
           ))}
+
+          <label style={{ marginTop: 16 }}>학교 프린트</label>
+          <input
+            type="text"
+            list="schoolPrintOptions"
+            value={data.middle.schoolPrint}
+            onChange={(e) => setData({ level: "중등", middle: { ...data.middle, schoolPrint: e.target.value } })}
+          />
 
           <p style={{ marginTop: 16, marginBottom: 4, fontWeight: 600 }}>내신대비 문제풀이</p>
           {MIDDLE_PRACTICE_CATEGORIES.map((cat) => (

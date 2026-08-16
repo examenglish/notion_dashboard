@@ -3197,8 +3197,16 @@ function mergeSchoolUnits(data: ExamPrepData, entry: SchoolExamRangeEntry | null
       const added = missing.map((label) => ({ ...newMiddleTextSource(cat, label), detail: catUnits.name }));
       textSources = [...textSources, ...added];
     }
-    if (textSources === data.middle.textSources) return data;
-    return { level: "중등", middle: { ...data.middle, textSources } };
+    // 중등 학교프린트는(고등과 달리) 단일 문자열 필드라 "없는 것만 추가"가
+    // 불가능하다 — 이미 뭔가 적혀 있으면 절대 덮어쓰지 않고, 완전히
+    // 비어있을 때만 학교 값으로 채운다.
+    const printUnits = entry.units["학교프린트"];
+    const schoolPrint =
+      printUnits && printUnits.units.length > 0 && !data.middle.schoolPrint.trim()
+        ? printUnits.units.join(", ")
+        : data.middle.schoolPrint;
+    if (textSources === data.middle.textSources && schoolPrint === data.middle.schoolPrint) return data;
+    return { level: "중등", middle: { ...data.middle, textSources, schoolPrint } };
   }
   let textSources = data.high.textSources;
   for (const cat of TEXT_CATEGORIES) {
@@ -3218,7 +3226,9 @@ function mergeSchoolUnits(data: ExamPrepData, entry: SchoolExamRangeEntry | null
 // 동기화하지 않는다 — 대신 "다같이 여기까지 나갔다"는 순간 한 번, 그
 // 단원을 이미 가진 다른 학생들에게 지금 체크 상태를 복사해준다(단원이
 // 없는 학생은 건드리지 않음 — 그건 mergeSchoolUnits의 몫). 복사
-// 이후엔 각자 시트에서 다시 자유롭게 개별 조정할 수 있다.
+// 이후엔 각자 시트에서 다시 자유롭게 개별 조정할 수 있다. staffName이
+// 담당교사 목록에 없는 학생은 절대 건드리지 않는다 — 다른 선생님이 맡은
+// 학생 진도를 실수로 바꾸는 일을 막기 위함.
 export async function broadcastTextSourceSteps(input: {
   school: string;
   grade: string;
@@ -3226,10 +3236,16 @@ export async function broadcastTextSourceSteps(input: {
   category: TextCategory;
   label: string;
   steps: { label: string; done: boolean }[];
+  staffName: string;
 }): Promise<{ studentId: string; studentName: string }[]> {
   const entries = await getAllExamPrepEntries();
   const targets = entries.filter(
-    (e) => e.student.id !== input.excludeStudentId && e.student.school === input.school && e.student.grade === input.grade
+    (e) =>
+      e.student.id !== input.excludeStudentId &&
+      e.student.school === input.school &&
+      e.student.grade === input.grade &&
+      !!input.staffName &&
+      splitTeachers(getRichText(e.page, "담당교사")).includes(input.staffName)
   );
   const doneByLabel = new Map(input.steps.map((s) => [s.label, s.done]));
 

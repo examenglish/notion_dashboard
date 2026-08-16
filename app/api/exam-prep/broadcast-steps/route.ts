@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { broadcastTextSourceSteps } from "@/lib/notion";
 import { TEXT_CATEGORIES } from "@/lib/examPrep";
+import { readStaffName } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
 // 학생 시트에서 "전체 적용"을 누르면 호출 — 그 단원을 이미 가진 같은
-// 학교·학년의 다른 학생들에게 지금 워크북 체크 상태를 한 번 복사한다.
+// 학교·학년의 다른 학생들 중, 로그인한 본인이 담당교사로 등록된 학생에
+// 한해서만 지금 워크북 체크 상태를 한 번 복사한다.
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   if (
@@ -29,6 +31,7 @@ export async function POST(req: NextRequest) {
       category: body.category,
       label: body.label,
       steps: body.steps,
+      staffName: readStaffName(req),
     });
     return NextResponse.json({ updated });
   } catch (e: any) {

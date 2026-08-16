@@ -109,7 +109,9 @@ function SchoolExamRangePanel({
   const [error, setError] = useState<string | null>(null);
 
   const level = levelFromGrade(grade);
-  const categories = level === "중등" ? MIDDLE_TEXT_CATEGORIES : TEXT_CATEGORIES;
+  // 중등 학교프린트는 학생 쪽에서 단일 문자열 필드라 MIDDLE_TEXT_CATEGORIES엔
+  // 없지만, 이 패널에서는 입력할 수 있어야 한다(비어있을 때만 채워짐).
+  const categories: TextCategory[] = level === "중등" ? [...MIDDLE_TEXT_CATEGORIES, "학교프린트"] : TEXT_CATEGORIES;
 
   useEffect(() => {
     if (!grades.includes(grade)) setGrade(grades[0] ?? "");
@@ -273,7 +275,11 @@ function SchoolExamRangePanel({
                     </div>
                     <div>
                       <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                        {cat} 단원 (쉼표로 구분 — 없는 단원만 학생 시트에 자동 추가, 기존 진도는 안 건드림)
+                        {cat} 단원 (쉼표로 구분 —{" "}
+                        {level === "중등" && cat === "학교프린트"
+                          ? "학생 시트가 비어있을 때만 채워짐, 이미 적혀있으면 안 건드림"
+                          : "없는 단원만 학생 시트에 자동 추가, 기존 진도는 안 건드림"}
+                        )
                       </label>
                       <input
                         type="text"
