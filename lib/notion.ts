@@ -2907,8 +2907,43 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
     progress: getNumber(page, "진행률") ?? 0,
     weakPoints: getRichText(page, "취약부분"),
     updatedAt: getDate(page, "갱신일"),
-    data: mergeSchoolUnits(parseExamPrepData(getRichText(page, "데이터"), level), schoolExamRange),
+    // 이미 저장된 시트가 있는 학생은 여기서 더 이상 학교 단원을 재병합하지
+    // 않는다 — 매번 읽을 때마다 병합하면, 학생이 명시적으로 지운 단원이
+    // DB⑩에 그대로 남아있는 한 열 때마다 계속 되살아나는 문제가 있었다
+    // (2026-08-17 임채민 사례로 발견). 이제 병합은 upsertSchoolExamRange가
+    // 저장되는 시점에 pushSchoolUnitsToStudents가 1회만 밀어넣고, 그 뒤로는
+    // 학생이 지우면 지운 채로 유지된다.
+    data: parseExamPrepData(getRichText(page, "데이터"), level),
   };
+}
+
+// DB⑩(학교별 시험범위)이 저장되는 시점에, 같은 학교+학년의 이미 저장된
+// 시험대비 시트들에 "지금 없는 단원만" 즉시 채워 넣는다 — getExamPrepSheet는
+// 더 이상 읽을 때마다 재병합하지 않으므로, 새 단원이 학생 시트에 반영되는
+// 유일한 통로가 이 함수다. 아직 시트 자체가 없는 학생(페이지 미생성)은
+// 건드리지 않는다 — 그 학생은 처음 시트를 열 때 getExamPrepSheet의 "no page"
+// 분기가 알아서 최신 DB⑩ 값으로 채워준다.
+export async function pushSchoolUnitsToStudents(entry: SchoolExamRangeEntry): Promise<number> {
+  const entries = await getAllExamPrepEntries();
+  const targets = entries.filter((e) => e.student.school === entry.school && e.student.grade === entry.grade);
+  let updated = 0;
+  await Promise.all(
+    targets.map(async (e) => {
+      const level = (getSelect(e.page, "학교급") as SchoolLevel | null) ?? levelFromGrade(e.student.grade) ?? "중등";
+      const data = parseExamPrepData(getRichText(e.page, "데이터"), level);
+      const merged = mergeSchoolUnits(data, entry);
+      if (merged === data) return;
+      await notion.pages.update({
+        page_id: e.page.id,
+        properties: {
+          데이터: { rich_text: chunkRichText(JSON.stringify(merged)) },
+          진행률: { number: computeProgress(merged) },
+        },
+      });
+      updated++;
+    })
+  );
+  return updated;
 }
 
 export async function saveExamPrepSheet(input: {

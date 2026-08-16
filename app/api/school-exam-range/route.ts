@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSchoolExamRange, getSchoolExamRangeHistory, upsertSchoolExamRange, type CategoryUnits } from "@/lib/notion";
+import {
+  getSchoolExamRange,
+  getSchoolExamRangeHistory,
+  upsertSchoolExamRange,
+  pushSchoolUnitsToStudents,
+  type CategoryUnits,
+} from "@/lib/notion";
 import { TEXT_CATEGORIES, type TextCategory } from "@/lib/examPrep";
 
 export const dynamic = "force-dynamic";
@@ -58,6 +64,7 @@ export async function POST(req: NextRequest) {
       examEndDate: typeof body.examEndDate === "string" && body.examEndDate ? body.examEndDate : null,
       units: parseUnitsBody(body),
     });
+    await pushSchoolUnitsToStudents(entry);
     return NextResponse.json(entry);
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "저장에 실패했습니다." }, { status: 500 });
