@@ -254,6 +254,7 @@ export default function ExamPrepDirectorClient() {
   const [query, setQuery] = useState("");
   const [levelFilter, setLevelFilter] = useState<"" | SchoolLevel>("");
   const [rangeSchool, setRangeSchool] = useState("");
+  const [schoolQuery, setSchoolQuery] = useState("");
 
   function reloadOverview() {
     fetch("/api/exam-prep")
@@ -319,12 +320,19 @@ export default function ExamPrepDirectorClient() {
     setStudentId("");
     setQuery("");
     setRangeSchool("");
+    setSchoolQuery("");
   }
 
   function selectRangeSchool(school: string) {
     reset();
     setRangeSchool(school);
   }
+
+  const schoolSearchResults = useMemo(() => {
+    const q = schoolQuery.trim();
+    if (!q) return [];
+    return schools.filter((s) => s.includes(q));
+  }, [schools, schoolQuery]);
 
   return (
     <div className="flex items-start gap-4" style={{ height: "calc(100vh - 8.5rem)" }}>
@@ -380,14 +388,29 @@ export default function ExamPrepDirectorClient() {
         </Card>
 
         <Card className="flex flex-1 flex-col overflow-hidden">
-          <CardHeader>
+          <CardHeader className="flex-col items-stretch gap-2.5">
             <CardTitle className="text-[13px] font-normal text-muted-foreground">학교 찾기</CardTitle>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="search"
+                placeholder="학교 이름으로 검색"
+                value={schoolQuery}
+                onChange={(e) => setSchoolQuery(e.target.value)}
+                className="pl-8 text-[13px] placeholder:font-normal"
+              />
+            </div>
           </CardHeader>
           <CardContent className="flex-1 space-y-0.5 overflow-y-auto pt-0.5">
-            {schools.length === 0 && <p className="py-6 text-center text-xs text-muted-foreground">학교 없음</p>}
-            {schools.map((s) => (
-              <BrowseRow key={s} label={s} active={rangeSchool === s} onClick={() => selectRangeSchool(s)} />
-            ))}
+            {schoolQuery.trim() === "" ? (
+              <p className="py-6 text-center text-xs text-muted-foreground">학교 이름을 입력하세요.</p>
+            ) : schoolSearchResults.length === 0 ? (
+              <p className="py-6 text-center text-xs text-muted-foreground">검색 결과가 없습니다.</p>
+            ) : (
+              schoolSearchResults.map((s) => (
+                <BrowseRow key={s} label={s} active={rangeSchool === s} onClick={() => selectRangeSchool(s)} />
+              ))
+            )}
           </CardContent>
         </Card>
       </div>
