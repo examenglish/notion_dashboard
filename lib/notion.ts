@@ -34,6 +34,7 @@ import {
   newTextSource,
   newMiddleTextSource,
   splitTeachers,
+  parseNumberRange,
 } from "./examPrep";
 
 const STAFF_CACHE_TAG = "staff-list";
@@ -3152,7 +3153,9 @@ export async function upsertSchoolExamRange(input: {
   };
   for (const cat of TEXT_CATEGORIES) {
     const raw = input.units[cat] ?? { name: "", units: [] };
-    const cleanedList = raw.units.map((u) => u.trim()).filter(Boolean);
+    // 모의고사는 "18-45"처럼 번호 범위로 들어올 수 있어, 저장 전에 번호
+    // 하나하나(21번, 22번 ...)로 펼쳐서 학생 시트에 그대로 병합될 수 있게 한다.
+    const cleanedList = cat === "모의고사" ? parseNumberRange(raw.units.join(",")) : raw.units.map((u) => u.trim()).filter(Boolean);
     cleanUnits[cat] = { name: raw.name, units: cleanedList };
     const props = CATEGORY_PROPS[cat];
     properties[props.name] = { rich_text: [{ text: { content: raw.name } }] };

@@ -198,6 +198,41 @@ export function computeProgress(data: ExamPrepData): number {
   return Math.round((done / total) * 100);
 }
 
+// 모의고사 독해는 "18-45" 같은 번호 범위나 "21,24,33-36" 같은 목록으로만
+// 나오는 경우가 있어, 번호 하나하나를 "21번" 항목으로 펼쳐준다 — 각 번호가
+// 워크북 9단계를 독립적으로 추적하기 위해서다. "1과"처럼 숫자로 시작하지
+// 않는 토큰은 그대로 한 항목으로 통과시킨다(모의고사가 아닌 카테고리와도
+// 공유해서 써도 안전하도록).
+export function parseNumberRange(text: string): string[] {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  const push = (label: string) => {
+    if (label && !seen.has(label)) {
+      seen.add(label);
+      labels.push(label);
+    }
+  };
+  for (const rawPart of text.split(",")) {
+    const part = rawPart.trim();
+    if (!part) continue;
+    const rangeMatch = part.match(/^(\d+)\s*[-~]\s*(\d+)$/);
+    if (rangeMatch) {
+      let a = parseInt(rangeMatch[1], 10);
+      let b = parseInt(rangeMatch[2], 10);
+      if (a > b) [a, b] = [b, a];
+      for (let n = a; n <= b; n++) push(`${n}번`);
+      continue;
+    }
+    const singleMatch = part.match(/^(\d+)번?$/);
+    if (singleMatch) {
+      push(`${parseInt(singleMatch[1], 10)}번`);
+      continue;
+    }
+    push(part);
+  }
+  return labels;
+}
+
 export function joinTeachers(teachers: string[]): string {
   return teachers.map((t) => t.trim()).filter(Boolean).join(", ");
 }

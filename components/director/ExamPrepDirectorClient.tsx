@@ -81,7 +81,7 @@ function emptyUnitsForm(): Record<TextCategory, CategoryForm> {
 const CATEGORY_UNITS_PLACEHOLDER: Record<TextCategory, string> = {
   교과서: "예: 1과, 2과, 3과",
   부교재: "예: 1강, 2강, 3강",
-  모의고사: "예: 2025년 6월 모의고사, 2025년 9월 모의고사",
+  모의고사: "예: 18-45 (번호 범위) 또는 21, 24, 33-36",
   학교프린트: "예: 1학기 중간대비 프린트",
 };
 
@@ -263,11 +263,17 @@ function SchoolExamRangePanel({
                     <p className="text-xs font-semibold text-foreground">{cat}</p>
                     <div>
                       <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                        {cat} 이름 (공통 교재명 — 없으면 비워두세요)
+                        {cat === "모의고사" ? "모의고사 회차명" : `${cat} 이름 (공통 교재명 — 없으면 비워두세요)`}
                       </label>
                       <input
                         type="text"
-                        placeholder={cat === "교과서" || cat === "부교재" ? "예: 영어2 능률(오)" : "선택사항"}
+                        placeholder={
+                          cat === "교과서" || cat === "부교재"
+                            ? "예: 영어2 능률(오)"
+                            : cat === "모의고사"
+                              ? "예: 2025년 6월 모의고사"
+                              : "선택사항"
+                        }
                         value={unitsForm[cat].name}
                         onChange={(e) => setUnitsForm((prev) => ({ ...prev, [cat]: { ...prev[cat], name: e.target.value } }))}
                         className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
@@ -275,7 +281,7 @@ function SchoolExamRangePanel({
                     </div>
                     <div>
                       <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                        {cat} 단원 (쉼표로 구분 —{" "}
+                        {cat === "모의고사" ? "번호 범위" : `${cat} 단원`} (쉼표로 구분 —{" "}
                         {level === "중등" && cat === "학교프린트"
                           ? "학생 시트가 비어있을 때만 채워짐, 이미 적혀있으면 안 건드림"
                           : "없는 단원만 학생 시트에 자동 추가, 기존 진도는 안 건드림"}

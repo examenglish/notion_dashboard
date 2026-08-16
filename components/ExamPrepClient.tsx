@@ -23,6 +23,7 @@ import {
   newNamedItem,
   newTextSource,
   newMiddleTextSource,
+  parseNumberRange,
   computeProgress,
   computeCategoryBreakdown,
 } from "@/lib/examPrep";
@@ -199,11 +200,21 @@ function NamedItemList({
 // 체크박스만 토글하는 컴팩트한 칩 형태로 보여준다.
 function WorkbookSteps({ steps, onChange }: { steps: NamedItem[]; onChange: (steps: NamedItem[]) => void }) {
   const doneCount = steps.filter((s) => s.done).length;
+  const allDone = steps.length > 0 && doneCount === steps.length;
   return (
     <div>
       <span className="muted" style={{ fontSize: 11 }}>
         워크북 {doneCount}/{steps.length}
       </span>
+      <button
+        type="button"
+        className="secondary"
+        onClick={() => onChange(steps.map((s) => ({ ...s, done: !allDone })))}
+        title="대부분 끝났으면 전체를 누른 뒤 안 한 것만 다시 체크 해제하면 더 빠릅니다"
+        style={{ marginLeft: 6, padding: "1px 8px", fontSize: 11 }}
+      >
+        {allDone ? "전체 해제" : "전체"}
+      </button>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 4 }}>
         {steps.map((s, i) => (
           <label
@@ -373,6 +384,26 @@ function TextSourceGroup({
     onChange(sources.filter((s) => s.id !== id));
   }
   const addLabel = middleFields ? "과 추가" : `${category} 추가`;
+
+  // 모의고사 독해는 "18-45" 범위로만 나올 때가 있어, 번호 하나하나(21번,
+  // 22번 ...)를 워크북 진도가 독립적인 항목으로 한 번에 만들어준다.
+  const [rangeName, setRangeName] = useState("");
+  const [rangeText, setRangeText] = useState("");
+  function addRange() {
+    const labels = parseNumberRange(rangeText);
+    if (labels.length === 0) return;
+    const existing = new Set(sources.map((s) => s.label));
+    const toAdd = labels.filter((l) => !existing.has(l));
+    if (toAdd.length === 0) {
+      window.alert("이미 모두 등록된 번호입니다.");
+      return;
+    }
+    const factory = middleFields ? newMiddleTextSource : newTextSource;
+    const added = toAdd.map((label) => ({ ...factory(category, label), detail: rangeName }));
+    onChange([...sources, ...added]);
+    setRangeText("");
+  }
+
   return (
     <div style={{ marginTop: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -386,6 +417,27 @@ function TextSourceGroup({
           + {addLabel}
         </button>
       </div>
+      {category === "모의고사" && (
+        <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            type="text"
+            placeholder="회차명 (예: 2025년 6월 모의고사)"
+            value={rangeName}
+            onChange={(e) => setRangeName(e.target.value)}
+            style={{ flex: "1 1 160px" }}
+          />
+          <input
+            type="text"
+            placeholder="번호 범위 (예: 18-45 또는 21, 24, 33-36)"
+            value={rangeText}
+            onChange={(e) => setRangeText(e.target.value)}
+            style={{ flex: "1 1 200px" }}
+          />
+          <button type="button" className="secondary" onClick={addRange} style={{ padding: "4px 10px", fontSize: 12 }}>
+            번호 범위로 추가
+          </button>
+        </div>
+      )}
       {sources.length === 0 && (
         <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
           등록된 {category}가 없습니다.
