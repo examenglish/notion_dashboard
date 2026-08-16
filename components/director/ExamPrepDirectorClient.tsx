@@ -63,6 +63,8 @@ type SchoolExamRangeEntry = {
   grade: string;
   examTitle: string;
   examRange: string;
+  textbookName: string;
+  textbookUnits: string[];
   updatedAt: string | null;
 };
 
@@ -83,6 +85,8 @@ function SchoolExamRangePanel({
   const [loading, setLoading] = useState(false);
   const [examTitle, setExamTitle] = useState("");
   const [examRange, setExamRange] = useState("");
+  const [textbookName, setTextbookName] = useState("");
+  const [textbookUnitsText, setTextbookUnitsText] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -102,6 +106,8 @@ function SchoolExamRangePanel({
         setHistory(d.history);
         setExamTitle(d.latest?.examTitle ?? "");
         setExamRange(d.latest?.examRange ?? "");
+        setTextbookName(d.latest?.textbookName ?? "");
+        setTextbookUnitsText((d.latest?.textbookUnits ?? []).join(", "));
       })
       .finally(() => setLoading(false));
   }, [school, grade]);
@@ -114,10 +120,14 @@ function SchoolExamRangePanel({
     setSaving(true);
     setError(null);
     try {
+      const textbookUnits = textbookUnitsText
+        .split(",")
+        .map((u) => u.trim())
+        .filter(Boolean);
       const res = await fetch("/api/school-exam-range", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ school, grade, examTitle, examRange }),
+        body: JSON.stringify({ school, grade, examTitle, examRange, textbookName, textbookUnits }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -170,10 +180,16 @@ function SchoolExamRangePanel({
                   현재 값 · 대상 학생 {affectedCount(grade)}명
                 </p>
                 {latest ? (
-                  <p className="mt-1 text-sm text-foreground">
-                    <span className="font-medium">{latest.examTitle}</span> — {latest.examRange || "(범위 미입력)"}
-                    {latest.updatedAt && <span className="ml-2 text-xs text-muted-foreground">{latest.updatedAt} 갱신</span>}
-                  </p>
+                  <>
+                    <p className="mt-1 text-sm text-foreground">
+                      <span className="font-medium">{latest.examTitle}</span> — {latest.examRange || "(범위 미입력)"}
+                      {latest.updatedAt && <span className="ml-2 text-xs text-muted-foreground">{latest.updatedAt} 갱신</span>}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      교과서: {latest.textbookName || "(교재명 미입력)"} ·{" "}
+                      {latest.textbookUnits.length > 0 ? latest.textbookUnits.join(", ") : "(단원 미입력)"}
+                    </p>
+                  </>
                 ) : (
                   <p className="mt-1 text-sm text-muted-foreground">아직 등록된 시험범위가 없습니다.</p>
                 )}
@@ -204,6 +220,28 @@ function SchoolExamRangePanel({
                     onChange={(e) => setExamRange(e.target.value)}
                     rows={3}
                     className="w-full rounded-md border border-input bg-background px-2.5 py-2 text-sm text-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">교과서명</label>
+                  <input
+                    type="text"
+                    placeholder="예: 영어2 능률(오)"
+                    value={textbookName}
+                    onChange={(e) => setTextbookName(e.target.value)}
+                    className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                    교과서 단원 (쉼표로 구분 — 없는 단원만 학생 시트에 자동 추가, 기존 진도는 안 건드림)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="예: 1과, 2과, 3과"
+                    value={textbookUnitsText}
+                    onChange={(e) => setTextbookUnitsText(e.target.value)}
+                    className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm text-foreground"
                   />
                 </div>
                 {error && <p className="text-xs text-destructive">{error}</p>}

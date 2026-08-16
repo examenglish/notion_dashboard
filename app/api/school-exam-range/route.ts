@@ -40,6 +40,8 @@ export async function POST(req: NextRequest) {
       grade: body.grade,
       examTitle: body.examTitle,
       examRange: body.examRange,
+      textbookName: typeof body.textbookName === "string" ? body.textbookName : "",
+      textbookUnits: Array.isArray(body.textbookUnits) ? body.textbookUnits.filter((u: unknown) => typeof u === "string") : [],
     });
     return NextResponse.json(entry);
   } catch (e: any) {

@@ -2862,7 +2862,7 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
       progress: 0,
       weakPoints: "",
       updatedAt: null,
-      data: defaultDataFor(fallbackLevel),
+      data: mergeSchoolTextbookUnits(defaultDataFor(fallbackLevel), schoolExamRange),
     };
   }
 
@@ -2881,7 +2881,7 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
     progress: getNumber(page, "진행률") ?? 0,
     weakPoints: getRichText(page, "취약부분"),
     updatedAt: getDate(page, "갱신일"),
-    data: parseExamPrepData(getRichText(page, "데이터"), level),
+    data: mergeSchoolTextbookUnits(parseExamPrepData(getRichText(page, "데이터"), level), schoolExamRange),
   };
 }
 
@@ -3045,6 +3045,10 @@ export type SchoolExamRangeEntry = {
   grade: string;
   examTitle: string;
   examRange: string;
+  // 교과서 단원 "틀"만 학교+학년 단위로 동기화한다 — 어떤 단원이 있는지만
+  // 맞추고, 단원별 워크북 진도·단어암기는 절대 건드리지 않는다.
+  textbookName: string;
+  textbookUnits: string[];
   updatedAt: string | null;
 };
 
@@ -3055,6 +3059,11 @@ function parseSchoolExamRangeEntry(page: any): SchoolExamRangeEntry {
     grade: getSelect(page, "학년") ?? "",
     examTitle: getRichText(page, "시험명"),
     examRange: getRichText(page, "시험범위"),
+    textbookName: getRichText(page, "교과서명"),
+    textbookUnits: getRichText(page, "교과서단원")
+      .split(",")
+      .map((u) => u.trim())
+      .filter(Boolean),
     updatedAt: getDate(page, "갱신일"),
   };
 }
@@ -3098,28 +3107,44 @@ export async function getSchoolExamRangeLatestMap(): Promise<Map<string, SchoolE
   return map;
 }
 
-// 학교+학년+시험명이 같은 항목이 이미 있으면 시험범위만 갱신하고, 없으면
-// 새 항목(=새 시험 회차)을 만든다 — 과거 시험범위는 이력으로 남는다.
+// 학교+학년+시험명이 같은 항목이 이미 있으면 갱신하고, 없으면 새 항목(=새
+// 시험 회차)을 만든다 — 과거 시험범위는 이력으로 남는다. 교과서명/단원은
+// "학교 찾기" 화면이 매번 최신값으로 채운 채로 보내주므로 그대로 저장하면
+// 시험 회차가 바뀌어도 자연히 이어진다.
 export async function upsertSchoolExamRange(input: {
   school: string;
   grade: string;
   examTitle: string;
   examRange: string;
+  textbookName: string;
+  textbookUnits: string[];
 }): Promise<SchoolExamRangeEntry> {
   const existing = (await getSchoolExamRangeEntriesFor(input.school, input.grade)).find(
     (e) => e.examTitle === input.examTitle
   );
   const updatedAt = todayKST();
+  const textbookUnitsJoined = input.textbookUnits.map((u) => u.trim()).filter(Boolean).join(", ");
   const properties: any = {
     학교: { rich_text: [{ text: { content: input.school } }] },
     학년: { select: { name: input.grade } },
     시험명: { rich_text: [{ text: { content: input.examTitle } }] },
     시험범위: { rich_text: chunkRichText(input.examRange) },
+    교과서명: { rich_text: [{ text: { content: input.textbookName } }] },
+    교과서단원: { rich_text: chunkRichText(textbookUnitsJoined) },
     갱신일: { date: { start: updatedAt } },
+  };
+  const resultBase = {
+    school: input.school,
+    grade: input.grade,
+    examTitle: input.examTitle,
+    examRange: input.examRange,
+    textbookName: input.textbookName,
+    textbookUnits: input.textbookUnits.map((u) => u.trim()).filter(Boolean),
+    updatedAt,
   };
   if (existing) {
     await notion.pages.update({ page_id: existing.id, properties });
-    return { ...existing, examRange: input.examRange, updatedAt };
+    return { ...resultBase, id: existing.id };
   }
   const page = await notion.pages.create({
     parent: { data_source_id: DB.SCHOOL_EXAM_RANGE } as any,
@@ -3128,7 +3153,26 @@ export async function upsertSchoolExamRange(input: {
       ...properties,
     } as any,
   });
-  return { id: page.id, school: input.school, grade: input.grade, examTitle: input.examTitle, examRange: input.examRange, updatedAt };
+  return { ...resultBase, id: page.id };
+}
+
+// DB⑩의 교과서단원 "틀"을 학생의 기존 교과서 텍스트에 병합한다 — 없는
+// 단원만 새로 추가하고(steps/vocab은 빈 상태로 시작), 이미 있는 단원의
+// 워크북 진도·단어암기·메모는 절대 건드리지 않는다.
+function mergeSchoolTextbookUnits(data: ExamPrepData, entry: SchoolExamRangeEntry | null): ExamPrepData {
+  if (!entry || entry.textbookUnits.length === 0) return data;
+  if (data.level === "중등") {
+    const existingLabels = new Set(data.middle.textSources.filter((t) => t.category === "교과서").map((t) => t.label));
+    const missing = entry.textbookUnits.filter((u) => !existingLabels.has(u));
+    if (missing.length === 0) return data;
+    const added = missing.map((label) => ({ ...newMiddleTextSource("교과서", label), detail: entry.textbookName }));
+    return { level: "중등", middle: { ...data.middle, textSources: [...data.middle.textSources, ...added] } };
+  }
+  const existingLabels = new Set(data.high.textSources.filter((t) => t.category === "교과서").map((t) => t.label));
+  const missing = entry.textbookUnits.filter((u) => !existingLabels.has(u));
+  if (missing.length === 0) return data;
+  const added = missing.map((label) => ({ ...newTextSource("교과서", label), detail: entry.textbookName }));
+  return { level: "고등", high: { ...data.high, textSources: [...data.high.textSources, ...added] } };
 }
 
 // 시험결과 입력/저장 — 기존 DB⑦시험성적에 이어서 기록한다(대시보드의
