@@ -25,7 +25,7 @@ export default async function DirectorReportsPage() {
         />
 
         <main className="flex-1 overflow-y-auto bg-muted/50 px-6 py-6">
-          <StudentReportsClient />
+          <StudentReportsClient branchName={branchName} />
         </main>
       </div>
     </div>

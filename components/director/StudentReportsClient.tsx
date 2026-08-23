@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { stripClassSuffix } from "@/lib/format";
-import { todayKST } from "@/lib/date";
+import { todayKST, formatDateLabel } from "@/lib/date";
 
 type Student = {
   id: string;
@@ -48,7 +49,7 @@ function defaultFrom(): string {
   return `${y}-${m}-01`;
 }
 
-export default function StudentReportsClient() {
+export default function StudentReportsClient({ branchName }: { branchName: string }) {
   const [students, setStudents] = useState<Student[]>([]);
   const [classes, setClasses] = useState<ClassInfo[]>([]);
   const [loadingRoster, setLoadingRoster] = useState(true);
@@ -278,7 +279,7 @@ export default function StudentReportsClient() {
         <div className="print-area space-y-6">
           {reports.length === 0 && <p className="text-sm text-muted-foreground">생성된 리포트가 없습니다.</p>}
           {reports.map((r) => (
-            <ReportCard key={r.studentId} report={r} />
+            <ReportCard key={r.studentId} report={r} branchName={branchName} />
           ))}
         </div>
       )}
@@ -286,59 +287,195 @@ export default function StudentReportsClient() {
   );
 }
 
-function ReportCard({ report: r }: { report: StudentPeriodReport }) {
+// 조교클리닉 리포트 스킬의 브랜드 규격(로고/프라이머리 블루/통계카드/
+// 막대그래프/코멘트박스)을 이 웹앱 자체 CSS 변수(--primary 등, 이미 같은
+// 색상 #004ea2로 정의돼 있음)로 그대로 재현한다 — 그 스킬처럼 Claude가
+// Python+Playwright로 매번 렌더링하면 학생 1명당 별도 세션 비용이 들지만,
+// 여기선 순수 CSS/SVG라 학생 수와 무관하게 렌더링 비용이 0이다.
+function tierLabel(v: number | null, labels: [string, string, string]): string | null {
+  if (v === null) return null;
+  if (v >= 0.95) return labels[0];
+  if (v >= 0.8) return labels[1];
+  return labels[2];
+}
+
+// AI 문장 생성 없이 임계값 기반으로 조립하는 종합 코멘트 — 사실(수치) 그대로만
+// 서술하고 과장하지 않는다(클리닉리포트 스킬의 "사실 기반 요약" 원칙과 동일).
+function summarize(r: StudentPeriodReport): string {
+  if (r.loggedDays === 0) return "해당 기간에 등록된 수업 기록이 없습니다.";
+  const parts: string[] = [];
+  const att = tierLabel(r.attendanceRate, ["매우 우수한", "양호한", "다소 아쉬운"]);
+  const hw = tierLabel(r.homeworkRate, ["매우 성실한", "무난한", "보완이 필요한"]);
+  if (att) parts.push(`출석은 ${att} 수준을 유지하고 있습니다`);
+  if (hw) parts.push(`과제 수행은 ${hw} 편입니다`);
+  if (r.vocabPassRate !== null) parts.push(`단어 테스트는 ${Math.round(r.vocabPassRate * 100)}% 통과했습니다`);
+  return parts.length > 0 ? parts.join(". ") + "." : "기간 내 기록을 바탕으로 꾸준히 관리하고 있습니다.";
+}
+
+function RateBarChart({ rows }: { rows: { label: string; value: number | null }[] }) {
+  const width = 640;
+  const barHeight = 24;
+  const gap = 16;
+  const leftPad = 118;
+  const rightPad = 46;
+  const topPad = 8;
+  const bottomPad = 22;
+  const chartWidth = width - leftPad - rightPad;
+  const height = topPad + rows.length * (barHeight + gap) + bottomPad;
+
   return (
-    <div className="report-page rounded-lg border border-border bg-card p-5">
-      <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border pb-3">
+    <svg width="100%" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="출석·과제·단어 테스트 지표">
+      {[0, 25, 50, 75, 100].map((g) => {
+        const x = leftPad + (g / 100) * chartWidth;
+        return (
+          <g key={g}>
+            <line x1={x} y1={topPad} x2={x} y2={height - bottomPad + 4} stroke="#e1e5ec" strokeWidth={1} />
+            <text x={x} y={height - bottomPad + 16} fontSize={11} fill="#6b7280" textAnchor="middle">
+              {g}%
+            </text>
+          </g>
+        );
+      })}
+      {rows.map((row, i) => {
+        const y = topPad + i * (barHeight + gap);
+        const v = row.value ?? 0;
+        const w = (v / 100) * chartWidth;
+        return (
+          <g key={row.label}>
+            <text x={leftPad - 10} y={y + barHeight / 2 + 4} fontSize={12} fill="#14213d" textAnchor="end">
+              {row.label}
+            </text>
+            <rect x={leftPad} y={y} width={chartWidth} height={barHeight} fill="#f2f4f8" rx={4} />
+            {row.value !== null && <rect x={leftPad} y={y} width={w} height={barHeight} fill="#004ea2" rx={4} />}
+            <text x={leftPad + w + 6} y={y + barHeight / 2 + 4} fontSize={12} fontWeight={700} fill="#004ea2">
+              {row.value === null ? "기록 없음" : `${Math.round(row.value)}%`}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function ReportCard({ report: r, branchName }: { report: StudentPeriodReport; branchName: string }) {
+  const chartRows = [
+    { label: "출석률", value: r.attendanceRate === null ? null : r.attendanceRate * 100 },
+    { label: "과제 제출률", value: r.homeworkRate === null ? null : r.homeworkRate * 100 },
+    { label: "단어 테스트 통과율", value: r.vocabPassRate === null ? null : r.vocabPassRate * 100 },
+  ];
+  const statTiles: [string, string][] = [
+    ["출석률", pct(r.attendanceRate)],
+    ["과제 제출률", pct(r.homeworkRate)],
+    ["단어 테스트 통과율", pct(r.vocabPassRate)],
+    ["수업 기록", `${r.loggedDays}일`],
+  ];
+
+  return (
+    <div className="report-page rounded-lg border border-border bg-card p-6">
+      <div className="flex items-start justify-between gap-3 border-b-2 pb-4" style={{ borderColor: "var(--primary)" }}>
         <div>
-          <h2 className="text-lg font-bold text-foreground">{r.studentName} 학습현황 리포트</h2>
-          <p className="text-sm text-muted-foreground">
-            {r.school} {r.grade} · {r.classNames.map(stripClassSuffix).join(", ") || "소속반 없음"}
+          <p className="text-xs font-semibold tracking-wide" style={{ color: "var(--primary)" }}>
+            {branchName} · 학부모 발송용
+          </p>
+          <h2 className="mt-1 text-xl font-bold text-foreground">학습현황 리포트</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            기간 {r.from} ~ {r.to} · 발송일 {formatDateLabel(todayKST())}
           </p>
         </div>
-        <p className="text-sm text-muted-foreground">기간: {r.from} ~ {r.to}</p>
+        <Image src="/logo.png" alt="" width={140} height={26} className="h-6 w-auto shrink-0" />
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Badge variant="outline">출석률 {pct(r.attendanceRate)}</Badge>
-        <Badge variant="outline">과제 제출률 {pct(r.homeworkRate)}</Badge>
-        <Badge variant="outline">단어 테스트 통과율 {pct(r.vocabPassRate)}</Badge>
-        <Badge variant="outline">수업 기록 {r.loggedDays}일</Badge>
+      <div className="mt-4 rounded-md p-4" style={{ background: "var(--primary-tint)" }}>
+        <p className="text-lg font-bold text-foreground">{r.studentName}</p>
+        <p className="mt-0.5 text-sm" style={{ color: "var(--primary-dark)" }}>
+          {r.school} {r.grade} · {r.classNames.map(stripClassSuffix).join(", ") || "소속반 없음"}
+        </p>
       </div>
 
-      <h3 className="mt-4 text-sm font-semibold text-foreground">진도 현황</h3>
+      <div className="mt-4 grid grid-cols-4 gap-2">
+        {statTiles.map(([label, value]) => (
+          <div key={label} className="rounded-md border border-border p-3 text-center">
+            <p className="text-[11px] text-muted-foreground">{label}</p>
+            <p className="mt-1 text-base font-bold text-foreground">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      <h3 className="mt-5 text-sm font-semibold text-foreground">출석 · 과제 · 단어 테스트 지표</h3>
+      <div className="mt-2">
+        <RateBarChart rows={chartRows} />
+      </div>
+
+      <h3 className="mt-5 text-sm font-semibold text-foreground">진도 현황</h3>
       {r.progressLog.length === 0 ? (
         <p className="mt-1 text-sm text-muted-foreground">해당 기간 진도 기록이 없습니다.</p>
       ) : (
-        <table className="mt-1 w-full text-sm">
+        <table className="mt-1 w-full text-sm" style={{ wordBreak: "keep-all" }}>
+          <thead>
+            <tr style={{ background: "var(--primary-tint)" }}>
+              <th className="w-24 py-1.5 px-2 text-left text-xs font-semibold" style={{ color: "var(--primary-dark)" }}>
+                날짜
+              </th>
+              <th className="py-1.5 px-2 text-left text-xs font-semibold" style={{ color: "var(--primary-dark)" }}>
+                진도 내용
+              </th>
+            </tr>
+          </thead>
           <tbody>
             {r.progressLog.map((p, i) => (
               <tr key={i} className="border-b border-border last:border-b-0">
-                <td className="w-24 py-1.5 align-top text-muted-foreground">{p.date}</td>
-                <td className="py-1.5">{p.progress}</td>
+                <td className="py-1.5 px-2 align-top text-muted-foreground">{p.date}</td>
+                <td className="py-1.5 px-2">{p.progress}</td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
 
-      <h3 className="mt-4 text-sm font-semibold text-foreground">시험 성적</h3>
-      {r.examScores.length === 0 ? (
-        <p className="mt-1 text-sm text-muted-foreground">해당 기간 등록된 시험 성적이 없습니다.</p>
-      ) : (
-        <table className="mt-1 w-full text-sm">
-          <tbody>
-            {r.examScores.map((e, i) => (
-              <tr key={i} className="border-b border-border last:border-b-0">
-                <td className="w-24 py-1.5 text-muted-foreground">{e.date}</td>
-                <td className="py-1.5">{e.examName}</td>
-                <td className="w-16 py-1.5 text-muted-foreground">{e.subject ?? "-"}</td>
-                <td className="w-16 py-1.5 text-right font-medium">{e.score ?? "-"}</td>
+      {r.examScores.length > 0 && (
+        <>
+          <h3 className="mt-5 text-sm font-semibold text-foreground">시험 성적</h3>
+          <table className="mt-1 w-full text-sm">
+            <thead>
+              <tr style={{ background: "var(--primary-tint)" }}>
+                <th className="w-24 py-1.5 px-2 text-left text-xs font-semibold" style={{ color: "var(--primary-dark)" }}>
+                  날짜
+                </th>
+                <th className="py-1.5 px-2 text-left text-xs font-semibold" style={{ color: "var(--primary-dark)" }}>
+                  시험명
+                </th>
+                <th className="w-16 py-1.5 px-2 text-left text-xs font-semibold" style={{ color: "var(--primary-dark)" }}>
+                  과목
+                </th>
+                <th className="w-16 py-1.5 px-2 text-right text-xs font-semibold" style={{ color: "var(--primary-dark)" }}>
+                  점수
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {r.examScores.map((e, i) => (
+                <tr key={i} className="border-b border-border last:border-b-0">
+                  <td className="py-1.5 px-2 text-muted-foreground">{e.date}</td>
+                  <td className="py-1.5 px-2">{e.examName}</td>
+                  <td className="py-1.5 px-2 text-muted-foreground">{e.subject ?? "-"}</td>
+                  <td className="py-1.5 px-2 text-right font-medium">{e.score ?? "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
       )}
+
+      <div className="mt-5 rounded-md p-3" style={{ background: "var(--primary-tint)" }}>
+        <p className="text-xs font-semibold" style={{ color: "var(--primary-dark)" }}>
+          종합 코멘트
+        </p>
+        <p className="mt-1 text-sm text-foreground">{summarize(r)}</p>
+      </div>
+
+      <p className="mt-4 border-t border-border pt-2 text-center text-[11px] text-muted-foreground">
+        {branchName} · 본 리포트는 학부모님께 전달되는 학습현황 안내 자료입니다.
+      </p>
     </div>
   );
 }

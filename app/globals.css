@@ -983,6 +983,11 @@ th, td {
   padding-bottom: 8px;
 }
 
+@page {
+  size: A4 portrait;
+  margin: 12mm;
+}
+
 @media print {
   body * {
     visibility: hidden;
