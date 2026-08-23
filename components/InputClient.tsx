@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import StudentPicker from "./StudentPicker";
 import StaffPicker from "./StaffPicker";
@@ -21,8 +21,27 @@ import { stripClassSuffix } from "@/lib/format";
 
 type ClassOption = { id: string; name: string; type?: string };
 type RosterStudent = { id: string; name: string };
+// 그날 테스트/과제 채점 한 건 — "항목종류"(예: 단어테스트)와 정답수/총문항수.
+// correct/total은 입력 중 빈 문자열을 허용해야 해서(다 채우기 전에는 숫자로
+// 강제 변환하지 않음) 문자열로 들고 있다가 저장 시점에만 서버가 해석한다.
+type ScoreEntry = { type: string; correct: string; total: string };
+type PerStudentFlags = {
+  vocabFail: boolean;
+  homeworkIncomplete: boolean;
+  absent: boolean;
+  late: boolean;
+  individualNotice: string;
+  scores: ScoreEntry[];
+};
+
+function blankPerStudent(): PerStudentFlags {
+  return { vocabFail: false, homeworkIncomplete: false, absent: false, late: false, individualNotice: "", scores: [] };
+}
 
 const SUBJECT_OPTIONS = ["문법", "독해", "서술형", "구문", "듣기", "모의고사", "어법", "내신대비"];
+// 자주 쓰는 테스트/과제 항목 — 원클릭으로 컬럼 추가, 목록에 없는 항목은
+// 옆의 직접입력으로 얼마든지 늘릴 수 있다("추가 항목이 있을 수도 있다").
+const SCORE_TYPE_SUGGESTIONS = ["단어테스트", "문법테스트", "독해테스트", "서술형과제"];
 const GRADE_OPTIONS = ["초1", "초2", "초3", "초4", "초5", "초6", "중1", "중2", "중3", "고1", "고2", "고3"];
 const STATUS_OPTIONS = ["재원", "대기생", "휴원", "퇴원"];
 
@@ -54,12 +73,15 @@ function ClassRecordForm({
   const [extraStudents, setExtraStudents] = useState<RosterStudent[]>([]);
   const [extraPickerId, setExtraPickerId] = useState("");
   const [loadingRoster, setLoadingRoster] = useState(false);
-  const [perStudent, setPerStudent] = useState<
-    Record<
-      string,
-      { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean; late: boolean; individualNotice: string }
-    >
-  >({});
+  const [perStudent, setPerStudent] = useState<Record<string, PerStudentFlags>>({});
+  // 오늘 이 반에서 실제로 채점한 테스트/과제 종류(표의 열) — 학생마다
+  // 따로 고르지 않고 한 번만 정하면 모든 학생 행에 같은 열로 뜬다.
+  const [scoreTypes, setScoreTypes] = useState<string[]>([]);
+  const [scoreTypeInput, setScoreTypeInput] = useState("");
+  // 개별 안내사항은 내용이 있는 학생만 기본으로 펼쳐두고, 나머지는 이
+  // Set에 담긴 학생만 눌러서 펼친다 — 매 학생마다 빈 메모칸을 항상
+  // 띄우던 것이 스크롤을 가장 많이 잡아먹던 원인이었다.
+  const [openNoticeIds, setOpenNoticeIds] = useState<Set<string>>(new Set());
   const [showPreview, setShowPreview] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,11 +124,7 @@ function ClassRecordForm({
       .then((list: RosterStudent[]) => {
         setRoster(list);
         setExtraStudents([]); // switching class clears any manually-called-up guests
-        setPerStudent(
-          Object.fromEntries(
-            list.map((s) => [s.id, { vocabFail: false, homeworkIncomplete: false, absent: false, late: false, individualNotice: "" }])
-          )
-        );
+        setPerStudent(Object.fromEntries(list.map((s) => [s.id, blankPerStudent()])));
       })
       .finally(() => setLoadingRoster(false));
   }, [classId]);
@@ -142,11 +160,9 @@ function ClassRecordForm({
         setNextAssignment("");
         setNotice("");
         setExtraStudents([]);
-        setPerStudent(
-          Object.fromEntries(
-            rosterList.map((s) => [s.id, { vocabFail: false, homeworkIncomplete: false, absent: false, late: false, individualNotice: "" }])
-          )
-        );
+        setPerStudent(Object.fromEntries(rosterList.map((s) => [s.id, blankPerStudent()])));
+        setScoreTypes([]);
+        setOpenNoticeIds(new Set());
         // 행정실에 "결석예정"으로 이미 접수된 학생은 결석 체크를 미리
         // 반영해 강사가 다시 체크하지 않게 한다.
         if (plannedAbsentIds.length > 0) {
@@ -171,10 +187,29 @@ function ClassRecordForm({
       setPerStudent((cur) => {
         const next = { ...cur };
         for (const sid of rec.studentIds ?? []) {
-          next[sid] = rec.perStudent[sid] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false, individualNotice: "" };
+          const loaded = rec.perStudent[sid];
+          next[sid] = loaded ? { ...blankPerStudent(), ...loaded, scores: loaded.scores ?? [] } : blankPerStudent();
         }
         return next;
       });
+      // 이미 저장된 항목 종류를 그대로 열로 복원하고(등장 순서 유지),
+      // 내용이 있는 개별 안내사항은 다시 열어서 보여준다.
+      const loadedTypes: string[] = [];
+      const seenTypes = new Set<string>();
+      const toOpen = new Set<string>();
+      for (const sid of rec.studentIds ?? []) {
+        const loaded = rec.perStudent[sid];
+        if (!loaded) continue;
+        for (const sc of loaded.scores ?? []) {
+          if (!seenTypes.has(sc.type)) {
+            seenTypes.add(sc.type);
+            loadedTypes.push(sc.type);
+          }
+        }
+        if (loaded.individualNotice) toOpen.add(sid);
+      }
+      setScoreTypes(loadedTypes);
+      setOpenNoticeIds(toOpen);
       if (extraIds.length > 0) {
         Promise.all(extraIds.map((id) => fetch(`/api/students/${id}`).then((r) => r.json()))).then((results) => {
           if (cancelled) return;
@@ -204,7 +239,7 @@ function ClassRecordForm({
       .then((r) => r.json())
       .then((data: { student: { id: string; name: string } }) => {
         setExtraStudents((cur) => [...cur, { id: data.student.id, name: data.student.name }]);
-        setPerStudent((cur) => ({ ...cur, [id]: { vocabFail: false, homeworkIncomplete: false, absent: false, late: false, individualNotice: "" } }));
+        setPerStudent((cur) => ({ ...cur, [id]: blankPerStudent() }));
       });
     setExtraPickerId("");
   }
@@ -236,6 +271,49 @@ function ClassRecordForm({
 
   function setIndividualNotice(studentId: string, value: string) {
     setPerStudent((cur) => ({ ...cur, [studentId]: { ...cur[studentId], individualNotice: value } }));
+  }
+
+  function toggleNoticeOpen(studentId: string) {
+    setOpenNoticeIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(studentId)) next.delete(studentId);
+      else next.add(studentId);
+      return next;
+    });
+  }
+
+  // 항목 종류(열)를 한 번만 추가하면 모든 학생 행에 같은 입력칸이 뜬다 —
+  // 학생마다 항목을 따로 고르지 않아도 되게 하는 게 핵심.
+  function addScoreType(raw: string) {
+    const name = raw.trim();
+    if (!name) return;
+    setScoreTypes((cur) => (cur.includes(name) ? cur : [...cur, name]));
+    setScoreTypeInput("");
+  }
+
+  function removeScoreType(name: string) {
+    setScoreTypes((cur) => cur.filter((t) => t !== name));
+    setPerStudent((cur) => {
+      const next: typeof cur = {};
+      for (const [sid, v] of Object.entries(cur)) next[sid] = { ...v, scores: v.scores.filter((s) => s.type !== name) };
+      return next;
+    });
+  }
+
+  function getScore(studentId: string, type: string): ScoreEntry {
+    return perStudent[studentId]?.scores.find((s) => s.type === type) ?? { type, correct: "", total: "" };
+  }
+
+  function setScoreField(studentId: string, type: string, field: "correct" | "total", raw: string) {
+    const value = raw.replace(/\D/g, "").slice(0, 3);
+    setPerStudent((cur) => {
+      const student = cur[studentId] ?? blankPerStudent();
+      const idx = student.scores.findIndex((s) => s.type === type);
+      const base = idx >= 0 ? student.scores[idx] : { type, correct: "", total: "" };
+      const updated = { ...base, [field]: value };
+      const scores = idx >= 0 ? student.scores.map((s, i) => (i === idx ? updated : s)) : [...student.scores, updated];
+      return { ...cur, [studentId]: { ...student, scores } };
+    });
   }
 
   function handleOpenPreview() {
@@ -453,78 +531,169 @@ function ClassRecordForm({
 
           <fieldset disabled={isLocked} style={{ border: 0, padding: 0, margin: 0 }}>
             <label>학생별 체크 ({selectedClassName || "반 선택"})</label>
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", margin: "6px 0 10px" }}>
+              <span className="muted" style={{ fontSize: 12 }}>오늘 테스트/과제 항목:</span>
+              {scoreTypes.map((t) => (
+                <span key={t} className="score-type-chip">
+                  {t}
+                  <button type="button" onClick={() => removeScoreType(t)} aria-label={`${t} 항목 제거`}>
+                    ×
+                  </button>
+                </span>
+              ))}
+              {SCORE_TYPE_SUGGESTIONS.filter((t) => !scoreTypes.includes(t)).map((t) => (
+                <button key={t} type="button" className="score-type-suggest" onClick={() => addScoreType(t)}>
+                  + {t}
+                </button>
+              ))}
+              <input
+                type="text"
+                value={scoreTypeInput}
+                onChange={(e) => setScoreTypeInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addScoreType(scoreTypeInput);
+                  }
+                }}
+                placeholder="직접입력 후 Enter"
+                style={{ width: 110, padding: "3px 6px", fontSize: 12 }}
+              />
+            </div>
+
             {loadingRoster && <p className="muted">명단 불러오는 중...</p>}
             {!loadingRoster && roster.length === 0 && extraStudents.length === 0 && (
               <p className="muted">이 반에 등록된 학생이 없습니다.</p>
             )}
-            {!loadingRoster &&
-              fullRoster.map((s, idx) => {
-                const isExtra = extraStudents.some((e) => e.id === s.id);
-                return (
-                  <div
-                    key={s.id}
-                    className={`roster-check-row ${idx % 2 === 0 ? "roster-check-row-even" : "roster-check-row-odd"}`}
-                  >
-                    <div className="roster-check-left">
-                      <div className="roster-check-name">
-                        {s.name}
-                        {isExtra && <span className="badge" style={{ marginLeft: 6 }}>다른반</span>}
-                      </div>
-                      <div className="roster-check-flags">
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={perStudent[s.id]?.absent ?? false}
-                            onChange={() => toggleFlag(s.id, "absent")}
-                          />
-                          결석
-                        </label>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={perStudent[s.id]?.late ?? false}
-                            onChange={() => toggleFlag(s.id, "late")}
-                          />
-                          지각
-                        </label>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={perStudent[s.id]?.vocabFail ?? false}
-                            onChange={() => toggleFlag(s.id, "vocabFail")}
-                          />
-                          단어미통과
-                        </label>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={perStudent[s.id]?.homeworkIncomplete ?? false}
-                            onChange={() => toggleFlag(s.id, "homeworkIncomplete")}
-                          />
-                          과제미완료
-                        </label>
-                      </div>
-                    </div>
-                    <textarea
-                      className="roster-check-notice"
-                      rows={2}
-                      placeholder="개별 안내사항"
-                      value={perStudent[s.id]?.individualNotice ?? ""}
-                      onChange={(e) => setIndividualNotice(s.id, e.target.value)}
-                    />
-                    {isExtra && (
-                      <button
-                        type="button"
-                        className="secondary"
-                        style={{ alignSelf: "flex-start" }}
-                        onClick={() => removeExtraStudent(s.id)}
-                      >
-                        제거
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
+            {!loadingRoster && fullRoster.length > 0 && (
+              <div className="roster-table-wrap">
+                <table className="roster-table">
+                  <thead>
+                    <tr>
+                      <th>학생</th>
+                      <th>결석</th>
+                      <th>지각</th>
+                      <th>단어X</th>
+                      <th>과제X</th>
+                      {scoreTypes.map((t) => (
+                        <th key={t}>{t}</th>
+                      ))}
+                      <th>메모</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fullRoster.map((s) => {
+                      const isExtra = extraStudents.some((e) => e.id === s.id);
+                      const flags = perStudent[s.id];
+                      const noticeOpen = openNoticeIds.has(s.id) || !!flags?.individualNotice;
+                      return (
+                        <Fragment key={s.id}>
+                          <tr>
+                            <td>
+                              {s.name}
+                              {isExtra && <span className="badge" style={{ marginLeft: 6 }}>다른반</span>}
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className={`roster-chip ${flags?.absent ? "is-on" : ""}`}
+                                onClick={() => toggleFlag(s.id, "absent")}
+                              >
+                                결석
+                              </button>
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className={`roster-chip ${flags?.late ? "is-on" : ""}`}
+                                onClick={() => toggleFlag(s.id, "late")}
+                              >
+                                지각
+                              </button>
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className={`roster-chip ${flags?.vocabFail ? "is-on" : ""}`}
+                                onClick={() => toggleFlag(s.id, "vocabFail")}
+                              >
+                                단어X
+                              </button>
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className={`roster-chip ${flags?.homeworkIncomplete ? "is-on" : ""}`}
+                                onClick={() => toggleFlag(s.id, "homeworkIncomplete")}
+                              >
+                                과제X
+                              </button>
+                            </td>
+                            {scoreTypes.map((t) => {
+                              const score = getScore(s.id, t);
+                              return (
+                                <td key={t}>
+                                  <span className="roster-score-cell">
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      className="roster-score-input"
+                                      value={score.correct}
+                                      onChange={(e) => setScoreField(s.id, t, "correct", e.target.value)}
+                                      aria-label={`${s.name} ${t} 맞은 개수`}
+                                    />
+                                    /
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      className="roster-score-input"
+                                      value={score.total}
+                                      onChange={(e) => setScoreField(s.id, t, "total", e.target.value)}
+                                      aria-label={`${s.name} ${t} 전체 개수`}
+                                    />
+                                  </span>
+                                </td>
+                              );
+                            })}
+                            <td>
+                              <button
+                                type="button"
+                                className={`roster-notice-btn ${flags?.individualNotice ? "has-content" : ""}`}
+                                onClick={() => toggleNoticeOpen(s.id)}
+                              >
+                                {flags?.individualNotice ? "메모 있음" : "+ 메모"}
+                              </button>
+                            </td>
+                            <td>
+                              {isExtra && (
+                                <button type="button" className="secondary" onClick={() => removeExtraStudent(s.id)} style={{ padding: "2px 8px", fontSize: 11 }}>
+                                  제거
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                          {noticeOpen && (
+                            <tr className="roster-notice-row">
+                              <td colSpan={7 + scoreTypes.length}>
+                                <textarea
+                                  rows={2}
+                                  placeholder="개별 안내사항"
+                                  value={flags?.individualNotice ?? ""}
+                                  onChange={(e) => setIndividualNotice(s.id, e.target.value)}
+                                  style={{ width: "100%", fontSize: 12 }}
+                                />
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             <div style={{ marginTop: 12 }}>
               <StudentPicker studentId={extraPickerId} onChange={addExtraStudent} label="다른 반 학생 호출 (개별 기록 추가)" allowEmpty />

@@ -9,8 +9,11 @@ import {
   formatClassSchedule,
   parseDayTeachers,
   serializeDayTeachers,
+  serializeAchievementScores,
+  parseAchievementScores,
   type WorkHours,
   type DayTeachers,
+  type AchievementScore,
 } from "./format";
 import {
   type ExamPrepData,
@@ -1341,7 +1344,14 @@ export async function createClassProgress(input: {
   notice: string;
   perStudent: Record<
     string,
-    { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean; late?: boolean; individualNotice?: string }
+    {
+      vocabFail: boolean;
+      homeworkIncomplete: boolean;
+      absent: boolean;
+      late?: boolean;
+      individualNotice?: string;
+      scores?: AchievementScore[];
+    }
   >;
   briefingTexts?: Record<string, string>;
   // Students called up from a different class for a one-off individual
@@ -1396,6 +1406,7 @@ export async function createClassProgress(input: {
         단어테스트결과: { select: { name: flags.vocabFail ? "재시험" : "통과" } },
         반별진도원본: { relation: [{ id: progressPage.id }] },
         비고: { rich_text: [{ text: { content: flags.individualNotice ?? "" } }] },
+        성취사항: { rich_text: [{ text: { content: serializeAchievementScores(flags.scores ?? []) } }] },
       } as any,
     });
     dailyRecordIds.push(daily.id);
@@ -1488,7 +1499,14 @@ export async function getClassProgressForEdit(classId: string, date: string, per
   const studentIds: string[] = [];
   const perStudent: Record<
     string,
-    { absent: boolean; late: boolean; vocabFail: boolean; homeworkIncomplete: boolean; individualNotice: string }
+    {
+      absent: boolean;
+      late: boolean;
+      vocabFail: boolean;
+      homeworkIncomplete: boolean;
+      individualNotice: string;
+      scores: AchievementScore[];
+    }
   > = {};
   for (const dp of dailyRecords as any[]) {
     const studentId = getRelationIds(dp, "학생")[0];
@@ -1502,6 +1520,9 @@ export async function getClassProgressForEdit(classId: string, date: string, per
       // DB④학생별일일기록의 기존 "비고" 필드를 그대로 재사용 — 새 Notion
       // 속성을 만들지 않고 학생별 개별 안내사항을 저장한다.
       individualNotice: getRichText(dp, "비고"),
+      // 마찬가지로 기존 "성취사항" 필드를 재사용해 그날 테스트/과제
+      // 항목별 점수(항목명: 맞은수/전체수)를 저장·복원한다.
+      scores: parseAchievementScores(getRichText(dp, "성취사항")),
     };
   }
 
@@ -1593,7 +1614,14 @@ export async function updateClassProgress(input: {
   notice?: string;
   perStudent: Record<
     string,
-    { vocabFail: boolean; homeworkIncomplete: boolean; absent: boolean; late?: boolean; individualNotice?: string }
+    {
+      vocabFail: boolean;
+      homeworkIncomplete: boolean;
+      absent: boolean;
+      late?: boolean;
+      individualNotice?: string;
+      scores?: AchievementScore[];
+    }
   >;
   extraStudentIds?: string[];
 }) {
@@ -1628,6 +1656,7 @@ export async function updateClassProgress(input: {
       과제여부: { checkbox: !flags.homeworkIncomplete },
       단어테스트결과: { select: { name: flags.vocabFail ? "재시험" : "통과" } },
       비고: { rich_text: [{ text: { content: flags.individualNotice ?? "" } }] },
+      성취사항: { rich_text: [{ text: { content: serializeAchievementScores(flags.scores ?? []) } }] },
     };
     if (input.progress !== undefined) properties.진도내용 = { rich_text: [{ text: { content: input.progress } }] };
     const existing = dailyByStudent.get(studentId);

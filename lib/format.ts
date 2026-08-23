@@ -87,6 +87,28 @@ export function serializeWorkHours(hours: WorkHours): string {
     .join(";");
 }
 
+// 오늘 수업 기록에서 학생별로 입력하는 테스트/과제 성취율(항목명 + 맞은
+// 개수/전체 개수) — 새 Notion 속성을 만들지 않고 DB④의 기존 "성취사항"
+// rich_text 필드에 사람이 읽기도 쉬운 "항목명: 3/5" 줄바꿈 목록으로 담는다.
+export type AchievementScore = { type: string; correct: string; total: string };
+
+export function serializeAchievementScores(scores: AchievementScore[]): string {
+  return scores
+    .filter((s) => s.type.trim() && s.correct !== "" && s.total !== "")
+    .map((s) => `${s.type.trim()}: ${s.correct}/${s.total}`)
+    .join("\n");
+}
+
+export function parseAchievementScores(text: string): AchievementScore[] {
+  if (!text) return [];
+  const out: AchievementScore[] = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(/^(.+?):\s*(\d+)\s*\/\s*(\d+)\s*$/);
+    if (m) out.push({ type: m[1].trim(), correct: m[2], total: m[3] });
+  }
+  return out;
+}
+
 export const WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"];
 
 // 반의 담당교사가 요일마다, 심지어 같은 날 안에서도 교시마다 다를 수 있어

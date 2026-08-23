@@ -243,7 +243,12 @@ input[type="date"]::-webkit-calendar-picker-indicator:hover {
   align-items: start;
 }
 
-.class-record-layout > div:last-child {
+/* 오른쪽 패널(학생별 체크)이 <fieldset>이라 예전에 ">div:last-child"로는
+   매칭되지 않아 max-height/overflow가 전혀 적용되지 않고 있었다 — 그
+   결과 학생이 많은 반은 페이지 전체가 한없이 길어져 저장 버튼까지
+   가려면 계속 스크롤해야 했다. 태그 무관하게 마지막 자식을 잡아 다시
+   독립 스크롤 영역으로 되돌린다. */
+.class-record-layout > :last-child {
   max-height: 640px;
   overflow-y: auto;
   padding-left: 4px;
@@ -252,14 +257,6 @@ input[type="date"]::-webkit-calendar-picker-indicator:hover {
 @media (max-width: 860px) {
   .class-record-layout {
     grid-template-columns: 1fr;
-  }
-
-  .roster-check-row {
-    flex-wrap: wrap;
-  }
-
-  .roster-check-notice {
-    flex: 1 1 100%;
   }
 }
 
@@ -527,62 +524,130 @@ th, td {
   resize: vertical;
 }
 
-.roster-check-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
-  border-radius: 6px;
+/* 학생별 체크 표 — 예전엔 학생당 이름+체크박스+빈 메모칸(항상 2줄)이
+   쌓이는 카드형이라 학생이 많을수록 세로로 계속 늘어났다. 한 학생 = 한
+   행인 표로 바꾸고, 메모는 내용이 있을 때만/누른 때만 펼쳐 기본 높이를
+   최소로 유지한다. */
+.roster-table-wrap {
+  overflow-x: auto;
+}
+
+.roster-table {
+  width: 100%;
+  border-collapse: collapse;
   font-size: 13px;
 }
 
-/* 학생별로 홀/짝 행을 구분하기 쉽도록 옅은 배경을 엇갈려 준다. */
-.roster-check-row-odd {
+.roster-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--card);
+  border-bottom: 2px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.roster-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.roster-table tbody tr:nth-child(even) {
   background: var(--bg);
 }
 
-.roster-check-row label {
-  display: flex;
+.roster-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.roster-chip.is-on {
+  background: var(--danger-tint);
+  border-color: var(--danger);
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.roster-score-cell {
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  margin: 0;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.roster-score-input {
+  width: 28px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 3px;
   font-size: 12px;
+  text-align: center;
+}
+
+.roster-notice-btn {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  padding: 2px 6px;
+  font-size: 11px;
+  cursor: pointer;
   color: var(--muted);
 }
 
-/* 학생별 체크 목록 — 왼쪽에 학생명(위쪽)과 결석/지각 등 체크박스를
-   세로로 쌓고, 오른쪽에 개별 안내사항 텍스트창을 배치한다. 텍스트창을
-   작게(2줄) 시작해 목록 전체가 길어지지 않게 하되, resize로 필요할 때만
-   늘릴 수 있게 한다 — class-record-layout 오른쪽 패널 자체가 이미
-   독립적으로 스크롤되므로(max-height:640px) 여기서 줄이면 그 스크롤도
-   최소화된다. */
-.roster-check-left {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+.roster-notice-btn.has-content {
+  border-color: var(--primary);
+  color: var(--primary-dark);
+  background: var(--primary-tint);
 }
 
-.roster-check-flags {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+.roster-notice-row td {
+  white-space: normal;
+  padding-top: 0;
+}
+
+.score-type-chip {
+  display: inline-flex;
   align-items: center;
-}
-
-.roster-check-name {
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.roster-check-notice {
-  flex: 0 0 180px;
-  min-height: 30px;
-  padding: 4px 6px;
+  gap: 4px;
+  border: 1px solid var(--primary);
+  background: var(--primary-tint);
+  color: var(--primary-dark);
+  border-radius: 999px;
+  padding: 2px 6px 2px 10px;
   font-size: 12px;
-  resize: vertical;
+}
+
+.score-type-chip button {
+  border: 0;
+  background: transparent;
+  color: var(--primary-dark);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.score-type-suggest {
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--muted);
 }
 
 .schedule-cards-grid {
