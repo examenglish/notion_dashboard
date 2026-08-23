@@ -581,23 +581,17 @@ th, td {
   font-weight: 600;
 }
 
-.roster-score-cell {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  font-variant-numeric: tabular-nums;
-}
-
-/* 가로로 나란히 붙은 짧은 숫자칸 여러 개는 크롬/확장프로그램의 "인증번호(OTP)
-   입력창" 자동완성 휴리스틱을 건드리기 쉽다(실제로 이 폭이 좁을 때 임의의
-   값이 채워져 들어가는 문제가 있었다) — 폭을 조금 넓혀 그 패턴에서 벗어난다.
-   color를 명시하지 않으면 상속되긴 하지만 혹시 모를 자동완성 오버레이가
-   텍스트색을 덮어써도 티가 나도록 색도 명시적으로 지정한다. */
+/* "맞은개수 / 전체개수" 두 칸으로 나뉜 좁은 숫자 입력이 브라우저/확장
+   프로그램의 "인증번호(OTP) 입력창" 자동완성 휴리스틱을 건드려 실제
+   타이핑이 반영되지 않는 문제가 있었다 — 한 칸에 "8/10"처럼 직접
+   입력하는 자유 텍스트 하나로 바꿔 그 패턴(가로로 나란히 붙은 짧은
+   숫자칸 여러 개) 자체를 없앤다. color/background를 명시해 혹시 모를
+   자동완성 오버레이가 텍스트색을 덮어써도 티가 나게 한다. */
 .roster-score-input {
-  width: 40px;
+  width: 56px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 2px 3px;
+  padding: 2px 5px;
   font-size: 12px;
   text-align: center;
   color: var(--text);

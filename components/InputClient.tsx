@@ -24,7 +24,12 @@ type RosterStudent = { id: string; name: string };
 // 그날 테스트/과제 채점 한 건 — "항목종류"(예: 단어테스트)와 정답수/총문항수.
 // correct/total은 입력 중 빈 문자열을 허용해야 해서(다 채우기 전에는 숫자로
 // 강제 변환하지 않음) 문자열로 들고 있다가 저장 시점에만 서버가 해석한다.
-type ScoreEntry = { type: string; correct: string; total: string };
+// 좁은 "맞은개수 / 전체개수" 두 칸짜리 입력이 브라우저·확장프로그램의
+// 인증번호(OTP) 자동완성 휴리스틱을 건드려 실제 타이핑이 반영 안 되는
+// 문제가 있었다 — 한 칸에 "8/10"처럼 직접 입력하는 자유 텍스트(raw)로
+// 바꿔 그 패턴 자체를 없앤다. 서버 전송/로드 시점에만 correct/total로
+// 변환한다(scoresToServer 참고).
+type ScoreEntry = { type: string; raw: string };
 type PerStudentFlags = {
   vocabFail: boolean;
   homeworkIncomplete: boolean;
@@ -190,7 +195,18 @@ function ClassRecordForm({
         const next = { ...cur };
         for (const sid of rec.studentIds ?? []) {
           const loaded = rec.perStudent[sid];
-          next[sid] = loaded ? { ...blankPerStudent(), ...loaded, scores: loaded.scores ?? [] } : blankPerStudent();
+          next[sid] = loaded
+            ? {
+                ...blankPerStudent(),
+                ...loaded,
+                // 서버는 {type,correct,total}로 내려주는데, 이 폼은 "8/10"
+                // 한 칸짜리 자유입력(raw)으로 다룬다 — 로드 시점에 합쳐준다.
+                scores: (loaded.scores ?? []).map((sc: { type: string; correct: string; total: string }) => ({
+                  type: sc.type,
+                  raw: sc.total ? `${sc.correct}/${sc.total}` : sc.correct || "",
+                })),
+              }
+            : blankPerStudent();
         }
         return next;
       });
@@ -303,19 +319,30 @@ function ClassRecordForm({
   }
 
   function getScore(studentId: string, type: string): ScoreEntry {
-    return perStudent[studentId]?.scores.find((s) => s.type === type) ?? { type, correct: "", total: "" };
+    return perStudent[studentId]?.scores.find((s) => s.type === type) ?? { type, raw: "" };
   }
 
-  function setScoreField(studentId: string, type: string, field: "correct" | "total", raw: string) {
-    const value = raw.replace(/\D/g, "").slice(0, 3);
+  function setScoreRaw(studentId: string, type: string, raw: string) {
+    const cleaned = raw.replace(/[^0-9/]/g, "").slice(0, 7);
     setPerStudent((cur) => {
       const student = cur[studentId] ?? blankPerStudent();
       const idx = student.scores.findIndex((s) => s.type === type);
-      const base = idx >= 0 ? student.scores[idx] : { type, correct: "", total: "" };
-      const updated = { ...base, [field]: value };
+      const updated = { type, raw: cleaned };
       const scores = idx >= 0 ? student.scores.map((s, i) => (i === idx ? updated : s)) : [...student.scores, updated];
       return { ...cur, [studentId]: { ...student, scores } };
     });
+  }
+
+  // 저장 직전에만 서버가 쓰는 {type, correct, total} 모양으로 바꾼다 —
+  // "8/10"을 슬래시로 나누고, 슬래시가 없으면(아직 전체개수를 안 쓴 경우)
+  // total은 빈 값으로 둔다.
+  function scoresToServer(scores: ScoreEntry[]): { type: string; correct: string; total: string }[] {
+    return scores
+      .filter((s) => s.raw.trim() !== "")
+      .map((s) => {
+        const [correct, total] = s.raw.split("/");
+        return { type: s.type, correct: correct ?? "", total: total ?? "" };
+      });
   }
 
   function handleOpenPreview() {
@@ -340,6 +367,9 @@ function ClassRecordForm({
       if (!ok) return { ok: false, cancelled: true };
     }
     try {
+      const perStudentForServer = Object.fromEntries(
+        Object.entries(perStudent).map(([id, f]) => [id, { ...f, scores: scoresToServer(f.scores) }])
+      );
       const res = await fetch("/api/class-record", {
         method: isEdit ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
@@ -354,7 +384,7 @@ function ClassRecordForm({
           homework,
           nextAssignment,
           notice,
-          perStudent,
+          perStudent: perStudentForServer,
           ...(isEdit ? {} : { briefingTexts, reviewDays: reviewDays ? Number(reviewDays) : undefined }),
           extraStudentIds: extraStudents.map((s) => s.id),
         }),
@@ -403,7 +433,7 @@ function ClassRecordForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           progressId: existingProgressId,
-          scores: Object.fromEntries(Object.entries(perStudent).map(([id, f]) => [id, f.scores])),
+          scores: Object.fromEntries(Object.entries(perStudent).map(([id, f]) => [id, scoresToServer(f.scores)])),
         }),
       });
       const data = await res.json();
@@ -690,33 +720,19 @@ function ClassRecordForm({
                               const score = getScore(s.id, t);
                               return (
                                 <td key={t}>
-                                  <span className="roster-score-cell">
-                                    <input
-                                      type="text"
-                                      inputMode="numeric"
-                                      className="roster-score-input"
-                                      value={score.correct}
-                                      onChange={(e) => setScoreField(s.id, t, "correct", e.target.value)}
-                                      aria-label={`${s.name} ${t} 맞은 개수`}
-                                      autoComplete="off"
-                                      data-lpignore="true"
-                                      data-1p-ignore="true"
-                                      data-bwignore="true"
-                                    />
-                                    /
-                                    <input
-                                      type="text"
-                                      inputMode="numeric"
-                                      className="roster-score-input"
-                                      value={score.total}
-                                      onChange={(e) => setScoreField(s.id, t, "total", e.target.value)}
-                                      aria-label={`${s.name} ${t} 전체 개수`}
-                                      autoComplete="off"
-                                      data-lpignore="true"
-                                      data-1p-ignore="true"
-                                      data-bwignore="true"
-                                    />
-                                  </span>
+                                  <input
+                                    type="text"
+                                    inputMode="text"
+                                    className="roster-score-input"
+                                    value={score.raw}
+                                    onChange={(e) => setScoreRaw(s.id, t, e.target.value)}
+                                    placeholder="8/10"
+                                    aria-label={`${s.name} ${t} 점수 (맞은/전체, 예: 8/10)`}
+                                    autoComplete="off"
+                                    data-lpignore="true"
+                                    data-1p-ignore="true"
+                                    data-bwignore="true"
+                                  />
                                 </td>
                               );
                             })}
