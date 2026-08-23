@@ -434,7 +434,12 @@ function ClassRecordForm({
 
   return (
     <>
-      <Card>
+      {/* 사이드바가 생기면서 콘텐츠 폭이 화면 대부분을 채우게 됐는데, 안의
+          입력창들을 그 너비에 맞춰 그대로 늘리면 필드 사이 마우스 이동
+          거리가 옛 독립형 페이지(.page, max-width:1080px)보다 훨씬 멀어진다
+          — 카드 자체 너비를 그때와 비슷하게 다시 제한해 필드 위치가 그
+          자리에 가깝게 남도록 한다. */}
+      <Card className="max-w-[1040px]">
         <CardHeader>
           <CardTitle>
             오늘 수업 기록 <span className="title-lab-tag">(실험실)</span>
