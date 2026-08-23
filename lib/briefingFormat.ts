@@ -10,15 +10,15 @@ const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 export type BriefingScoreEntry = { type: string; raw: string };
 
 // "8/10"을 브리핑에 그대로 적으면 강사들이 날짜(8월10일)로 오해하기 쉬워서
-// 단위를 붙여 "8개/10개"로 바꾼다. "미응시"는 그대로 표시하고, 슬래시
-// 없이 숫자만 입력된 경우("8")는 "8개"로 표시한다.
+// 끝에 "점" 단위를 붙여 "8/10점"으로 바꾼다. "미응시"는 그대로 표시하고,
+// 슬래시 없이 숫자만 입력된 경우("8")는 "8점"으로 표시한다.
 function formatScoreValue(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return "";
   if (trimmed === "미응시") return "미응시";
   const [a, b] = trimmed.split("/");
-  if (b) return `${a}개/${b}개`;
-  return /^\d+$/.test(a) ? `${a}개` : trimmed;
+  if (b) return `${a}/${b}점`;
+  return /^\d+$/.test(a) ? `${a}점` : trimmed;
 }
 
 function formatScoreLines(scores?: BriefingScoreEntry[]): string[] {
