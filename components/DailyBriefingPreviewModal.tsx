@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { formatBriefingText } from "@/lib/briefingFormat";
+import { formatBriefingText, type BriefingScoreEntry } from "@/lib/briefingFormat";
 import { stripClassSuffix } from "@/lib/format";
 
 type RosterStudent = { id: string; name: string };
-type PerStudentFlags = Record<string, { vocabFail: boolean; homeworkIncomplete: boolean; absent?: boolean; individualNotice?: string }>;
+type PerStudentFlags = Record<
+  string,
+  { vocabFail: boolean; homeworkIncomplete: boolean; absent?: boolean; individualNotice?: string; scores?: BriefingScoreEntry[] }
+>;
 type ClassOption = { id: string; name: string };
 
 type ExistingBriefing = { id: string; date: string | null; studentId: string | null; content: string };
@@ -35,6 +38,7 @@ function initialTexts(draft: {
       homeworkIncomplete: flags.homeworkIncomplete,
       absent: flags.absent ?? false,
       individualNotice: flags.individualNotice,
+      scores: flags.scores,
     });
   }
   return map;

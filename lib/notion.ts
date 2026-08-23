@@ -11,6 +11,7 @@ import {
   serializeDayTeachers,
   serializeAchievementScores,
   parseAchievementScores,
+  achievementScoreToRaw,
   type WorkHours,
   type DayTeachers,
   type AchievementScore,
@@ -1425,6 +1426,7 @@ export async function createClassProgress(input: {
         homeworkIncomplete: flags.homeworkIncomplete,
         absent: flags.absent,
         individualNotice: flags.individualNotice,
+        scores: (flags.scores ?? []).map((s) => ({ type: s.type, raw: achievementScoreToRaw(s) })),
       });
     const briefing = await notion.pages.create({
       parent: { data_source_id: DB.BRIEFING } as any,
@@ -1744,6 +1746,7 @@ export async function updateClassProgress(input: {
           homeworkIncomplete: flags.homeworkIncomplete,
           absent: flags.absent,
           individualNotice: flags.individualNotice,
+          scores: (flags.scores ?? []).map((s) => ({ type: s.type, raw: achievementScoreToRaw(s) })),
         });
         await notion.pages.create({
           parent: { data_source_id: DB.BRIEFING } as any,

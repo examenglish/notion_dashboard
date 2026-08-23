@@ -2,6 +2,32 @@
 // so the saved text always matches what the teacher reviewed before saving.
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
+// 학생별 체크 표의 테스트/과제 점수 한 건 — 항목명 + 자유입력 값("8/10",
+// 시험을 안 봤으면 "미응시" 그대로). 서버 쪽(AchievementScore={type,
+// correct,total})과 클라이언트 쪽(InputClient의 ScoreEntry={type,raw})
+// 두 shape을 각자 호출부에서 이 공통 형태로 맞춰 넘긴다 — 포맷팅 로직은
+// 여기 한 곳에만 둔다.
+export type BriefingScoreEntry = { type: string; raw: string };
+
+// "8/10"을 브리핑에 그대로 적으면 강사들이 날짜(8월10일)로 오해하기 쉬워서
+// 단위를 붙여 "8개/10개"로 바꾼다. "미응시"는 그대로 표시하고, 슬래시
+// 없이 숫자만 입력된 경우("8")는 "8개"로 표시한다.
+function formatScoreValue(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (trimmed === "미응시") return "미응시";
+  const [a, b] = trimmed.split("/");
+  if (b) return `${a}개/${b}개`;
+  return /^\d+$/.test(a) ? `${a}개` : trimmed;
+}
+
+function formatScoreLines(scores?: BriefingScoreEntry[]): string[] {
+  if (!scores || scores.length === 0) return [];
+  const rows = scores.filter((s) => s.raw.trim() !== "").map((s) => `${s.type}: ${formatScoreValue(s.raw)}`);
+  if (rows.length === 0) return [];
+  return ["", "【테스트/과제 결과】", ...rows];
+}
+
 export function formatBriefingText(input: {
   date: string; // YYYY-MM-DD
   className: string;
@@ -14,6 +40,7 @@ export function formatBriefingText(input: {
   homeworkIncomplete: boolean;
   absent: boolean;
   individualNotice?: string;
+  scores?: BriefingScoreEntry[];
 }): string {
   const [y, m, d] = input.date.split("-").map(Number);
   const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
@@ -38,6 +65,7 @@ export function formatBriefingText(input: {
       `과제 수행: ${input.homeworkIncomplete ? "미완료" : "완료"}`
     );
   }
+  lines.push(...formatScoreLines(input.scores));
   if (input.notice) lines.push(`전달사항: ${input.notice}`);
   if (input.individualNotice) lines.push(`개별 안내사항: ${input.individualNotice}`);
   return lines.join("\n");

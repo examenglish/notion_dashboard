@@ -592,7 +592,7 @@ th, td {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 2px 5px;
-  font-size: 12px;
+  font-size: 10.5px;
   text-align: center;
   color: var(--text);
   background: var(--card);

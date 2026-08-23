@@ -17,7 +17,7 @@ import ClassRecordGapFinder from "./ClassRecordGapFinder";
 import MakeupStatusCard from "./MakeupStatusCard";
 import AbsenceReviewModal, { AbsenceReviewItem } from "./AbsenceReviewModal";
 import { todayKST as todayStr } from "@/lib/date";
-import { stripClassSuffix } from "@/lib/format";
+import { stripClassSuffix, achievementScoreToRaw } from "@/lib/format";
 
 type ClassOption = { id: string; name: string; type?: string };
 type RosterStudent = { id: string; name: string };
@@ -203,7 +203,7 @@ function ClassRecordForm({
                 // 한 칸짜리 자유입력(raw)으로 다룬다 — 로드 시점에 합쳐준다.
                 scores: (loaded.scores ?? []).map((sc: { type: string; correct: string; total: string }) => ({
                   type: sc.type,
-                  raw: sc.total ? `${sc.correct}/${sc.total}` : sc.correct || "",
+                  raw: achievementScoreToRaw(sc),
                 })),
               }
             : blankPerStudent();
@@ -323,7 +323,11 @@ function ClassRecordForm({
   }
 
   function setScoreRaw(studentId: string, type: string, raw: string) {
-    const cleaned = raw.replace(/[^0-9/]/g, "").slice(0, 7);
+    // 숫자/슬래시 자유입력은 그대로 두고, "미응시"를 한 글자씩 입력해가는
+    // 중간 상태(및 완성형)만 예외로 통과시킨다 — 그 밖의 텍스트는 기존처럼
+    // 숫자/슬래시만 남긴다("개별 안내사항"이 이미 자유 텍스트 칸이라
+    // 여기를 더 열어줄 필요는 없다).
+    const cleaned = raw !== "" && "미응시".startsWith(raw) ? raw : raw.replace(/[^0-9/]/g, "").slice(0, 7);
     setPerStudent((cur) => {
       const student = cur[studentId] ?? blankPerStudent();
       const idx = student.scores.findIndex((s) => s.type === type);
@@ -642,6 +646,9 @@ function ClassRecordForm({
                 style={{ width: 110, padding: "3px 6px", fontSize: 12 }}
               />
             </div>
+            <p className="muted" style={{ fontSize: 11, marginTop: -4, marginBottom: 8 }}>
+              형식: 맞은개수/전체개수 (예: 0/0) · 시험을 안 봤으면 "미응시"라고 입력하세요.
+            </p>
 
             {loadingRoster && <p className="muted">명단 불러오는 중...</p>}
             {!loadingRoster && roster.length === 0 && extraStudents.length === 0 && (
@@ -726,8 +733,8 @@ function ClassRecordForm({
                                     className="roster-score-input"
                                     value={score.raw}
                                     onChange={(e) => setScoreRaw(s.id, t, e.target.value)}
-                                    placeholder="8/10"
-                                    aria-label={`${s.name} ${t} 점수 (맞은/전체, 예: 8/10)`}
+                                    placeholder="0/0"
+                                    aria-label={`${s.name} ${t} 점수 (맞은/전체, 예: 0/0, 미응시면 미응시라고 입력)`}
                                     autoComplete="off"
                                     data-lpignore="true"
                                     data-1p-ignore="true"

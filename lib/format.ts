@@ -92,10 +92,13 @@ export function serializeWorkHours(hours: WorkHours): string {
 // rich_text 필드에 사람이 읽기도 쉬운 "항목명: 3/5" 줄바꿈 목록으로 담는다.
 export type AchievementScore = { type: string; correct: string; total: string };
 
+// total이 없어도(예: 슬래시 없이 숫자만 입력, 또는 "미응시") 그 자체로
+// 뜻이 있는 값이라 total이 비어있다고 걸러내면 안 된다 — correct만
+// 채워져 있으면(빈 문자열이 아니면) 저장한다.
 export function serializeAchievementScores(scores: AchievementScore[]): string {
   return scores
-    .filter((s) => s.type.trim() && s.correct !== "" && s.total !== "")
-    .map((s) => `${s.type.trim()}: ${s.correct}/${s.total}`)
+    .filter((s) => s.type.trim() && s.correct.trim() !== "")
+    .map((s) => `${s.type.trim()}: ${s.total ? `${s.correct}/${s.total}` : s.correct}`)
     .join("\n");
 }
 
@@ -103,10 +106,25 @@ export function parseAchievementScores(text: string): AchievementScore[] {
   if (!text) return [];
   const out: AchievementScore[] = [];
   for (const line of text.split("\n")) {
-    const m = line.match(/^(.+?):\s*(\d+)\s*\/\s*(\d+)\s*$/);
-    if (m) out.push({ type: m[1].trim(), correct: m[2], total: m[3] });
+    const m = line.match(/^(.+?):\s*(.+)$/);
+    if (!m) continue;
+    const type = m[1].trim();
+    const value = m[2].trim();
+    const slash = value.match(/^(\d+)\s*\/\s*(\d+)$/);
+    if (slash) {
+      out.push({ type, correct: slash[1], total: slash[2] });
+    } else if (/^\d+$/.test(value) || value === "미응시") {
+      out.push({ type, correct: value, total: "" });
+    }
   }
   return out;
+}
+
+// AchievementScore({type,correct,total}) → 입력 폼/브리핑이 쓰는 자유입력
+// 문자열(raw, 예: "8/10", "미응시")로 되돌린다. InputClient의 로드 시점
+// 복원과 lib/notion.ts의 브리핑 문구 생성이 같은 로직을 공유한다.
+export function achievementScoreToRaw(s: AchievementScore): string {
+  return s.total ? `${s.correct}/${s.total}` : s.correct || "";
 }
 
 export const WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"];
