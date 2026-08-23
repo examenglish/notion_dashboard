@@ -588,13 +588,20 @@ th, td {
   font-variant-numeric: tabular-nums;
 }
 
+/* 가로로 나란히 붙은 짧은 숫자칸 여러 개는 크롬/확장프로그램의 "인증번호(OTP)
+   입력창" 자동완성 휴리스틱을 건드리기 쉽다(실제로 이 폭이 좁을 때 임의의
+   값이 채워져 들어가는 문제가 있었다) — 폭을 조금 넓혀 그 패턴에서 벗어난다.
+   color를 명시하지 않으면 상속되긴 하지만 혹시 모를 자동완성 오버레이가
+   텍스트색을 덮어써도 티가 나도록 색도 명시적으로 지정한다. */
 .roster-score-input {
-  width: 28px;
+  width: 40px;
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 2px 3px;
   font-size: 12px;
   text-align: center;
+  color: var(--text);
+  background: var(--card);
 }
 
 .roster-notice-btn {

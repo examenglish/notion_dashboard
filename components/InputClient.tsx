@@ -698,6 +698,10 @@ function ClassRecordForm({
                                       value={score.correct}
                                       onChange={(e) => setScoreField(s.id, t, "correct", e.target.value)}
                                       aria-label={`${s.name} ${t} 맞은 개수`}
+                                      autoComplete="off"
+                                      data-lpignore="true"
+                                      data-1p-ignore="true"
+                                      data-bwignore="true"
                                     />
                                     /
                                     <input
@@ -707,6 +711,10 @@ function ClassRecordForm({
                                       value={score.total}
                                       onChange={(e) => setScoreField(s.id, t, "total", e.target.value)}
                                       aria-label={`${s.name} ${t} 전체 개수`}
+                                      autoComplete="off"
+                                      data-lpignore="true"
+                                      data-1p-ignore="true"
+                                      data-bwignore="true"
                                     />
                                   </span>
                                 </td>
