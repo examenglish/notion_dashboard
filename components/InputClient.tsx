@@ -1379,7 +1379,18 @@ function QuickScheduleCard() {
 
 type TabKey = "schedule" | "students" | "ops" | "records";
 
-export default function InputClient({ role }: { role: string | null; staffId?: string | null }) {
+export default function InputClient({
+  role,
+  embedded = false,
+}: {
+  role: string | null;
+  staffId?: string | null;
+  // /director/input처럼 이미 사이드바+본문 패딩이 있는 레이아웃 안에서 쓸
+  // 때는 true로 넘긴다 — 기본값(false)은 옛 독립형 /input 라우트(TopBar만
+  // 있고 좌측 사이드바가 없음) 그대로, .page의 max-width:1080px+margin:0
+  // auto가 콘텐츠를 화면 중앙으로 밀어 사이드바 옆에 큰 여백을 만든다.
+  embedded?: boolean;
+}) {
   // 원장/행정은 강사·조교·행정 입력폼을 모두 볼 수 있어야 하므로, "행정 전용"
   // 폼들도 원장에게 함께 열어준다. 조교는 강사의 "오늘 수업 기록"이 아니라
   // 클리닉(코칭) 전용 폼을 쓴다 — 정규수업 진도가 아니라 1:1~1:다수 코칭이
@@ -1420,7 +1431,7 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
   const [recordPrefill, setRecordPrefill] = useState<{ classId: string; date: string; key: number } | null>(null);
 
   return (
-    <div className="page">
+    <div className={embedded ? "space-y-4" : "page"}>
       <div className="input-tabbar">
         {tabs.map((t) => (
           <button
