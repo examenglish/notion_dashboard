@@ -20,6 +20,15 @@ type CounselingEntry = { id: string; date: string | null; counselor: string; con
 type InquiryEntry = { id: string; date: string | null; type: string | null; content: string; done: boolean; enteredBy?: string };
 type ClinicEntry = { id: string; date: string | null; assistant: string; content: string; nextPrep: string; source: "record" | "task" };
 type ReviewEntry = { id: string; date: string | null; content: string; done: boolean };
+type SlackEntry = {
+  id: string;
+  date: string | null;
+  content: string;
+  author: string;
+  permalink: string;
+  status: string | null;
+  linkStatus: string | null;
+};
 type CategoryBreakdown = { label: string; done: number; total: number };
 type ExamPrepTextSource = {
   id: string;
@@ -52,6 +61,7 @@ type History = {
   inquiries: InquiryEntry[];
   clinic: ClinicEntry[];
   review: ReviewEntry[];
+  slack: SlackEntry[];
   examPrep: ExamPrepSummary | null;
 };
 
@@ -565,6 +575,35 @@ export default function StudentHistoryModal({
                       </li>
                     )
                   )}
+                </ul>
+              )}
+
+              <h3 style={{ marginTop: 20 }}>Slack 학생기록</h3>
+              {history.slack.length === 0 ? (
+                <p className="muted">Slack에서 연결된 학생기록이 없습니다.</p>
+              ) : (
+                <ul className="history-log">
+                  {history.slack.map((record) => (
+                    <li key={record.id} style={{ opacity: record.status === "삭제" ? 0.7 : 1 }}>
+                      <strong>
+                        {record.date ? new Date(record.date).toLocaleString("ko-KR") : "-"}
+                      </strong>
+                      {" · "}
+                      작성자: {record.author || "-"}
+                      {" · "}
+                      <span className="badge">{record.status || "활성"}</span>
+                      {record.linkStatus && record.linkStatus !== "연결" && (
+                        <span className="badge" style={{ marginLeft: 4 }}>{record.linkStatus}</span>
+                      )}
+                      <br />
+                      <span style={{ whiteSpace: "pre-wrap" }}>{record.content || "-"}</span>
+                      {record.permalink && (
+                        <div>
+                          <a href={record.permalink} target="_blank" rel="noreferrer">Slack 원문 보기</a>
+                        </div>
+                      )}
+                    </li>
+                  ))}
                 </ul>
               )}
 

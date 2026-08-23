@@ -11,7 +11,7 @@ import { SESSION_COOKIE, verifySessionCookieValue } from "./lib/session";
 // match on "/api/staff" used to swallow "/api/staff/[id]" too and skip
 // attaching x-staff-role, which made every role check on that subroute see
 // an empty role and 403 even for 원장.
-const PUBLIC_API_EXACT_PATHS = ["/api/login", "/api/staff"];
+const PUBLIC_API_EXACT_PATHS = ["/api/login", "/api/staff", "/api/slack/events"];
 const PUBLIC_API_PREFIX_PATHS = ["/api/cron/"];
 
 export async function middleware(req: NextRequest) {

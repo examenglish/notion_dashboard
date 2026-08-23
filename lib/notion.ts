@@ -65,6 +65,7 @@ export const DB = {
   MATERIAL: process.env.NOTION_DB_MATERIAL!,
   EXAM_PREP: process.env.NOTION_DB_EXAM_PREP!,
   SCHOOL_EXAM_RANGE: process.env.NOTION_DB_SCHOOL_EXAM_RANGE!,
+  SLACK_RECORDS: process.env.NOTION_SLACK_RECORDS_DB_ID!,
 };
 
 // ---- Property value extraction helpers ----
@@ -559,7 +560,7 @@ export async function getStudentFullHistory(studentId: string) {
     homeworkDone: r.homeworkDone,
   }));
 
-  const [makeupTodos, actionTodos, reviewTodos, clinicTasks, counselingEntries, inboxEntries, clinicEntries, staffMap, examPrepSheet] = await Promise.all([
+  const [makeupTodos, actionTodos, reviewTodos, clinicTasks, counselingEntries, inboxEntries, clinicEntries, slackEntries, staffMap, examPrepSheet] = await Promise.all([
     queryAllPages({
       data_source_id: DB.TODO,
       filter: {
@@ -612,6 +613,13 @@ export async function getStudentFullHistory(studentId: string) {
       data_source_id: DB.CLINIC,
       filter: { property: "담당학생", relation: { contains: studentId } },
     }),
+    DB.SLACK_RECORDS
+      ? queryAllPages({
+          data_source_id: DB.SLACK_RECORDS,
+          filter: { property: "학생", relation: { contains: studentId } },
+          sorts: [{ property: "작성시각", direction: "ascending" }],
+        })
+      : Promise.resolve([]),
     staffNameMap(),
     getExamPrepSheet(studentId),
   ]);
@@ -662,6 +670,16 @@ export async function getStudentFullHistory(studentId: string) {
       enteredBy: getRichText(p, "입력자"),
     }))
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+
+  const slack = slackEntries.map((p: any) => ({
+    id: p.id,
+    date: getDate(p, "작성시각"),
+    content: getRichText(p, "원문"),
+    author: getRichText(p, "Slack작성자"),
+    permalink: getUrl(p, "원문링크") ?? "",
+    status: getSelect(p, "상태"),
+    linkStatus: getSelect(p, "연결상태"),
+  }));
 
   const clinicFromRecords = clinicEntries.map((p: any) => {
     const assistantId = getRelationIds(p, "조교")[0];
@@ -729,7 +747,7 @@ export async function getStudentFullHistory(studentId: string) {
       }
     : null;
 
-  return { progress, makeup, actions, counseling, inquiries, clinic, review, examPrep };
+  return { progress, makeup, actions, counseling, inquiries, clinic, review, slack, examPrep };
 }
 
 export async function getStudentExamScores(studentId: string) {
