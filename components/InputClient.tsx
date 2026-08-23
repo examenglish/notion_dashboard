@@ -65,7 +65,6 @@ function ClassRecordForm({
 }) {
   const [classes, setClasses] = useState<ClassOption[]>([]);
   const [classId, setClassId] = useState(initialClassId ?? "");
-  const [manualClassName, setManualClassName] = useState("");
   const [date, setDate] = useState(initialDate ?? todayStr());
   const [period, setPeriod] = useState("");
   const [subjects, setSubjects] = useState<string[]>([]);
@@ -338,7 +337,7 @@ function ClassRecordForm({
     // 어떤 기록을 덮어쓰는지 짚어주고 한 번 더 확인받는다.
     if (isEdit) {
       const periodLabel = period || "교시 구분 없음";
-      const className = selectedClassName || manualClassName.trim() || "이 반";
+      const className = selectedClassName || "이 반";
       const ok = window.confirm(
         `${date} ${className} (${periodLabel})에 이미 저장된 기록이 있습니다.\n저장하면 그 기존 기록을 덮어씁니다 — 교시를 잘못 고른 건 아닌지 확인해주세요.\n계속할까요?`
       );
@@ -351,7 +350,6 @@ function ClassRecordForm({
         body: JSON.stringify({
           ...(isEdit ? { progressId: existingProgressId } : {}),
           classId: classId || undefined,
-          manualClassName: classId ? undefined : manualClassName.trim() || undefined,
           date,
           period: period || undefined,
           subjects,
@@ -425,9 +423,8 @@ function ClassRecordForm({
   }
 
   const selectedClassName = stripClassSuffix(classes.find((c) => c.id === classId)?.name ?? "");
-  const hasClass = !!classId || !!manualClassName.trim();
   const isLocked = !!existingProgressId && !canEditExisting;
-  const canSave = hasClass && (classId ? fullRoster.length > 0 : true) && !saving && !isLocked;
+  const canSave = !!classId && fullRoster.length > 0 && !saving && !isLocked;
 
   const selectClass =
     "mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -464,22 +461,14 @@ function ClassRecordForm({
 
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.1fr_0.9fr]">
             <div className="space-y-3.5">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className={fieldLabelClass} htmlFor="date">날짜</label>
                   <Input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required className="mt-1" />
                 </div>
                 <div>
                   <label className={fieldLabelClass} htmlFor="class">반</label>
-                  <select
-                    id="class"
-                    value={classId}
-                    onChange={(e) => {
-                      setClassId(e.target.value);
-                      if (e.target.value) setManualClassName("");
-                    }}
-                    className={selectClass}
-                  >
+                  <select id="class" value={classId} onChange={(e) => setClassId(e.target.value)} className={selectClass}>
                     <option value="">반 선택</option>
                     {visibleClasses.map((c) => (
                       <option key={c.id} value={c.id}>
@@ -496,120 +485,118 @@ function ClassRecordForm({
                     시험대비반 포함
                   </label>
                 </div>
-              </div>
-
-              <div>
-                <label className={fieldLabelClass} htmlFor="manualClass">반이름 직접입력 (목록에 없는 반일 때)</label>
-                <Input
-                  id="manualClass"
-                  type="text"
-                  value={manualClassName}
-                  onChange={(e) => {
-                    setManualClassName(e.target.value);
-                    if (e.target.value) setClassId("");
-                  }}
-                  placeholder="예: 고3 E반"
-                  className="mt-1"
-                />
-              </div>
-
-              <div>
-                <label className={fieldLabelClass} htmlFor="period">
-                  교시 (같은 반을 같은 날 여러 선생님이 교시로 나눠 들어갈 때만 선택)
-                </label>
-                <select id="period" value={period} onChange={(e) => setPeriod(e.target.value)} className={selectClass}>
-                  <option value="">교시 구분 없음</option>
-                  <option value="1교시">1교시</option>
-                  <option value="2교시">2교시</option>
-                  <option value="3교시">3교시</option>
-                </select>
-              </div>
-
-              <fieldset disabled={isLocked} className="m-0 space-y-3.5 border-0 p-0">
                 <div>
-                  <label className={fieldLabelClass}>수업과목</label>
-                  <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1.5">
-                    {SUBJECT_OPTIONS.map((s) => (
-                      <label key={s} className="flex items-center gap-1.5 text-sm text-foreground">
-                        <input type="checkbox" checked={subjects.includes(s)} onChange={() => toggleSubject(s)} />
-                        {s}
-                      </label>
-                    ))}
+                  <label className={fieldLabelClass} htmlFor="period">
+                    교시 (같은 반, 여러 선생님이 교시로 나눌 때만)
+                  </label>
+                  <select id="period" value={period} onChange={(e) => setPeriod(e.target.value)} className={selectClass}>
+                    <option value="">교시 구분 없음</option>
+                    <option value="1교시">1교시</option>
+                    <option value="2교시">2교시</option>
+                    <option value="3교시">3교시</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className={fieldLabelClass}>수업과목</label>
+                <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1.5">
+                  {SUBJECT_OPTIONS.map((s) => (
+                    <label key={s} className="flex items-center gap-1.5 text-sm text-foreground">
+                      <input type="checkbox" disabled={isLocked} checked={subjects.includes(s)} onChange={() => toggleSubject(s)} />
+                      {s}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-3.5">
+                  <div>
+                    <label className={fieldLabelClass} htmlFor="progress">진도</label>
+                    <textarea
+                      id="progress"
+                      rows={2}
+                      disabled={isLocked}
+                      value={progress}
+                      onChange={(e) => setProgress(e.target.value)}
+                      required
+                      className={textareaClass}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={fieldLabelClass} htmlFor="homework">과제</label>
+                    <textarea
+                      id="homework"
+                      rows={2}
+                      disabled={isLocked}
+                      value={homework}
+                      onChange={(e) => setHomework(e.target.value)}
+                      className={textareaClass}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={fieldLabelClass} htmlFor="nextAssignment">다음시간 테스트</label>
+                    <textarea
+                      id="nextAssignment"
+                      rows={2}
+                      disabled={isLocked}
+                      value={nextAssignment}
+                      onChange={(e) => setNextAssignment(e.target.value)}
+                      className={textareaClass}
+                    />
                   </div>
                 </div>
 
-                <div>
-                  <label className={fieldLabelClass} htmlFor="progress">진도</label>
-                  <textarea
-                    id="progress"
-                    rows={2}
-                    value={progress}
-                    onChange={(e) => setProgress(e.target.value)}
-                    required
-                    className={textareaClass}
-                  />
-                </div>
-
-                <div>
-                  <label className={fieldLabelClass} htmlFor="homework">과제</label>
-                  <textarea
-                    id="homework"
-                    rows={2}
-                    value={homework}
-                    onChange={(e) => setHomework(e.target.value)}
-                    className={textareaClass}
-                  />
-                </div>
-
-                <div>
-                  <label className={fieldLabelClass} htmlFor="nextAssignment">다음시간 테스트</label>
-                  <textarea
-                    id="nextAssignment"
-                    rows={2}
-                    value={nextAssignment}
-                    onChange={(e) => setNextAssignment(e.target.value)}
-                    className={textareaClass}
-                  />
-                </div>
-
-                <div>
-                  <label className={fieldLabelClass} htmlFor="notice">전달사항</label>
-                  <Input id="notice" type="text" value={notice} onChange={(e) => setNotice(e.target.value)} className="mt-1" />
-                </div>
-
-                {!existingProgressId && (
+                <div className="space-y-3.5">
                   <div>
-                    <label className={fieldLabelClass} htmlFor="reviewDays">
-                      복습 주기 (일 — 오늘 진도를 며칠 뒤 복습 알림으로 등록할지)
-                    </label>
+                    <label className={fieldLabelClass} htmlFor="notice">전달사항</label>
                     <Input
-                      id="reviewDays"
+                      id="notice"
                       type="text"
-                      inputMode="numeric"
-                      placeholder="예: 7 (비우면 복습 등록 안 함)"
-                      value={reviewDays}
-                      onChange={(e) => setReviewDays(e.target.value.replace(/\D/g, ""))}
+                      disabled={isLocked}
+                      value={notice}
+                      onChange={(e) => setNotice(e.target.value)}
                       className="mt-1"
                     />
                   </div>
-                )}
 
-                {error && <p className="text-sm text-destructive">{error}</p>}
-                {done && (
-                  <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm font-semibold text-success">
-                    저장됐습니다.
-                  </div>
-                )}
-
-                <div className="flex gap-2 pt-1">
-                  <Button type="button" variant="outline" onClick={handleOpenPreview} disabled={!classId || fullRoster.length === 0}>
-                    미리보기
-                  </Button>
-                  <Button type="button" onClick={handleDirectSave} disabled={!canSave}>
-                    {saving ? "저장 중..." : existingProgressId ? "수정 저장" : "저장"}
-                  </Button>
+                  {!existingProgressId && (
+                    <div>
+                      <label className={fieldLabelClass} htmlFor="reviewDays">
+                        복습 주기 (일 — 오늘 진도를 며칠 뒤 복습 알림으로 등록할지)
+                      </label>
+                      <Input
+                        id="reviewDays"
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="예: 7 (비우면 복습 등록 안 함)"
+                        value={reviewDays}
+                        onChange={(e) => setReviewDays(e.target.value.replace(/\D/g, ""))}
+                        className="mt-1"
+                      />
+                    </div>
+                  )}
                 </div>
-              </fieldset>
+              </div>
+
+              {error && <p className="text-sm text-destructive">{error}</p>}
+              {done && (
+                <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm font-semibold text-success">
+                  저장됐습니다.
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-1">
+                <Button type="button" variant="outline" onClick={handleOpenPreview} disabled={!classId || fullRoster.length === 0}>
+                  미리보기
+                </Button>
+                <Button type="button" onClick={handleDirectSave} disabled={!canSave}>
+                  {saving ? "저장 중..." : existingProgressId ? "수정 저장" : "저장"}
+                </Button>
+              </div>
             </div>
 
             {/* 예전엔 이 패널 전체를 <fieldset disabled={isLocked}>로 한 번에 잠갔는데,
@@ -694,7 +681,7 @@ function ClassRecordForm({
                             disabled={isLocked}
                             onClick={onClick}
                             className={cn(
-                              "rounded-full border px-2 py-0.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50",
+                              "whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50",
                               active
                                 ? "border-destructive bg-destructive/10 text-destructive"
                                 : "border-border bg-transparent text-muted-foreground hover:bg-muted"
@@ -714,10 +701,10 @@ function ClassRecordForm({
                                   </Badge>
                                 )}
                               </td>
-                              <td className="px-2 py-1.5">{flagChip(!!flags?.absent, "결석", () => toggleFlag(s.id, "absent"))}</td>
-                              <td className="px-2 py-1.5">{flagChip(!!flags?.late, "지각", () => toggleFlag(s.id, "late"))}</td>
-                              <td className="px-2 py-1.5">{flagChip(!!flags?.vocabFail, "단어X", () => toggleFlag(s.id, "vocabFail"))}</td>
-                              <td className="px-2 py-1.5">
+                              <td className="whitespace-nowrap px-2 py-1">{flagChip(!!flags?.absent, "결석", () => toggleFlag(s.id, "absent"))}</td>
+                              <td className="whitespace-nowrap px-2 py-1">{flagChip(!!flags?.late, "지각", () => toggleFlag(s.id, "late"))}</td>
+                              <td className="whitespace-nowrap px-2 py-1">{flagChip(!!flags?.vocabFail, "단어X", () => toggleFlag(s.id, "vocabFail"))}</td>
+                              <td className="whitespace-nowrap px-2 py-1">
                                 {flagChip(!!flags?.homeworkIncomplete, "과제X", () => toggleFlag(s.id, "homeworkIncomplete"))}
                               </td>
                               {scoreTypes.map((t) => {
@@ -735,7 +722,7 @@ function ClassRecordForm({
                                         data-lpignore="true"
                                         data-1p-ignore="true"
                                         data-bwignore="true"
-                                        className="h-7 w-10 rounded border border-input bg-background text-center text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                        className="h-6 w-7 rounded border border-input bg-background px-0.5 text-center text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                       />
                                       <span className="text-muted-foreground">/</span>
                                       <input
@@ -748,7 +735,7 @@ function ClassRecordForm({
                                         data-lpignore="true"
                                         data-1p-ignore="true"
                                         data-bwignore="true"
-                                        className="h-7 w-10 rounded border border-input bg-background text-center text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                        className="h-6 w-7 rounded border border-input bg-background px-0.5 text-center text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                       />
                                     </span>
                                   </td>
@@ -806,9 +793,9 @@ function ClassRecordForm({
                 </div>
               )}
 
-              <fieldset disabled={isLocked} className="m-0 mt-3 border-0 p-0">
+              <div className={cn("mt-3", isLocked && "pointer-events-none opacity-50")}>
                 <StudentPicker studentId={extraPickerId} onChange={addExtraStudent} label="다른 반 학생 호출 (개별 기록 추가)" allowEmpty />
-              </fieldset>
+              </div>
             </div>
           </div>
         </CardContent>
@@ -1397,7 +1384,18 @@ function QuickScheduleCard() {
 
 type TabKey = "schedule" | "students" | "ops" | "records";
 
-export default function InputClient({ role }: { role: string | null; staffId?: string | null }) {
+export default function InputClient({
+  role,
+  embedded = false,
+}: {
+  role: string | null;
+  staffId?: string | null;
+  // /director/input처럼 이미 사이드바+본문 패딩이 있는 레이아웃 안에서 쓸
+  // 때는 true로 넘긴다 — 기본값(false)은 옛 독립형 /input 라우트(TopBar만
+  // 있고 좌측 사이드바가 없음) 그대로, .page의 max-width:1080px+margin:0
+  // auto가 콘텐츠를 화면 중앙으로 밀어 사이드바 옆에 큰 여백을 만든다.
+  embedded?: boolean;
+}) {
   // 원장/행정은 강사·조교·행정 입력폼을 모두 볼 수 있어야 하므로, "행정 전용"
   // 폼들도 원장에게 함께 열어준다. 조교는 강사의 "오늘 수업 기록"이 아니라
   // 클리닉(코칭) 전용 폼을 쓴다 — 정규수업 진도가 아니라 1:1~1:다수 코칭이
@@ -1438,7 +1436,7 @@ export default function InputClient({ role }: { role: string | null; staffId?: s
   const [recordPrefill, setRecordPrefill] = useState<{ classId: string; date: string; key: number } | null>(null);
 
   return (
-    <div className="page">
+    <div className={embedded ? "space-y-4" : "page"}>
       <div className="input-tabbar">
         {tabs.map((t) => (
           <button
