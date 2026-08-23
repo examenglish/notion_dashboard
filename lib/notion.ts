@@ -1539,6 +1539,37 @@ export async function getClassProgressForEdit(classId: string, date: string, per
   };
 }
 
+// 이미 저장된 수업 기록에 학생별 테스트/과제 점수(성취사항)만 덧붙여
+// 저장한다 — 출결/과제여부/단어테스트결과/진도내용처럼 실수로 덮어쓰면
+// 사고가 나는 필드는 전혀 건드리지 않으므로, updateClassProgress와 달리
+// 원장/행정이 아닌 강사도 안전하게 호출할 수 있다(그 필드들에 대한
+// "이미 저장된 기록은 원장/행정만 수정" 원칙은 그대로 유지된다 — 점수만
+// 예외).
+export async function saveClassRecordScores(
+  progressId: string,
+  scores: Record<string, AchievementScore[]>
+): Promise<{ updated: number }> {
+  const dailyRecords = await queryAllPages({
+    data_source_id: DB.DAILY_RECORD,
+    filter: { property: "반별진도원본", relation: { contains: progressId } },
+  });
+  let updated = 0;
+  await Promise.all(
+    (dailyRecords as any[]).map(async (dp) => {
+      const studentId = getRelationIds(dp, "학생")[0];
+      if (!studentId || !(studentId in scores)) return;
+      await notion.pages.update({
+        page_id: dp.id,
+        properties: {
+          성취사항: { rich_text: [{ text: { content: serializeAchievementScores(scores[studentId]) } }] },
+        } as any,
+      });
+      updated++;
+    })
+  );
+  return { updated };
+}
+
 // 날짜 범위 안에서 "이 날 수업이 있었어야 할 반인데 진도/브리핑 기록이 아직
 // 없는" 반×날짜 조합을 찾는다. 반의 요일 설정(days)으로 "있어야 할 수업일"을
 // 계산하고, 그 범위의 실제 저장 기록(반+날짜만 대조 — 교시가 나뉜 반이라도

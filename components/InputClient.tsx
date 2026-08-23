@@ -87,6 +87,8 @@ function ClassRecordForm({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [existingProgressId, setExistingProgressId] = useState<string | null>(null);
+  const [savingScores, setSavingScores] = useState(false);
+  const [scoresSaved, setScoresSaved] = useState(false);
   const [reviewItems, setReviewItems] = useState<AbsenceReviewItem[] | null>(null);
   const [includeExamClasses, setIncludeExamClasses] = useState(false);
 
@@ -387,6 +389,36 @@ function ClassRecordForm({
     if (!res.ok && !res.cancelled) setError(res.error ?? "저장에 실패했습니다.");
   }
 
+  // 이미 저장된 기록이라 전체 저장(handleDirectSave)이 잠긴 강사도, 점수만은
+  // 이 별도 경로로 바로 저장할 수 있다 — /api/class-record/scores는 성취사항
+  // 외의 필드를 전혀 건드리지 않아 원장/행정 권한 체크가 없다.
+  async function handleSaveScoresOnly() {
+    if (!existingProgressId) return;
+    setError(null);
+    setScoresSaved(false);
+    setSavingScores(true);
+    try {
+      const res = await fetch("/api/class-record/scores", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          progressId: existingProgressId,
+          scores: Object.fromEntries(Object.entries(perStudent).map(([id, f]) => [id, f.scores])),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "점수 저장에 실패했습니다.");
+        return;
+      }
+      setScoresSaved(true);
+    } catch {
+      setError("네트워크 오류로 점수를 저장하지 못했습니다.");
+    } finally {
+      setSavingScores(false);
+    }
+  }
+
   const selectedClassName = stripClassSuffix(classes.find((c) => c.id === classId)?.name ?? "");
   const hasClass = !!classId || !!manualClassName.trim();
   const isLocked = !!existingProgressId && !canEditExisting;
@@ -398,8 +430,20 @@ function ClassRecordForm({
         <h2>오늘 수업 기록 <span className="title-lab-tag">(실험실)</span></h2>
         {existingProgressId && isLocked && (
           <p className="muted" style={{ marginTop: -4, color: "#b91c1c" }}>
-            이미 저장된 <strong>{period || "교시 구분 없음"}</strong> 기록입니다. 저장된 기록의 수정은 원장/행정만 할 수
+            이미 저장된 <strong>{period || "교시 구분 없음"}</strong> 기록입니다. 진도/출결 등은 원장/행정만 수정할 수
             있어요 — 내용을 고칠 일이 있으면 원장/행정에게 요청해주세요.
+            {" "}테스트/과제 점수는 아래 표에서 바로 입력하고{" "}
+            <button
+              type="button"
+              className="secondary"
+              disabled={savingScores}
+              onClick={handleSaveScoresOnly}
+              style={{ padding: "2px 10px", fontSize: 12 }}
+            >
+              {savingScores ? "저장 중..." : "점수만 저장"}
+            </button>
+            {" "}버튼으로 저장하면 됩니다.
+            {scoresSaved && <span style={{ color: "#1a7f3c", fontWeight: 600 }}> 저장됐습니다.</span>}
           </p>
         )}
         {existingProgressId && !isLocked && (
@@ -529,7 +573,14 @@ function ClassRecordForm({
             </fieldset>
           </div>
 
-          <fieldset disabled={isLocked} style={{ border: 0, padding: 0, margin: 0 }}>
+          {/* 예전엔 이 패널 전체를 <fieldset disabled={isLocked}>로 한 번에 잠갔는데,
+              그러면 새로 추가한 테스트/과제 점수 입력칸까지 함께 잠겨(브라우저가
+              disabled input에는 아예 포커스/타이핑을 안 받음) 강사가 이미 저장된
+              오늘 기록에 점수를 나중에 채워 넣을 수 없었다("숫자 입력이 안됨" 버그
+              원인). 잠금 사유(출결/단어미통과/과제미완료 같은 확정된 값을 실수로
+              덮어쓰는 사고 방지)와 무관한 점수 입력은 항상 열어두고, 그 사유에
+              해당하는 컨트롤에만 disabled={isLocked}를 개별로 건다. */}
+          <div>
             <label>학생별 체크 ({selectedClassName || "반 선택"})</label>
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", margin: "6px 0 10px" }}>
@@ -598,6 +649,7 @@ function ClassRecordForm({
                             <td>
                               <button
                                 type="button"
+                                disabled={isLocked}
                                 className={`roster-chip ${flags?.absent ? "is-on" : ""}`}
                                 onClick={() => toggleFlag(s.id, "absent")}
                               >
@@ -607,6 +659,7 @@ function ClassRecordForm({
                             <td>
                               <button
                                 type="button"
+                                disabled={isLocked}
                                 className={`roster-chip ${flags?.late ? "is-on" : ""}`}
                                 onClick={() => toggleFlag(s.id, "late")}
                               >
@@ -616,6 +669,7 @@ function ClassRecordForm({
                             <td>
                               <button
                                 type="button"
+                                disabled={isLocked}
                                 className={`roster-chip ${flags?.vocabFail ? "is-on" : ""}`}
                                 onClick={() => toggleFlag(s.id, "vocabFail")}
                               >
@@ -625,6 +679,7 @@ function ClassRecordForm({
                             <td>
                               <button
                                 type="button"
+                                disabled={isLocked}
                                 className={`roster-chip ${flags?.homeworkIncomplete ? "is-on" : ""}`}
                                 onClick={() => toggleFlag(s.id, "homeworkIncomplete")}
                               >
@@ -660,6 +715,7 @@ function ClassRecordForm({
                             <td>
                               <button
                                 type="button"
+                                disabled={isLocked}
                                 className={`roster-notice-btn ${flags?.individualNotice ? "has-content" : ""}`}
                                 onClick={() => toggleNoticeOpen(s.id)}
                               >
@@ -668,7 +724,13 @@ function ClassRecordForm({
                             </td>
                             <td>
                               {isExtra && (
-                                <button type="button" className="secondary" onClick={() => removeExtraStudent(s.id)} style={{ padding: "2px 8px", fontSize: 11 }}>
+                                <button
+                                  type="button"
+                                  disabled={isLocked}
+                                  className="secondary"
+                                  onClick={() => removeExtraStudent(s.id)}
+                                  style={{ padding: "2px 8px", fontSize: 11 }}
+                                >
                                   제거
                                 </button>
                               )}
@@ -679,6 +741,7 @@ function ClassRecordForm({
                               <td colSpan={7 + scoreTypes.length}>
                                 <textarea
                                   rows={2}
+                                  disabled={isLocked}
                                   placeholder="개별 안내사항"
                                   value={flags?.individualNotice ?? ""}
                                   onChange={(e) => setIndividualNotice(s.id, e.target.value)}
@@ -695,10 +758,10 @@ function ClassRecordForm({
               </div>
             )}
 
-            <div style={{ marginTop: 12 }}>
+            <fieldset disabled={isLocked} style={{ border: 0, padding: 0, margin: "12px 0 0" }}>
               <StudentPicker studentId={extraPickerId} onChange={addExtraStudent} label="다른 반 학생 호출 (개별 기록 추가)" allowEmpty />
-            </div>
-          </fieldset>
+            </fieldset>
+          </div>
         </div>
       </form>
 
