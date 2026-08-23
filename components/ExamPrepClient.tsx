@@ -402,7 +402,11 @@ function TextSourceGroup({
   function addRange() {
     const labels = parseNumberRange(rangeText);
     if (labels.length === 0) return;
-    const existing = new Set(sources.map((s) => s.label));
+    // 기출모의고사는 회차(연도)가 달라도 문항 번호가 겹치는 게 정상이므로
+    // (예: 2025년 9월·2026년 9월 모두 21번이 존재), 같은 회차(detail)
+    // 안에서만 중복을 체크한다 — 전체 소스 기준으로 체크하면 다른
+    // 회차에 이미 등록된 번호와 겹쳐 신규 회차 등록이 막혀버린다.
+    const existing = new Set(sources.filter((s) => s.detail === rangeName).map((s) => s.label));
     const toAdd = labels.filter((l) => !existing.has(l));
     if (toAdd.length === 0) {
       window.alert("이미 모두 등록된 번호입니다.");

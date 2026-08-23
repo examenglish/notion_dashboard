@@ -3266,7 +3266,13 @@ function mergeSchoolUnits(data: ExamPrepData, entry: SchoolExamRangeEntry | null
     for (const cat of MIDDLE_TEXT_CATEGORIES) {
       const catUnits = entry.units[cat];
       if (!catUnits || catUnits.units.length === 0) continue;
-      const existingLabels = new Set(textSources.filter((t) => t.category === cat).map((t) => t.label));
+      // 모의고사는 회차(연도)가 달라도 문항 번호가 겹치는 게 정상이므로
+      // (예: 2025년 9월·2026년 9월 모두 21번), 같은 회차(catUnits.name =
+      // detail) 안에서만 중복을 체크한다 — 카테고리 전체로 체크하면 이전
+      // 회차에 이미 등록된 번호와 겹쳐 새 회차 항목이 통째로 스킵된다.
+      const existingLabels = new Set(
+        textSources.filter((t) => t.category === cat && t.detail === catUnits.name).map((t) => t.label)
+      );
       const missing = catUnits.units.filter((u) => !existingLabels.has(u));
       if (missing.length === 0) continue;
       const added = missing.map((label) => ({ ...newMiddleTextSource(cat, label), detail: catUnits.name }));
@@ -3287,7 +3293,13 @@ function mergeSchoolUnits(data: ExamPrepData, entry: SchoolExamRangeEntry | null
   for (const cat of TEXT_CATEGORIES) {
     const catUnits = entry.units[cat];
     if (!catUnits || catUnits.units.length === 0) continue;
-    const existingLabels = new Set(textSources.filter((t) => t.category === cat).map((t) => t.label));
+    // 모의고사는 회차(연도)가 달라도 문항 번호가 겹치는 게 정상이므로
+    // (예: 2025년 9월·2026년 9월 모두 21번), 같은 회차(catUnits.name =
+    // detail) 안에서만 중복을 체크한다 — 카테고리 전체로 체크하면 이전
+    // 회차에 이미 등록된 번호와 겹쳐 새 회차 항목이 통째로 스킵된다.
+    const existingLabels = new Set(
+      textSources.filter((t) => t.category === cat && t.detail === catUnits.name).map((t) => t.label)
+    );
     const missing = catUnits.units.filter((u) => !existingLabels.has(u));
     if (missing.length === 0) continue;
     const added = missing.map((label) => ({ ...newTextSource(cat, label), detail: catUnits.name }));
