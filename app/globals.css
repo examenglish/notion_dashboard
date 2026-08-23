@@ -1000,6 +1000,14 @@ th, td {
   .no-print {
     display: none !important;
   }
+  /* 학생 리포트를 여러 명 한 번에 인쇄할 때 한 학생당 한 페이지씩 나오도록
+     — 마지막 카드 뒤에는 빈 페이지가 남지 않게 last-child는 제외한다. */
+  .report-page {
+    page-break-after: always;
+  }
+  .report-page:last-child {
+    page-break-after: auto;
+  }
 }
 
 .class-summary-card {

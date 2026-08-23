@@ -10,6 +10,7 @@ import {
   PencilLine,
   GraduationCap,
   BarChart3,
+  FileText,
   ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -44,6 +45,7 @@ const NAV_ITEMS: NavItem[] = [
     ],
   },
   { href: "/director/student-levels", label: "학생 레벨", icon: BarChart3, exact: false },
+  { href: "/director/reports", label: "학생 리포트", icon: FileText, exact: false },
 ];
 
 // useSearchParams() forces any statically-rendered page that embeds this
@@ -63,7 +65,11 @@ function DirectorSidebarInner({ branchName, role = "원장" }: { branchName: str
   const searchParams = useSearchParams();
   const currentTab = searchParams.get("tab");
   // 학생 레벨은 예전 화면에서도 원장 전용이었다 — 다른 역할에게는 숨긴다.
-  const navItems = NAV_ITEMS.filter((i) => i.href !== "/director/student-levels" || role === "원장");
+  const navItems = NAV_ITEMS.filter(
+    (i) =>
+      (i.href !== "/director/student-levels" || role === "원장") &&
+      (i.href !== "/director/reports" || role === "원장" || role === "행정")
+  );
   const [openKey, setOpenKey] = useState<string | null>(
     navItems.find((i) => i.children && pathname.startsWith(i.href))?.href ?? null
   );

@@ -747,6 +747,107 @@ export async function getStudentExamScores(studentId: string) {
   }));
 }
 
+export type StudentPeriodReport = {
+  studentId: string;
+  studentName: string;
+  school: string;
+  grade: string | null;
+  classNames: string[];
+  parentPhone: string | null;
+  from: string;
+  to: string;
+  loggedDays: number;
+  attendanceRate: number | null; // 0~1, 기존 누적 rollup과 동일한 단위(present/total)
+  homeworkRate: number | null;
+  vocabPassRate: number | null;
+  progressLog: { date: string; progress: string }[];
+  examScores: { date: string; examName: string; subject: string | null; score: number | null }[];
+};
+
+// 학부모 발송용 학습현황 리포트(진도/과제/성취율) 한 학생분 — 기간은
+// getStudentDailyRecords와 달리 화면에서 관리자가 고른 시작~종료일로
+// Notion 쪽에서 직접 필터링해 불필요한 레코드를 내려받지 않는다.
+// classById를 넘기면 listClasses() 재호출 없이 배치 조회에서 공유한다.
+export async function getStudentPeriodReport(
+  studentId: string,
+  from: string,
+  to: string,
+  classById?: Map<string, string>
+): Promise<StudentPeriodReport> {
+  const dateFilter = {
+    and: [
+      { property: "학생", relation: { contains: studentId } },
+      { property: "날짜", date: { on_or_after: from } },
+      { property: "날짜", date: { on_or_before: to } },
+    ],
+  };
+  const [studentPage, dailyRecords, examRecords, resolvedClassById] = await Promise.all([
+    notion.pages.retrieve({ page_id: studentId }),
+    queryAllPages({ data_source_id: DB.DAILY_RECORD, filter: dateFilter }),
+    queryAllPages({ data_source_id: DB.EXAM_SCORE, filter: dateFilter }),
+    classById ? Promise.resolve(classById) : classNameMap(),
+  ]);
+
+  const daily = dailyRecords
+    .map((p: any) => ({
+      date: getDate(p, "날짜") ?? "",
+      attendance: getSelect(p, "출결"),
+      homeworkDone: getCheckbox(p, "과제여부"),
+      vocabResult: getSelect(p, "단어테스트결과"),
+      progress: getRichText(p, "진도내용"),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const loggedDays = daily.length;
+  // 출석/과제/단어통과율은 getMonthlyStudentMetrics와 동일하게 "결석이
+  // 아니면 출석"으로 세고, 분모는 기록된 전체 일수로 통일한다 — 다른
+  // 화면의 누적 지표와 같은 기준이라야 학부모 리포트 수치가 대시보드와
+  // 어긋나 보이지 않는다.
+  const attendanceRate = loggedDays === 0 ? null : daily.filter((d) => d.attendance !== "결석").length / loggedDays;
+  const homeworkRate = loggedDays === 0 ? null : daily.filter((d) => d.homeworkDone).length / loggedDays;
+  const vocabPassRate = loggedDays === 0 ? null : daily.filter((d) => d.vocabResult === "통과").length / loggedDays;
+  const progressLog = daily
+    .filter((d) => d.progress.trim() !== "")
+    .map((d) => ({ date: d.date, progress: d.progress }));
+
+  const examScores = examRecords
+    .map((p: any) => ({
+      date: getDate(p, "날짜") ?? "",
+      examName: getRichText(p, "시험명"),
+      subject: getSelect(p, "과목"),
+      score: getNumber(p, "점수"),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const classIds = getRelationIds(studentPage, "소속반");
+
+  return {
+    studentId,
+    studentName: getTitle(studentPage, "이름"),
+    school: getRichText(studentPage, "학교"),
+    grade: getSelect(studentPage, "학년"),
+    classNames: classIds.map((id) => resolvedClassById.get(id) ?? "알수없음"),
+    parentPhone: getPhone(studentPage, "학부모연락처"),
+    from,
+    to,
+    loggedDays,
+    attendanceRate,
+    homeworkRate,
+    vocabPassRate,
+    progressLog,
+    examScores,
+  };
+}
+
+export async function getStudentsPeriodReports(
+  studentIds: string[],
+  from: string,
+  to: string
+): Promise<StudentPeriodReport[]> {
+  const classById = await classNameMap();
+  return Promise.all(studentIds.map((id) => getStudentPeriodReport(id, from, to, classById)));
+}
+
 // Aggregates 누적출석률 / 누적숙제제출률 per class, for the dashboard bar chart.
 export async function getClassSummary() {
   const [classes, students] = await Promise.all([listClasses(), searchStudents("")]);
