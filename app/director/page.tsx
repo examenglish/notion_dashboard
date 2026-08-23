@@ -73,11 +73,6 @@ export default async function DirectorDashboardPage() {
     }))
   );
 
-  const statusCounts = students.reduce<Record<string, number>>((acc, s) => {
-    acc[s.status ?? "재원"] = (acc[s.status ?? "재원"] ?? 0) + 1;
-    return acc;
-  }, {});
-
   const { attendance, vocab, homework } = dailyOutcome;
   const loggedToday = attendance.출석 + attendance.지각 + attendance.결석;
   const attendanceRatePct = loggedToday > 0 ? Math.round(((attendance.출석 + attendance.지각) / loggedToday) * 100) : null;
@@ -129,8 +124,6 @@ export default async function DirectorDashboardPage() {
             today={today}
             role={session.role ?? ""}
             staffName={session.name}
-            studentsCount={students.length}
-            activeStudentsCount={statusCounts["재원"] ?? 0}
             attendanceRatePct={attendanceRatePct}
             attendanceLoggedLabel={`${attendance.출석 + attendance.지각}/${loggedToday || 0}명 기록`}
             absentCount={attendance.결석}

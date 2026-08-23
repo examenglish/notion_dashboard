@@ -24,8 +24,6 @@ export default function PreviewTestPage() {
             today="2026-08-14"
             role="원장"
             staffName="김원장"
-            studentsCount={184}
-            activeStudentsCount={171}
             attendanceRatePct={94}
             attendanceLoggedLabel="122/130명 기록"
             absentCount={6}

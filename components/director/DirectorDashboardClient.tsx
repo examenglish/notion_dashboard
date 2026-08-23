@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Users, CheckCircle2, XCircle, BookX, ClipboardX } from "lucide-react";
+import { CheckCircle2, XCircle, BookX, ClipboardX } from "lucide-react";
 import StatTile from "./StatTile";
 import ListCard, { ListRow } from "./ListCard";
 import Popup from "./Popup";
@@ -78,8 +78,6 @@ export default function DirectorDashboardClient({
   today,
   role,
   staffName,
-  studentsCount,
-  activeStudentsCount,
   attendanceRatePct,
   attendanceLoggedLabel,
   absentCount,
@@ -97,8 +95,6 @@ export default function DirectorDashboardClient({
   today: string;
   role: string;
   staffName: string;
-  studentsCount: number;
-  activeStudentsCount: number;
   attendanceRatePct: number | null;
   attendanceLoggedLabel: string;
   absentCount: number;
@@ -314,10 +310,7 @@ export default function DirectorDashboardClient({
         <NaturalLanguageInput />
       </div>
 
-      <div className={cn("grid grid-cols-2 gap-3", role === "원장" ? "lg:grid-cols-5" : "lg:grid-cols-4")}>
-        {role === "원장" && (
-          <StatTile icon={Users} label="전체 학생" value={`${studentsCount}명`} sub={`재원 ${activeStudentsCount}`} />
-        )}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile
           icon={CheckCircle2}
           label="오늘 출석"
