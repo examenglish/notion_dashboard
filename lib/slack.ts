@@ -157,9 +157,19 @@ function eventIdsWith(page: any, eventId: string): string {
 async function resolveStudent(text: string) {
   const parsedName = parseStudentName(text);
   if (!parsedName) return { parsedName: "", studentId: null, linkStatus: "학생태그없음" };
-  const candidates = (await searchStudents(parsedName, undefined, true)).filter((student) => student.name.trim() === parsedName);
-  if (candidates.length === 1) return { parsedName, studentId: candidates[0].id, linkStatus: "연결" };
-  return { parsedName, studentId: null, linkStatus: candidates.length === 0 ? "미일치" : "동명이인" };
+
+  const rawMatches = await searchStudents(parsedName, undefined, true);
+  const exact = rawMatches.filter((student) => student.name.trim() === parsedName);
+  if (exact.length === 1) return { parsedName, studentId: exact[0].id, linkStatus: "연결" };
+  if (exact.length > 1) return { parsedName, studentId: null, linkStatus: "동명이인" };
+
+  // 완전일치 후보가 없으면, 학생명 끝의 동명이인 구분용 숫자(예: "서지민1")를
+  // 무시하고 한 번 더 매칭한다. 정확히 한 명일 때만 자동 연결하고, 둘 이상이면
+  // 동명이인으로 남겨 오연결을 방지한다.
+  const stripSuffixDigits = (name: string) => name.trim().replace(/\d+$/, "");
+  const fuzzy = rawMatches.filter((student) => stripSuffixDigits(student.name) === parsedName);
+  if (fuzzy.length === 1) return { parsedName, studentId: fuzzy[0].id, linkStatus: "연결" };
+  return { parsedName, studentId: null, linkStatus: fuzzy.length === 0 ? "미일치" : "동명이인" };
 }
 
 function normalizeEvent(event: SlackMessageEvent) {

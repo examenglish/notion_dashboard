@@ -39,8 +39,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "workspace_not_allowed" }, { status: 403 });
   }
 
+  const allowedChannels = (process.env.SLACK_STUDENT_LOG_CHANNEL_ID ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
   const event = envelope.event;
-  if (!event || event.channel !== process.env.SLACK_STUDENT_LOG_CHANNEL_ID) {
+  if (!event || !allowedChannels.includes(event.channel ?? "")) {
     return NextResponse.json({ ok: true, ignored: true });
   }
   if (shouldIgnoreSlackEvent(event)) return NextResponse.json({ ok: true, ignored: true });
