@@ -32,11 +32,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
 
-  if (envelope.team_id !== process.env.SLACK_TEAM_ID) {
-    return NextResponse.json({ error: "workspace_not_allowed" }, { status: 403 });
-  }
   if (envelope.type === "url_verification") {
     return NextResponse.json({ challenge: envelope.challenge ?? "" });
+  }
+  if (envelope.team_id !== process.env.SLACK_TEAM_ID) {
+    return NextResponse.json({ error: "workspace_not_allowed" }, { status: 403 });
   }
 
   const event = envelope.event;
