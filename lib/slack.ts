@@ -6,6 +6,7 @@ import {
   notion,
   searchStudents,
 } from "./notion";
+import { SLASH_COMMANDS, runNaturalLanguageCommand } from "./nl-input";
 
 const FIVE_MINUTES_SECONDS = 5 * 60;
 const NOTION_RICH_TEXT_LIMIT = 2000;
@@ -110,7 +111,11 @@ async function slackApi<T>(method: string, body: Record<string, string>): Promis
   }
 }
 
-export async function addSlackReaction(channel: string, messageTs: string, name: "white_check_mark" | "warning" | "x") {
+export async function addSlackReaction(
+  channel: string,
+  messageTs: string,
+  name: "white_check_mark" | "warning" | "x" | "clipboard" | "question"
+) {
   if (!channel || !messageTs) return;
   await slackApi("reactions.add", { channel, timestamp: messageTs, name });
 }
@@ -252,4 +257,34 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
     await notion.pages.create({ parent: { data_source_id: DB.SLACK_RECORDS } as any, properties: commonProperties });
   }
   await addSlackReaction(channel, normalized.messageTs, resolved.studentId ? "white_check_mark" : "warning");
+
+  // 새 메시지에만(수정본 재처리는 안 함) "/보강 이름 시간"처럼 인식되는
+  // 슬래시 태그가 붙어 있으면, 자연어 입력 박스와 같은 파이프라인으로
+  // 보강/결석/상담/조치 등 실제 업무 DB에도 구조화해서 저장한다. 태그 없는
+  // 메시지는 원문 아카이브(위)만 남고 구조화 저장은 시도하지 않는다 —
+  // AI가 임의로 추측해 엉뚱한 DB에 잘못 적재하는 일을 막기 위한 의도적 게이트.
+  if (!existing && normalized.action === "활성") {
+    const slashMatch = normalized.text.match(/^\s*\/\s*(\S+)\s+([\s\S]+)$/);
+    const command = slashMatch ? SLASH_COMMANDS[slashMatch[1]] : undefined;
+    if (command) {
+      try {
+        const result = await runNaturalLanguageCommand(slashMatch![2].trim(), {
+          staffName: metadata.author,
+          forceTool: command.tool,
+          forcedScheduleType: command.scheduleType,
+          forcedInboxType: command.inboxType,
+        });
+        if (result.kind === "saved") {
+          await addSlackReaction(channel, normalized.messageTs, "clipboard");
+        } else if (result.kind === "ai_error" || result.kind === "save_error") {
+          await addSlackReaction(channel, normalized.messageTs, "x");
+        } else {
+          await addSlackReaction(channel, normalized.messageTs, "question");
+        }
+      } catch (error) {
+        console.error("Slack 자연어 명령 처리 실패", eventId, error instanceof Error ? error.name : "unknown_error");
+        await addSlackReaction(channel, normalized.messageTs, "x");
+      }
+    }
+  }
 }
