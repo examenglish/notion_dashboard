@@ -1,6 +1,15 @@
 # Slack 학생기록 연동 인수인계
 
-이 문서는 코드 구현 이후 실제 외부 서비스에서 원장이 수행해야 하는 설정을 정리합니다. 아래 작업은 아직 실행하지 않았습니다.
+이 문서는 코드 구현 이후 실제 외부 서비스에서 원장이 수행해야 하는 설정을 정리합니다.
+
+## 진행 상황 (2026-08-24 업데이트)
+
+- ✅ `feature/slack-student-records` 브랜치 push 완료
+- ✅ Notion DB `사직이그잼영어학원 Slack 학생기록`, `금정이그잼영어학원 Slack 학생기록` 생성 완료 (아래 6번 스키마 그대로, `학생` relation은 각 워크스페이스의 기존 `DB②학생마스터`에 연결됨). 이 MCP 연결이 쓰는 Notion 계정으로 만들었으므로, 웹앱이 실제 쓰는 `NOTION_TOKEN` Integration에 이 두 DB의 읽기·삽입·수정 권한이 있는지 원장이 Notion Share 메뉴에서 한 번 확인 필요 (부모 페이지 `학원관리` 공유를 상속받았을 가능성이 높지만 미확인).
+  - 사직 data source ID: `c490115c-0b3f-4215-9106-cf96f86e8d73`
+  - 금정 data source ID: `620108cf-79f1-4c52-a151-5f9b2c04d0eb`
+- ✅ `NOTION_SLACK_RECORDS_DB_ID` 환경변수를 두 Vercel 프로젝트(Production+Preview)에 위 값으로 등록 완료
+- ⬜ 아래 5개 `SLACK_*` 환경변수는 Slack App을 실제로 만들어야 나오는 값이라 미등록. Slack App 생성은 로그인·브라우저 조작이 필요해 원장이 직접 해야 합니다.
 
 ## 1. 완료한 작업
 
