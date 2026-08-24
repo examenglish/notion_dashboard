@@ -258,16 +258,16 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
   }
   await addSlackReaction(channel, normalized.messageTs, resolved.studentId ? "white_check_mark" : "warning");
 
-  // 새 메시지에만(수정본 재처리는 안 함) "보강: 이름 시간"처럼 인식되는
+  // 새 메시지에만(수정본 재처리는 안 함) "!보강 이름 시간"처럼 인식되는
   // 태그가 맨 앞에 붙어 있으면, 자연어 입력 박스와 같은 파이프라인으로
   // 보강/결석/상담/조치 등 실제 업무 DB에도 구조화해서 저장한다. 태그 없는
   // 메시지는 원문 아카이브(위)만 남고 구조화 저장은 시도하지 않는다 —
   // AI가 임의로 추측해 엉뚱한 DB에 잘못 적재하는 일을 막기 위한 의도적 게이트.
   // 자연어 입력 박스와 달리 "/"를 안 쓰는 이유: Slack은 "/"로 시작하는
   // 메시지를 자체 슬래시 명령으로 가로채서, 그 문법을 채팅창에 그대로
-  // 타이핑할 수 없다.
+  // 타이핑할 수 없다. "!"는 Slack이 가로채지 않는다.
   if (!existing && normalized.action === "활성") {
-    const tagMatch = normalized.text.match(/^\s*(\S+?)\s*[:：]\s*([\s\S]+)$/);
+    const tagMatch = normalized.text.match(/^\s*!\s*(\S+)\s+([\s\S]+)$/);
     const command = tagMatch ? SLASH_COMMANDS[tagMatch[1]] : undefined;
     if (command) {
       try {
