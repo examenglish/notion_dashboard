@@ -269,6 +269,7 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
   if (!existing && normalized.action === "활성") {
     const tagMatch = normalized.text.match(/^\s*!\s*(\S+)\s+([\s\S]+)$/);
     const command = tagMatch ? SLASH_COMMANDS[tagMatch[1]] : undefined;
+    console.log("Slack 태그 감지", eventId, tagMatch?.[1], !!command);
     if (command) {
       try {
         const result = await runNaturalLanguageCommand(tagMatch![2].trim(), {
@@ -277,6 +278,7 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
           forcedScheduleType: command.scheduleType,
           forcedInboxType: command.inboxType,
         });
+        console.log("Slack 태그 처리 결과", eventId, result.kind);
         if (result.kind === "saved") {
           await addSlackReaction(channel, normalized.messageTs, "clipboard");
         } else if (result.kind === "ai_error" || result.kind === "save_error") {
