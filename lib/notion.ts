@@ -275,7 +275,7 @@ export async function updateStaffPin(staffId: string, newPin: string) {
 // 막기 위해 캐시가 아니라 매번 최신 명단을 직접 조회해서 확인한다. 최초
 // 비밀번호는 그대로 PIN에 저장하고 "비번변경필요"를 켜서, 등록된 직원이
 // 처음 로그인할 때 반드시 자기 비밀번호로 바꾸도록 유도한다.
-export async function createStaff(name: string, role: "강사" | "조교", pin: string) {
+export async function createStaff(name: string, role: "강사" | "조교" | "행정", pin: string) {
   const res: any = await notion.dataSources.query({ data_source_id: DB.STAFF, page_size: 100 });
   const dup = res.results.find((p: any) => getTitle(p, "이름") === name);
   if (dup) throw new Error(`이미 "${name}" 이름의 계정이 있습니다.`);

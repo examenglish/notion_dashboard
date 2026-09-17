@@ -11,7 +11,7 @@ function confirmSave(name: string, role: string) {
 // 바꾸도록 유도한다(관리자가 정한 초기 비밀번호를 계속 쓰지 않도록).
 export default function StaffRegisterForm() {
   const [name, setName] = useState("");
-  const [role, setRole] = useState<"강사" | "조교">("강사");
+  const [role, setRole] = useState<"강사" | "조교" | "행정">("강사");
   const [pin, setPin] = useState("");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState<string | null>(null);
@@ -54,9 +54,9 @@ export default function StaffRegisterForm() {
 
   return (
     <div className="card">
-      <h2>강사·조교 계정 등록 <span className="title-lab-tag">(실험실)</span></h2>
+      <h2>강사·조교·행정 계정 등록 <span className="title-lab-tag">(실험실)</span></h2>
       <p className="muted">
-        새 강사·조교의 로그인 계정을 만듭니다. 여기서 정한 비밀번호는 임시 비밀번호이며, 등록된 직원이 처음
+        새 강사·조교·행정의 로그인 계정을 만듭니다. 여기서 정한 비밀번호는 임시 비밀번호이며, 등록된 직원이 처음
         로그인하면 자기 비밀번호로 바꾸게 됩니다.
       </p>
 
@@ -78,6 +78,10 @@ export default function StaffRegisterForm() {
         <label style={{ display: "flex", alignItems: "center", gap: 4, fontWeight: 400 }}>
           <input type="radio" checked={role === "조교"} onChange={() => setRole("조교")} />
           조교
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4, fontWeight: 400 }}>
+          <input type="radio" checked={role === "행정"} onChange={() => setRole("행정")} />
+          행정
         </label>
       </div>
 

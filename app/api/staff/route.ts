@@ -31,8 +31,8 @@ export async function POST(req: NextRequest) {
   if (!name) {
     return NextResponse.json({ error: "이름을 입력해주세요." }, { status: 400 });
   }
-  if (newRole !== "강사" && newRole !== "조교") {
-    return NextResponse.json({ error: "역할은 강사 또는 조교만 등록할 수 있습니다." }, { status: 400 });
+  if (newRole !== "강사" && newRole !== "조교" && newRole !== "행정") {
+    return NextResponse.json({ error: "역할은 강사, 조교, 행정 중 하나여야 합니다." }, { status: 400 });
   }
   if (!/^\d{4,8}$/.test(pin)) {
     return NextResponse.json({ error: "비밀번호는 숫자 4~8자리로 입력해주세요." }, { status: 400 });
