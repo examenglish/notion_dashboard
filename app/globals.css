@@ -1081,6 +1081,65 @@ th, td {
   }
 }
 
+/* 조교별 클리닉 기록 전체 출력 — 조교가 지금까지 쓴 기록을 빠짐없이 날짜
+   오름차순으로, 행 사이 여백 없이 표로 촘촘하게 눌러 붙인다(종이를 아끼는
+   밀도가 목적). 조교가 바뀌는 지점만 새 페이지로 넘긴다. */
+.clinic-print-section-break {
+  margin-top: 32px;
+}
+
+.clinic-print-title {
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+
+.clinic-print-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.clinic-print-table th,
+.clinic-print-table td {
+  border: 1px solid var(--border);
+  padding: 4px 6px;
+  font-size: 12px;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.clinic-print-table th {
+  background: var(--primary-tint);
+  color: var(--primary-dark);
+}
+
+@media print {
+  .clinic-print-section-break {
+    margin-top: 0;
+    page-break-before: always;
+    break-before: page;
+  }
+  .clinic-print-title {
+    font-size: 12pt;
+  }
+  .clinic-print-table th,
+  .clinic-print-table td {
+    border: 0.75pt solid #000;
+    padding: 1px 3px;
+    font-size: 8.5pt;
+    line-height: 1.15;
+  }
+  .clinic-print-table th {
+    background: none !important;
+    color: #000 !important;
+  }
+  .clinic-print-table tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}
+
 .class-summary-card {
   display: flex;
   flex-direction: column;

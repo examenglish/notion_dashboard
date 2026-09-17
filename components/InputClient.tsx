@@ -10,6 +10,8 @@ import AttendanceCheckForm from "./AttendanceCheckForm";
 import ClassAssistantAssignForm from "./ClassAssistantAssignForm";
 import StaffScheduleForm from "./StaffScheduleForm";
 import StaffRegisterForm from "./StaffRegisterForm";
+import StaffResignForm from "./StaffResignForm";
+import AssistantClinicPrintModal from "./AssistantClinicPrintModal";
 import ClassManageForm from "./ClassManageForm";
 import AssignClinicTaskForm from "./AssignClinicTaskForm";
 import QuickScheduleForm from "./QuickScheduleForm";
@@ -1401,6 +1403,7 @@ export default function InputClient({
   // 채워 저장하면 그 시점에 브리핑이 생성된다.
   const isAdminLike = role === "행정" || role === "원장";
   const isAssistant = role === "조교";
+  const [showClinicPrint, setShowClinicPrint] = useState(false);
 
   // 폼이 12개 가까이 한 페이지에 세로로 쌓여 있으면 원하는 폼을 찾으려고
   // 계속 스크롤해야 했다. 성격이 비슷한 폼끼리 탭으로 묶어서, 탭 전환만으로
@@ -1469,7 +1472,19 @@ export default function InputClient({
           {isAdminLike && <ClassAssistantAssignForm />}
           {isAdminLike && <StaffScheduleForm />}
           {isAdminLike && <StaffRegisterForm />}
+          {isAdminLike && <StaffResignForm />}
           {!isAssistant && <AssignClinicTaskForm />}
+          {isAdminLike && (
+            <div className="card">
+              <h2>조교 클리닉 기록 전체 출력 <span className="title-lab-tag">(실험실)</span></h2>
+              <p className="muted">
+                조교가 지금까지 작성한 클리닉 기록 전체를 조교별·날짜순으로 모아 PDF로 출력합니다.
+              </p>
+              <button type="button" className="secondary" style={{ marginTop: 10 }} onClick={() => setShowClinicPrint(true)}>
+                출력 화면 열기
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1490,6 +1505,8 @@ export default function InputClient({
           {(isAssistant || isAdminLike) && <AssistantClinicForm role={role} />}
         </>
       )}
+
+      {showClinicPrint && <AssistantClinicPrintModal onClose={() => setShowClinicPrint(false)} />}
     </div>
   );
 }

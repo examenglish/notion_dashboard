@@ -199,15 +199,20 @@ const getCachedStaffList = unstable_cache(
       // {start,end} 맵으로 풀어준다. 예전에 쓰던 근무요일(멀티셀렉트)/
       // 근무시작/근무종료(전체 요일 공통 한 세트)는 더는 쓰지 않는다.
       workHours: parseWorkHours(getRichText(p, "근무시간표")),
+      resigned: getCheckbox(p, "퇴사"),
     }));
   },
   ["staff-list"],
   { revalidate: 30, tags: [STAFF_CACHE_TAG] }
 );
 
+// 퇴사한 직원은 로그인 화면/새 배정 목록에서 제외한다. 페이지 자체는 지우지
+// 않으므로(setStaffResigned 참고) 과거에 그 직원이 작성한 기록(클리닉 등)의
+// relation은 그대로 유효하고, staffNameMap()/firstRelationName으로 이름도
+// 계속 정상적으로 뜬다 — 여기서 걸러지는 건 "새로 고를 수 있는 목록"뿐이다.
 export async function listStaff() {
   const all = await getCachedStaffList();
-  return all.map(({ id, name, role, workHours }) => ({
+  return all.filter((s) => !s.resigned).map(({ id, name, role, workHours }) => ({
     id,
     name,
     role,
@@ -233,13 +238,25 @@ export async function updateStaffSchedule(staffId: string, workHours: WorkHours)
 export async function findStaffByNameAndPin(name: string, pin: string) {
   const all = await getCachedStaffList();
   const staff = all.find((s) => s.name === name);
-  if (!staff || staff.pin !== pin) return null;
+  if (!staff || staff.pin !== pin || staff.resigned) return null;
   return {
     id: staff.id,
     name: staff.name,
     role: staff.role,
     mustChangePin: staff.mustChangePin,
   };
+}
+
+// 퇴사 처리 — Notion 페이지를 지우거나 보관(archive)하지 않고 "퇴사" 체크박스만
+// 켠다. 페이지를 지우면 그 직원이 relation으로 연결된 과거 기록(클리닉 등)에서
+// 조교 이름이 더 이상 뜨지 않게 되므로(관계가 가리키는 페이지 자체가 없어짐),
+// 작성한 기록을 그대로 유지하려면 페이지는 살려두고 로그인/목록에서만 걸러야 한다.
+export async function setStaffResigned(staffId: string, resigned: boolean) {
+  await notion.pages.update({
+    page_id: staffId,
+    properties: { 퇴사: { checkbox: resigned } } as any,
+  });
+  revalidateTag(STAFF_CACHE_TAG);
 }
 
 export async function updateStaffPin(staffId: string, newPin: string) {
