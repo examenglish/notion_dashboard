@@ -5,13 +5,18 @@ import { SESSION_COOKIE, verifySessionCookieValue } from "./lib/session";
 // Vercel Cron (no login cookie) — each route under it authenticates itself
 // via the CRON_SECRET bearer token instead.
 //
-// "/api/staff" (exact) is the login screen's name list, fetched before any
-// cookie exists — but "/api/staff/[id]" (e.g. the work-schedule PATCH) must
-// stay behind auth, so it's deliberately NOT in here. A plain startsWith
-// match on "/api/staff" used to swallow "/api/staff/[id]" too and skip
-// attaching x-staff-role, which made every role check on that subroute see
-// an empty role and 403 even for 원장.
-const PUBLIC_API_EXACT_PATHS = ["/api/login", "/api/staff", "/api/slack/events"];
+// "/api/staff" GET (exact path) is the login screen's name list, fetched
+// before any cookie exists. POST to that same path is 강사/조교 계정
+// 등록이라 원장/행정만 써야 하므로 반드시 인증을 거쳐야 한다 — 메소드를
+// 안 가리고 경로만으로 예외를 주면 등록 요청도 인증을 건너뛰어 x-staff-role이
+// 빈 값이 되고, route.ts의 역할 체크가 누구에게나(원장 포함) 403을 낸다.
+//
+// "/api/staff/[id]" (e.g. the work-schedule PATCH) must stay behind auth,
+// so it's deliberately NOT in here. A plain startsWith match on "/api/staff"
+// used to swallow "/api/staff/[id]" too and skip attaching x-staff-role,
+// which made every role check on that subroute see an empty role and 403
+// even for 원장.
+const PUBLIC_API_EXACT_PATHS = ["/api/login", "/api/slack/events"];
 const PUBLIC_API_PREFIX_PATHS = ["/api/cron/"];
 
 export async function middleware(req: NextRequest) {
@@ -27,9 +32,12 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next({ request: { headers: requestHeaders } });
   }
 
+  const isPublicStaffList = pathname === "/api/staff" && req.method === "GET";
   if (
     pathname.startsWith("/api/") &&
-    (PUBLIC_API_EXACT_PATHS.includes(pathname) || PUBLIC_API_PREFIX_PATHS.some((p) => pathname.startsWith(p)))
+    (isPublicStaffList ||
+      PUBLIC_API_EXACT_PATHS.includes(pathname) ||
+      PUBLIC_API_PREFIX_PATHS.some((p) => pathname.startsWith(p)))
   ) {
     return NextResponse.next();
   }
