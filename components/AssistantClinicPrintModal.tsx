@@ -18,6 +18,8 @@ type ClinicRow = {
 export default function AssistantClinicPrintModal({ onClose }: { onClose: () => void }) {
   const [rows, setRows] = useState<ClinicRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 빈 문자열이면 전체 조교, 값이 있으면 그 조교 한 명만 골라서 출력한다.
+  const [selectedAssistant, setSelectedAssistant] = useState("");
 
   useEffect(() => {
     fetch("/api/clinic-records")
@@ -49,6 +51,8 @@ export default function AssistantClinicPrintModal({ onClose }: { onClose: () => 
       }));
   }, [rows]);
 
+  const printGroups = selectedAssistant ? groups.filter((g) => g.name === selectedAssistant) : groups;
+  const printCount = printGroups.reduce((sum, g) => sum + g.list.length, 0);
   const totalCount = rows?.length ?? 0;
 
   return (
@@ -67,8 +71,22 @@ export default function AssistantClinicPrintModal({ onClose }: { onClose: () => 
           )}
           {groups.length > 0 && (
             <>
+              <div className="modal-controls" style={{ gridTemplateColumns: "auto 1fr", marginTop: 12 }}>
+                <label htmlFor="clinicPrintAssistant">조교</label>
+                <select
+                  id="clinicPrintAssistant"
+                  value={selectedAssistant}
+                  onChange={(e) => setSelectedAssistant(e.target.value)}
+                >
+                  <option value="">전체 조교 ({groups.length}명)</option>
+                  {groups.map((g) => (
+                    <option key={g.name} value={g.name}>{g.name} ({g.list.length}건)</option>
+                  ))}
+                </select>
+              </div>
               <p className="muted" style={{ marginTop: 12 }}>
-                조교 {groups.length}명 · 전체 기록 {totalCount}건(날짜 오름차순, 조교별로 새 페이지에서 시작).
+                {selectedAssistant ? `${selectedAssistant} 조교 · 기록 ${printCount}건` : `조교 ${groups.length}명 · 전체 기록 ${totalCount}건`}
+                {" "}(날짜 오름차순{!selectedAssistant ? ", 조교별로 새 페이지에서 시작" : ""}).
                 인쇄 대화상자에서 "PDF로 저장"을 선택하면 다운로드됩니다.
               </p>
               <button type="button" style={{ marginTop: 10 }} onClick={() => window.print()}>
@@ -78,9 +96,9 @@ export default function AssistantClinicPrintModal({ onClose }: { onClose: () => 
           )}
         </div>
 
-        {groups.length > 0 && (
+        {printGroups.length > 0 && (
           <div className="print-area" style={{ marginTop: 16 }}>
-            {groups.map((g, gi) => (
+            {printGroups.map((g, gi) => (
               <div
                 key={g.name}
                 className={gi > 0 ? "clinic-print-section clinic-print-section-break" : "clinic-print-section"}
