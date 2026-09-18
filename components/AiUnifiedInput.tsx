@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import ManualHelpLink from "@/components/ManualHelpLink";
+import { SLASH_COMMAND_LIST } from "@/lib/slash-commands";
 
 type Candidate = { id: string; label: string };
 type CreatedTask = { id: string; typeLabel: string; studentName: string; ownerName: string | null; pool: boolean };
@@ -48,6 +49,18 @@ export default function AiUnifiedInput({
   const [warnings, setWarnings] = useState<string[]>([]);
   const [pendingText, setPendingText] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // "/"만 치면 그 뒤 글자로 필터링된 단축어 목록을 검색창 바로 아래에
+  // 보여준다(노션 "/" 명령어 메뉴와 동일한 방식). 공백을 치는 순간(사람
+  // 이름 등을 입력하기 시작하면) 사라진다.
+  const slashQuery = /^\/[^\s]*$/.test(text) ? text.slice(1) : null;
+  const slashMatches = slashQuery !== null ? SLASH_COMMAND_LIST.filter((c) => c.cmd.startsWith(slashQuery)) : [];
+
+  function pickSlashCommand(cmd: string) {
+    setText(`/${cmd} `);
+    textareaRef.current?.focus();
+  }
 
   async function submit(currentText: string, opts: { confirmNewStudent?: boolean; selectedStudentId?: string; forceNewStudent?: boolean } = {}): Promise<AiResponse> {
     const res = await fetch("/api/ai-input", {
@@ -148,26 +161,43 @@ export default function AiUnifiedInput({
         </div>
         <p className="ai-hero-sub">{placeholder}</p>
 
-        <form onSubmit={handleSubmit} className="ai-hero-form">
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder={placeholder}
-            rows={2}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSubmit(e);
-              }
-            }}
-          />
-          <button type="submit" disabled={saving || !text.trim()}>
-            {saving ? "처리 중..." : "업무처리"}
-          </button>
-        </form>
+        <div className="ai-hero-form-wrap">
+          <form onSubmit={handleSubmit} className="ai-hero-form">
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder={placeholder}
+              rows={2}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && slashMatches.length === 0) {
+                  e.preventDefault();
+                  handleSubmit(e);
+                }
+              }}
+            />
+            <button type="submit" disabled={saving || !text.trim()}>
+              {saving ? "처리 중..." : "업무처리"}
+            </button>
+          </form>
+
+          {slashQuery !== null && slashMatches.length > 0 && (
+            <ul className="ai-slash-menu">
+              {slashMatches.map((c) => (
+                <li key={c.cmd}>
+                  <button type="button" onClick={() => pickSlashCommand(c.cmd)}>
+                    <span className="ai-slash-cmd">/{c.cmd}</span>
+                    <span className="ai-slash-desc">{c.description}</span>
+                    <span className="ai-slash-example">{c.example}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
         <p className="ai-hero-hint">
-          예: "민수 본문 암기 안 됨. 관계대명사 문제 뽑아서 오늘 다시 확인" — 여러 업무로 자동 분리되어 배정됩니다. /보강,
-          /재시, /상담, /행정실 같은 슬래시 명령은 기존과 동일하게 동작합니다.
+          예: "민수 본문 암기 안 됨. 관계대명사 문제 뽑아서 오늘 다시 확인" — 여러 업무로 자동 분리되어 배정됩니다. "/"만
+          입력하면 사용 가능한 단축어가 아래에 나타납니다.
         </p>
 
         {message && (

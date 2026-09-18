@@ -1442,6 +1442,68 @@ html {
   white-space: nowrap;
 }
 
+.ai-hero-form-wrap {
+  position: relative;
+}
+
+/* "/" 단축어 드롭다운(노션 "/" 명령어 메뉴 방식) — 검색창 바로 아래. */
+.ai-slash-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  max-height: 320px;
+  overflow-y: auto;
+  text-align: left;
+}
+
+.ai-slash-menu button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ai-slash-menu button:hover {
+  background: var(--primary-tint);
+}
+
+.ai-slash-cmd {
+  font-weight: 700;
+  color: var(--primary-dark);
+  white-space: nowrap;
+}
+
+.ai-slash-desc {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.ai-slash-example {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .ai-hero-hint {
   margin: 14px 0 0;
   font-size: 12px;
