@@ -108,4 +108,8 @@ export type NewTaskInput = {
   time: string; // "16:00" 또는 빈 문자열
   priority?: "긴급" | "보통";
   parentTaskId?: string | null;
+  // 문장에 학생 이름이 있었는데도 누구인지 특정하지 못한 경우(동명이인/
+  // 명단에 없음) — routeTask()로 아무 조교에게나 배정하지 않고, 무조건
+  // 공용업무풀로 보내 담당자가 직접 학생을 확인하게 한다.
+  forcePool?: boolean;
 };

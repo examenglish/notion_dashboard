@@ -1,14 +1,12 @@
 import { parseNaturalLanguageInput, parseCreateTasksInput, resolveRelativeDate } from "@/lib/anthropic";
 import {
-  listClasses,
-  listStaff,
-  searchStudents,
   createAdminInboxEntry,
   createScheduleEntry,
   createCounselingEntry,
   updateStudentInfo,
   createMinimalStudent,
   createTasks,
+  getNlRoster,
 } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
@@ -16,7 +14,7 @@ import { TASK_TYPE_LABELS, TASK_TYPE_LABEL_LIST, taskTypeFromLabel, type NewTask
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
-type StudentInfo = Awaited<ReturnType<typeof searchStudents>>[number];
+type StudentInfo = Awaited<ReturnType<typeof getNlRoster>>["students"][number];
 
 // 이 문장들은 애초에 DB②에 없는 신입생 얘기라, 학생 매칭 자체를 건너뛴다 —
 // 신입생 문의에서 이름을 억지로 fuzzy-match하면 엉뚱한 기존 학생에 잘못
@@ -189,7 +187,7 @@ export async function runNaturalLanguageCommand(
     return { kind: "saved", message: "행정실에 저장했습니다: 신규생문의" };
   }
 
-  const [allStudents, classes, staff] = await Promise.all([searchStudents(""), listClasses(), listStaff()]);
+  const { students: allStudents, classes, staff } = await getNlRoster();
   const activeStudents = allStudents.filter((s) => s.status === "재원" || !s.status);
   const classNameById = new Map(classes.map((c) => [c.id, stripClassSuffix(c.name)]));
   const weekday = WEEKDAYS[new Date(`${today}T00:00:00Z`).getUTCDay()];
@@ -340,7 +338,7 @@ export async function runCreateTasksCommand(
   opts: { staffName?: string; parentTaskId?: string | null } = {}
 ): Promise<CreateTasksCommandResult> {
   const today = todayKST();
-  const [allStudents, classes, staff] = await Promise.all([searchStudents(""), listClasses(), listStaff()]);
+  const { students: allStudents, classes, staff } = await getNlRoster();
   const activeStudents = allStudents.filter((s) => s.status === "재원" || !s.status);
   const classNameById = new Map(classes.map((c) => [c.id, stripClassSuffix(c.name)]));
   const weekday = WEEKDAYS[new Date(`${today}T00:00:00Z`).getUTCDay()];
@@ -376,12 +374,19 @@ export async function runCreateTasksCommand(
     }
 
     let studentId: string | null = null;
+    let forcePool = false;
     if (draft.studentName) {
       const resolution = await resolveStudentForIntent(text, draft.studentName, activeStudents, classNameById, {
         school: draft.studentSchool || undefined,
       });
-      if (resolution.kind === "resolved") studentId = resolution.studentId;
-      else warnings.push(`"${draft.studentName}" 학생을 정확히 찾지 못해 담당학생 지정 없이 등록했습니다 — 업무 상세에서 직접 연결해주세요.`);
+      if (resolution.kind === "resolved") {
+        studentId = resolution.studentId;
+      } else {
+        // 어느 학생인지 특정 못 하면 아무 조교에게나 자동배정하지 않고
+        // 공용업무풀로 보낸다(누구든 열어서 학생을 직접 확인하도록).
+        forcePool = true;
+        warnings.push(`"${draft.studentName}" 학생을 정확히 찾지 못해 공용업무풀에 등록했습니다 — 확인 후 담당자를 지정해주세요.`);
+      }
     }
 
     inputs.push({
@@ -392,6 +397,7 @@ export async function runCreateTasksCommand(
       time: draft.time || "",
       priority: draft.priority,
       parentTaskId: opts.parentTaskId ?? undefined,
+      forcePool,
     });
   }
 

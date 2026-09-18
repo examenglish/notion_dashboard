@@ -526,6 +526,28 @@ export async function searchStudents(query: string, classId?: string, includeIna
   return mapped;
 }
 
+// 자연어 입력(lib/nl-input.ts)의 두 경로(create_tasks/기존 4-tool)가 매 요청마다
+// 각각 전교생/반/직원 목록을 따로 불러오면서, 한 문장이 업무 생성 실패로
+// legacy로 넘어갈 때는 같은 목록을 두 번 조회하고 있었다 — 실제로 Notion
+// 429(rate_limited)가 프로덕션에서 관측되어(운영 로그 확인), 20초 캐시로
+// 완화한다. listStaff는 이미 자체 캐시가 있으니 그대로 감싸기만 해도 된다.
+const NL_ROSTER_CACHE_TAG = "nl-roster";
+const getCachedNlRoster = unstable_cache(
+  async () => {
+    const [students, classes, staff] = await Promise.all([searchStudents(""), listClasses(), listStaff()]);
+    return { students, classes, staff };
+  },
+  ["nl-roster"],
+  { revalidate: 20, tags: [NL_ROSTER_CACHE_TAG] }
+);
+export async function getNlRoster(): Promise<{
+  students: Awaited<ReturnType<typeof searchStudents>>;
+  classes: Awaited<ReturnType<typeof listClasses>>;
+  staff: Awaited<ReturnType<typeof listStaff>>;
+}> {
+  return getCachedNlRoster();
+}
+
 export async function getStudent(id: string) {
   const [p, examMap, classById]: [any, Map<string, any>, Map<string, string>] = await Promise.all([
     notion.pages.retrieve({ page_id: id }),
@@ -3999,10 +4021,14 @@ export async function createTasks(
 
   const results: { id: string; type: TaskType; ownerId: string | null; pool: boolean }[] = [];
   for (const input of inputs) {
-    const route = routeTask(
-      { type: input.type, studentId: input.studentId, date: input.date, time: input.time },
-      { staff: candidates, classes: classInfos }
-    );
+    // 어느 학생을 위한 업무인지 특정 못 했으면 누구에게 자동배정할지도
+    // 판단할 근거가 없다 — routeTask 자체를 건너뛰고 공용업무풀로.
+    const route = input.forcePool
+      ? ({ assigned: false, pool: true } as const)
+      : routeTask(
+          { type: input.type, studentId: input.studentId, date: input.date, time: input.time },
+          { staff: candidates, classes: classInfos }
+        );
     const ownerId = route.assigned ? route.staffId : null;
     if (ownerId) {
       // 같은 배치 안에서 여러 업무가 한 사람에게 몰리지 않도록 즉시 반영.
