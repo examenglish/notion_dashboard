@@ -41,6 +41,11 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => ({}));
+
+  if (body?.validate === true) {
+    return handleValidate(branch);
+  }
+
   const execute = body?.execute === true;
 
   try {
@@ -51,4 +56,53 @@ export async function POST(req: NextRequest) {
     console.error("migrate-supabase failed", message);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
+}
+
+// 읽기 전용 검증: Supabase에 실제로 들어간 행 수를 branch_id별로 세서
+// 반환한다(Notion에는 접근하지 않음). 호출 측(나)이 직접 얻은 Notion
+// read count와 대조해 소스별 수량 일치 + branch 격리를 확인하는 데 쓴다.
+const VALIDATE_TABLES = [
+  "students", "classes", "class_progress", "daily_records", "briefings",
+  "exam_scores", "counseling_entries", "admin_inbox_entries", "tasks", "staff",
+  "clinic_records", "material_tasks", "exam_preps", "school_exam_ranges",
+  "slack_records", "manuals", "manual_steps",
+  "class_students", "class_staff", "class_schedules", "staff_work_schedules",
+];
+
+async function handleValidate(branch: string) {
+  const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !supabaseKey) {
+    return NextResponse.json({ ok: false, error: "Supabase 자격증명이 설정되지 않았습니다." }, { status: 500 });
+  }
+  const headers = { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` };
+
+  const branchRes = await fetch(`${supabaseUrl}/rest/v1/branches?select=id&code=eq.${encodeURIComponent(branch)}`, { headers });
+  if (!branchRes.ok) {
+    return NextResponse.json({ ok: false, error: `branch lookup failed (${branchRes.status})` }, { status: 500 });
+  }
+  const branchRows = (await branchRes.json()) as { id: string }[];
+  if (!branchRows.length) {
+    return NextResponse.json({ ok: false, error: `branch not found: ${branch}` }, { status: 500 });
+  }
+  const branchId = branchRows[0].id;
+
+  async function countFor(table: string, filterBranchId: string | null) {
+    const url = filterBranchId
+      ? `${supabaseUrl}/rest/v1/${table}?select=id&branch_id=eq.${filterBranchId}`
+      : `${supabaseUrl}/rest/v1/${table}?select=id`;
+    const r = await fetch(url, { method: "HEAD", headers: { ...headers, Prefer: "count=exact", Range: "0-0" } });
+    if (!r.ok) return null;
+    const range = r.headers.get("content-range"); // "0-0/N" 형태
+    const total = range?.split("/")[1];
+    return total === undefined || total === "*" ? null : Number(total);
+  }
+
+  const counts: Record<string, { thisBranch: number | null; total: number | null }> = {};
+  for (const table of VALIDATE_TABLES) {
+    const [thisBranch, total] = await Promise.all([countFor(table, branchId), countFor(table, null)]);
+    counts[table] = { thisBranch, total };
+  }
+
+  return NextResponse.json({ ok: true, branch, branchId, counts });
 }
