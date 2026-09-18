@@ -27,20 +27,38 @@ const TODO_NEW_PROPERTIES: Record<string, any> = {
   업무풀: { checkbox: {} },
 };
 
-async function ensureTodoSchema(): Promise<{ added: string[] }> {
+// 속성 하나씩 개별 호출로 추가한다 — 한 번에 여러 개를 보내면 그중 하나만
+// 잘못돼도(예: 워크스페이스 정책상 특정 타입 제한) 전체가 실패해 "아무것도
+// 안 바뀐 것처럼" 보이는 문제가 있었다. 하나씩 시도하면 나머지는 성공하고,
+// 실패한 것만 정확히 원인과 함께 보고할 수 있다.
+async function ensureTodoSchema(): Promise<{ added: string[]; failed: { name: string; error: string }[]; alreadyPresent: string[] }> {
   const ds: any = await notion.dataSources.retrieve({ data_source_id: DB.TODO });
   const existing = new Set(Object.keys(ds.properties ?? {}));
-  const missing: Record<string, any> = {};
-  for (const [name, config] of Object.entries(TODO_NEW_PROPERTIES)) {
-    if (!existing.has(name)) missing[name] = config;
+
+  const wanted: Record<string, any> = {
+    ...TODO_NEW_PROPERTIES,
+    상위업무: { relation: { data_source_id: DB.TODO, type: "single_property", single_property: {} } },
+  };
+
+  const added: string[] = [];
+  const failed: { name: string; error: string }[] = [];
+  const alreadyPresent: string[] = [];
+
+  for (const [name, config] of Object.entries(wanted)) {
+    if (existing.has(name)) {
+      alreadyPresent.push(name);
+      continue;
+    }
+    try {
+      await notion.dataSources.update({ data_source_id: DB.TODO, properties: { [name]: config } } as any);
+      added.push(name);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("ensureTodoSchema: failed to add property", name, message);
+      failed.push({ name, error: message });
+    }
   }
-  // 상위업무(자기 자신 relation)는 data_source_id를 알아야 하므로 따로 처리.
-  if (!existing.has("상위업무")) {
-    missing["상위업무"] = { relation: { data_source_id: DB.TODO, type: "single_property", single_property: {} } };
-  }
-  if (Object.keys(missing).length === 0) return { added: [] };
-  await notion.dataSources.update({ data_source_id: DB.TODO, properties: missing } as any);
-  return { added: Object.keys(missing) };
+  return { added, failed, alreadyPresent };
 }
 
 async function ensureManualDatabases(parentPageId: string | undefined) {
@@ -101,13 +119,22 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const manualParentPageId = typeof body?.manualParentPageId === "string" ? body.manualParentPageId : undefined;
 
+  let todoResult;
   try {
-    const todoResult = await ensureTodoSchema();
-    const manualResult = await ensureManualDatabases(manualParentPageId);
-    return NextResponse.json({ ok: true, todo: todoResult, manual: manualResult });
+    todoResult = await ensureTodoSchema();
   } catch (err) {
-    console.error("admin setup failed", err);
-    const message = err instanceof Error ? err.message : "설정 중 오류가 발생했습니다.";
+    console.error("admin setup: ensureTodoSchema failed entirely", err);
+    const message = err instanceof Error ? err.message : "TODO 속성 조회/추가 중 오류가 발생했습니다.";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
+
+  let manualResult: any = { skipped: "확인 중 오류" };
+  try {
+    manualResult = await ensureManualDatabases(manualParentPageId);
+  } catch (err) {
+    console.error("admin setup: ensureManualDatabases failed", err);
+    manualResult = { error: err instanceof Error ? err.message : "매뉴얼 DB 생성 중 오류가 발생했습니다." };
+  }
+
+  return NextResponse.json({ ok: true, todo: todoResult, manual: manualResult });
 }

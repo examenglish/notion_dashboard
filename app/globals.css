@@ -1318,7 +1318,15 @@ th, td {
    하는 요소라 "구글 첫 화면"처럼 다른 카드보다 훨씬 넉넉한 여백과 큰 검색창
    느낌으로 분리해둔다. 아래에 오는 통계/일정 카드들은 그대로 스크롤하면
    보이므로 운영 정보 자체를 감추지는 않는다. */
+/* 로그인 직후 첫 화면(구글 첫페이지처럼) — 뷰포트 대부분을 차지하며 검색창을
+   세로 가운데 정렬한다. 통계/일정 카드 등 나머지 대시보드 내용은 지우지
+   않고 그대로 아래에 남겨두되(스크롤하면 보임), 처음 열었을 때는 검색창만
+   보이는 "빈 화면" 느낌을 준다. */
 .ai-hero {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 76vh;
   background: linear-gradient(180deg, var(--primary-tint), var(--card) 65%);
   border: 1px solid var(--border);
   border-radius: var(--radius);

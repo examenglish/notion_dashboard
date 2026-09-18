@@ -1,14 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 
 // TODO 신규 속성(결과값/긴급여부/원장확인/상위업무/업무풀) + 매뉴얼 DB를
 // 한 번에 준비하는 /api/admin/setup을 원장이 클릭 한 번으로 실행할 수 있게
 // 한다 — curl을 직접 칠 필요 없이. 매뉴얼 DB까지 만들려면 parentPageId가
 // 필요하지만, 비워두고 눌러도 TODO 속성 추가는 그대로 진행된다.
 export default function AdminSetupButton() {
-  const router = useRouter();
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [parentPageId, setParentPageId] = useState("");
@@ -24,17 +22,26 @@ export default function AdminSetupButton() {
       });
       const data = await res.json();
       if (!data.ok) {
-        setMessage(data.error ?? "설정에 실패했습니다.");
+        setMessage(`❌ ${data.error ?? "설정에 실패했습니다."}`);
         return;
       }
       const parts: string[] = [];
-      parts.push(data.todo.added.length > 0 ? `TODO 속성 추가: ${data.todo.added.join(", ")}` : "TODO 속성: 이미 준비됨");
+      if (data.todo.added.length > 0) parts.push(`✅ 추가됨: ${data.todo.added.join(", ")}`);
+      if (data.todo.alreadyPresent.length > 0) parts.push(`이미 있음: ${data.todo.alreadyPresent.join(", ")}`);
+      if (data.todo.failed.length > 0) {
+        parts.push(`❌ 실패: ${data.todo.failed.map((f: { name: string; error: string }) => `${f.name}(${f.error})`).join(", ")}`);
+      }
       if (data.manual.skipped) parts.push(`매뉴얼 DB: ${data.manual.skipped}`);
+      else if (data.manual.error) parts.push(`❌ 매뉴얼 DB: ${data.manual.error}`);
       else if (data.manual.manual) parts.push("매뉴얼 DB 생성 완료 — 콘솔 안내대로 환경변수를 등록해주세요.");
       setMessage(parts.join(" / "));
-      router.refresh();
-    } catch {
-      setMessage("네트워크 오류가 발생했습니다.");
+      if (data.todo.failed.length === 0) {
+        // router.refresh()만으로는 RSC 캐시 타이밍에 따라 바로 안 바뀌어
+        // 보일 수 있어(사용자 리포트) 확실하게 새로고침한다.
+        setTimeout(() => window.location.reload(), 800);
+      }
+    } catch (err) {
+      setMessage(`❌ 네트워크 오류: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setRunning(false);
     }

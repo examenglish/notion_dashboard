@@ -142,7 +142,7 @@ export default function AiUnifiedInput({ role, onSaved }: { role: string; onSave
             }}
           />
           <button type="submit" disabled={saving || !text.trim()}>
-            {saving ? "처리 중..." : "업무 만들기"}
+            {saving ? "처리 중..." : "업무처리"}
           </button>
         </form>
         <p className="ai-hero-hint">
