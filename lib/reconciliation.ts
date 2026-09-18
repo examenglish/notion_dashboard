@@ -303,7 +303,16 @@ export async function planOrProvisionGeumjeongDatabases(execute: boolean) {
     return { error: "금정의 직원계정/학생마스터/기준 DB를 찾지 못했습니다 — 임의 진행하지 않습니다.", found: allSources.map((s) => s.title) };
   }
 
-  const anchorDb: any = await notion.databases.retrieve({ database_id: geumjeongAnchor.id });
+  // search()가 돌려주는 건 data_source_id다 — 새 Notion API 모델에서
+  // database(부모 페이지 정보를 가짐)와 data_source는 별개 객체라, 먼저
+  // data_source -> 소속 database, 그 다음 database -> 부모 page 순으로
+  // 두 단계를 거쳐야 한다.
+  const anchorDataSource: any = await notion.dataSources.retrieve({ data_source_id: geumjeongAnchor.id });
+  const anchorDatabaseId: string | undefined = anchorDataSource.parent?.database_id ?? anchorDataSource.database_parent?.database_id;
+  if (!anchorDatabaseId) {
+    return { error: "금정 기준 DB의 database_id를 찾지 못했습니다 — 임의 진행하지 않습니다.", anchorDataSource };
+  }
+  const anchorDb: any = await notion.databases.retrieve({ database_id: anchorDatabaseId });
   const parentPageId: string | undefined = anchorDb.parent?.page_id;
   if (!parentPageId) {
     return { error: "금정 DB들의 부모 페이지 ID를 찾지 못했습니다 — 임의 진행하지 않습니다." };
