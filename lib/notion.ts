@@ -4167,8 +4167,11 @@ export async function listCompletedToday(staffId: string, date: string): Promise
 
 // 기본업무(섹션9): 새 레코드를 대량 생성하지 않고, 오늘/지연된 미완료 업무를
 // 유형별로 집계해 "재시험 대상 4명" 같은 동적 체크리스트를 만든다.
-export async function getBasicChecklist(staffId: string, date: string): Promise<{ label: string; count: number }[]> {
-  const mine = await listMyTasks(staffId);
+// tasks를 미리 조회해뒀으면(예: /director/tasks 페이지가 이미 listMyTasks를
+// 부르는 경우) 넘겨서 Notion을 또 조회하지 않게 한다 — 안 넘기면 직접
+// 조회한다(단독으로 쓰는 GET /api/tasks?scope=checklist 등).
+export async function getBasicChecklist(staffId: string, date: string, tasks?: TaskRecord[]): Promise<{ label: string; count: number }[]> {
+  const mine = tasks ?? (await listMyTasks(staffId));
   const due = mine.filter((t) => !t.date || t.date <= date);
   const countOf = (types: TaskType[]) => due.filter((t) => t.type && types.includes(t.type)).length;
   return [

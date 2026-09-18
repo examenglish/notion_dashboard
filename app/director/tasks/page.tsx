@@ -26,13 +26,19 @@ export default async function DirectorTasksPage() {
   let staffList: Awaited<ReturnType<typeof listStaff>> = [];
   let setupNeeded = false;
   try {
-    [myTasks, poolTasks, checklist, reviewInbox, staffList] = await Promise.all([
+    let poolTasksResult: TaskRecord[];
+    let reviewInboxResult: TaskRecord[];
+    [myTasks, poolTasksResult, reviewInboxResult, staffList] = await Promise.all([
       listMyTasks(session.staffId),
       listPoolTasks(),
-      getBasicChecklist(session.staffId, today),
       isManager ? listReviewInbox() : Promise.resolve([]),
       listStaff(),
     ]);
+    poolTasks = poolTasksResult;
+    reviewInbox = reviewInboxResult;
+    // myTasks는 이미 위에서 불러왔으니 getBasicChecklist가 Notion을 또
+    // 조회하지 않도록 그대로 넘긴다(레이트리밋 완화).
+    checklist = await getBasicChecklist(session.staffId, today, myTasks);
   } catch (err) {
     console.error("director/tasks data fetch failed (setup likely needed)", err);
     setupNeeded = true;
