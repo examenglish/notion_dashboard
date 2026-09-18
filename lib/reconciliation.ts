@@ -149,7 +149,22 @@ export async function runReconciliation(): Promise<{ branch: string; branchId: s
       continue;
     }
     const dbId = (DB as Record<string, string | undefined>)[entity];
-    sources.push(await reconcileSource(env, branchId, entity, dbId));
+    try {
+      sources.push(await reconcileSource(env, branchId, entity, dbId));
+    } catch (err) {
+      // 소스 하나의 Notion 조회 실패(예: 잘못된 data source ID)가 나머지
+      // 16개 소스 대조를 막지 않게 한다 — supabase/scripts/migrate_notion_to_supabase.mjs와
+      // 동일한 격리 원칙.
+      sources.push({
+        entity,
+        notionCount: 0,
+        supabaseCount: 0,
+        missingInSupabase: [],
+        extraInSupabase: [],
+        fieldMismatches: [],
+        skipped: `error: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
   }
   return { branch, branchId, sources };
 }
