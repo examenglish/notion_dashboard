@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runReconciliation, retryDualWriteFailures } from "@/lib/reconciliation";
+import { notion } from "@/lib/notion";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,12 +25,34 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => ({}));
-  const mode = body?.mode === "retry-failures" ? "retry-failures" : "report";
+  const mode: string = ["retry-failures", "list-databases"].includes(body?.mode) ? body.mode : "report";
 
   try {
     if (mode === "retry-failures") {
       const result = await retryDualWriteFailures(body?.limit ?? 50);
       return NextResponse.json({ ok: true, mode, ...result });
+    }
+    if (mode === "list-databases") {
+      // 읽기 전용 진단: 이 integration이 실제로 접근 가능한 데이터베이스
+      // 목록을 보여준다. NOTION_DB_* 환경변수의 ID가 실제 워크스페이스와
+      // 안 맞을 때(예: geumjeong의 MATERIAL/EXAM_PREP/SCHOOL_EXAM_RANGE/
+      // SLACK_RECORDS), 올바른 data_source_id를 추측이 아니라 실제 목록에서
+      // 확인하기 위한 용도다. Notion에 쓰기는 전혀 하지 않는다.
+      const results: { id: string; title: string; dataSourceIds: string[] }[] = [];
+      let cursor: string | undefined;
+      do {
+        const res: any = await notion.search({
+          filter: { property: "object", value: "data_source" } as any,
+          start_cursor: cursor,
+          page_size: 100,
+        } as any);
+        for (const r of res.results as any[]) {
+          const title = (r.title ?? []).map((t: any) => t.plain_text).join("") || "(제목없음)";
+          results.push({ id: r.id, title, dataSourceIds: [r.id] });
+        }
+        cursor = res.has_more ? res.next_cursor : undefined;
+      } while (cursor);
+      return NextResponse.json({ ok: true, mode, databases: results });
     }
     const result = await runReconciliation();
     if ("error" in result) return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
