@@ -1,0 +1,178 @@
+[
+  {
+    "id": "class-1",
+    "url": "https://example.invalid/CLASS/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "반이름": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "중등 A",
+            "text": {
+              "content": "중등 A"
+            }
+          }
+        ]
+      },
+      "담당교사": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상강사",
+            "text": {
+              "content": "가상강사"
+            }
+          }
+        ]
+      },
+      "요일별담당교사": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "월=1:가상강사",
+            "text": {
+              "content": "월=1:가상강사"
+            }
+          }
+        ]
+      },
+      "요일": {
+        "type": "multi_select",
+        "multi_select": [
+          {
+            "name": "월"
+          }
+        ]
+      },
+      "시간": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "16:00",
+            "text": {
+              "content": "16:00"
+            }
+          }
+        ]
+      },
+      "레벨": {
+        "type": "select",
+        "select": {
+          "name": "중등"
+        }
+      },
+      "구분": {
+        "type": "select",
+        "select": {
+          "name": "정규"
+        }
+      },
+      "소속학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-1"
+          }
+        ]
+      },
+      "담당조교": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "staff-2"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "class-2",
+    "url": "https://example.invalid/CLASS/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "반이름": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "고등 B",
+            "text": {
+              "content": "고등 B"
+            }
+          }
+        ]
+      },
+      "담당교사": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상강사",
+            "text": {
+              "content": "가상강사"
+            }
+          }
+        ]
+      },
+      "요일별담당교사": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "잘못된 형식",
+            "text": {
+              "content": "잘못된 형식"
+            }
+          }
+        ]
+      },
+      "요일": {
+        "type": "multi_select",
+        "multi_select": [
+          {
+            "name": "화"
+          }
+        ]
+      },
+      "시간": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "18:00",
+            "text": {
+              "content": "18:00"
+            }
+          }
+        ]
+      },
+      "레벨": {
+        "type": "select",
+        "select": {
+          "name": "고등"
+        }
+      },
+      "구분": {
+        "type": "select",
+        "select": {
+          "name": "정규"
+        }
+      },
+      "소속학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-2"
+          }
+        ]
+      },
+      "담당조교": {
+        "type": "relation",
+        "relation": []
+      }
+    }
+  }
+]

@@ -1,0 +1,106 @@
+[
+  {
+    "id": "briefing-1",
+    "url": "https://example.invalid/BRIEFING/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "브리핑1",
+            "text": {
+              "content": "브리핑1"
+            }
+          }
+        ]
+      },
+      "학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-1"
+          }
+        ]
+      },
+      "날짜": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-03"
+        }
+      },
+      "브리핑유형": {
+        "type": "select",
+        "select": {
+          "name": "전달사항"
+        }
+      },
+      "브리핑내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상 내용",
+            "text": {
+              "content": "가상 내용"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "briefing-2",
+    "url": "https://example.invalid/BRIEFING/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "브리핑2",
+            "text": {
+              "content": "브리핑2"
+            }
+          }
+        ]
+      },
+      "학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-2"
+          }
+        ]
+      },
+      "날짜": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-04"
+        }
+      },
+      "브리핑유형": {
+        "type": "select",
+        "select": {
+          "name": "주의"
+        }
+      },
+      "브리핑내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상 내용",
+            "text": {
+              "content": "가상 내용"
+            }
+          }
+        ]
+      }
+    }
+  }
+]

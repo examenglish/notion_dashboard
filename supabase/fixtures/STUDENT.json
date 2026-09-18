@@ -1,0 +1,279 @@
+[
+  {
+    "id": "student-1",
+    "url": "https://example.invalid/STUDENT/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "이름": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "가상학생1",
+            "text": {
+              "content": "가상학생1"
+            }
+          }
+        ]
+      },
+      "학교": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상중",
+            "text": {
+              "content": "가상중"
+            }
+          }
+        ]
+      },
+      "학년": {
+        "type": "select",
+        "select": {
+          "name": "중2"
+        }
+      },
+      "상태": {
+        "type": "select",
+        "select": {
+          "name": "재원"
+        }
+      },
+      "연락처": {
+        "type": "phone_number",
+        "phone_number": "000-0000-0000"
+      },
+      "학부모연락처": {
+        "type": "phone_number",
+        "phone_number": "000-0000-0001"
+      },
+      "소속반": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "class-1"
+          }
+        ]
+      },
+      "누적출석률": {
+        "type": "rollup",
+        "rollup": {
+          "type": "number",
+          "number": 0.9
+        }
+      },
+      "누적숙제제출률": {
+        "type": "rollup",
+        "rollup": {
+          "type": "number",
+          "number": 0.8
+        }
+      },
+      "누적단어테스트통과율": {
+        "type": "rollup",
+        "rollup": {
+          "type": "number",
+          "number": 0.7
+        }
+      },
+      "등록일": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-01"
+        }
+      },
+      "등원일": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-02"
+        }
+      },
+      "회비일": {
+        "type": "number",
+        "number": 10
+      },
+      "학습레벨": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "B1",
+            "text": {
+              "content": "B1"
+            }
+          }
+        ]
+      },
+      "레벨Lv": {
+        "type": "number",
+        "number": 2
+      },
+      "메모": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      },
+      "조치": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "조치담당자": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "조치알람일": {
+        "type": "date",
+        "date": null
+      }
+    }
+  },
+  {
+    "id": "student-2",
+    "url": "https://example.invalid/STUDENT/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "이름": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "가상학생2",
+            "text": {
+              "content": "가상학생2"
+            }
+          }
+        ]
+      },
+      "학교": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상고",
+            "text": {
+              "content": "가상고"
+            }
+          }
+        ]
+      },
+      "학년": {
+        "type": "select",
+        "select": {
+          "name": "고1"
+        }
+      },
+      "상태": {
+        "type": "select",
+        "select": {
+          "name": "재원"
+        }
+      },
+      "연락처": {
+        "type": "phone_number",
+        "phone_number": null
+      },
+      "학부모연락처": {
+        "type": "phone_number",
+        "phone_number": null
+      },
+      "소속반": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "class-2"
+          }
+        ]
+      },
+      "등록일": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-01"
+        }
+      },
+      "등원일": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-02"
+        }
+      },
+      "회비일": {
+        "type": "number",
+        "number": 20
+      },
+      "학습레벨": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "C1",
+            "text": {
+              "content": "C1"
+            }
+          }
+        ]
+      },
+      "레벨Lv": {
+        "type": "number",
+        "number": 4
+      },
+      "메모": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "조치": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "조치담당자": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "조치알람일": {
+        "type": "date",
+        "date": null
+      }
+    }
+  }
+]

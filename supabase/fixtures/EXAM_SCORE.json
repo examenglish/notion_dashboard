@@ -1,0 +1,114 @@
+[
+  {
+    "id": "exam_score-1",
+    "url": "https://example.invalid/EXAM_SCORE/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "성적1",
+            "text": {
+              "content": "성적1"
+            }
+          }
+        ]
+      },
+      "학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-1"
+          }
+        ]
+      },
+      "시험명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "중간",
+            "text": {
+              "content": "중간"
+            }
+          }
+        ]
+      },
+      "과목": {
+        "type": "select",
+        "select": {
+          "name": "영어"
+        }
+      },
+      "점수": {
+        "type": "number",
+        "number": 90
+      },
+      "날짜": {
+        "type": "date",
+        "date": {
+          "start": "2026-04-01"
+        }
+      }
+    }
+  },
+  {
+    "id": "exam_score-2",
+    "url": "https://example.invalid/EXAM_SCORE/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "성적2",
+            "text": {
+              "content": "성적2"
+            }
+          }
+        ]
+      },
+      "학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-2"
+          }
+        ]
+      },
+      "시험명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "기말",
+            "text": {
+              "content": "기말"
+            }
+          }
+        ]
+      },
+      "과목": {
+        "type": "select",
+        "select": {
+          "name": "영어"
+        }
+      },
+      "점수": {
+        "type": "number",
+        "number": 85
+      },
+      "날짜": {
+        "type": "date",
+        "date": {
+          "start": "2026-07-01"
+        }
+      }
+    }
+  }
+]

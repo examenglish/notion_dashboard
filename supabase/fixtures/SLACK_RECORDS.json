@@ -1,0 +1,148 @@
+[
+  {
+    "id": "slack_records-1",
+    "url": "https://example.invalid/SLACK_RECORDS/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "슬랙1",
+            "text": {
+              "content": "슬랙1"
+            }
+          }
+        ]
+      },
+      "학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-1"
+          }
+        ]
+      },
+      "작성시각": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-03T01:00:00Z"
+        }
+      },
+      "원문": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상 메시지",
+            "text": {
+              "content": "가상 메시지"
+            }
+          }
+        ]
+      },
+      "Slack작성자": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상작성자",
+            "text": {
+              "content": "가상작성자"
+            }
+          }
+        ]
+      },
+      "원문링크": {
+        "type": "url",
+        "url": "https://example.invalid/slack/1"
+      },
+      "상태": {
+        "type": "select",
+        "select": {
+          "name": "완료"
+        }
+      },
+      "연결상태": {
+        "type": "select",
+        "select": {
+          "name": "연결됨"
+        }
+      }
+    }
+  },
+  {
+    "id": "slack_records-2",
+    "url": "https://example.invalid/SLACK_RECORDS/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "슬랙2",
+            "text": {
+              "content": "슬랙2"
+            }
+          }
+        ]
+      },
+      "학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-2"
+          }
+        ]
+      },
+      "작성시각": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-04T01:00:00Z"
+        }
+      },
+      "원문": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상 메시지",
+            "text": {
+              "content": "가상 메시지"
+            }
+          }
+        ]
+      },
+      "Slack작성자": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상작성자",
+            "text": {
+              "content": "가상작성자"
+            }
+          }
+        ]
+      },
+      "원문링크": {
+        "type": "url",
+        "url": "https://example.invalid/slack/2"
+      },
+      "상태": {
+        "type": "select",
+        "select": {
+          "name": "대기"
+        }
+      },
+      "연결상태": {
+        "type": "select",
+        "select": {
+          "name": "연결됨"
+        }
+      }
+    }
+  }
+]

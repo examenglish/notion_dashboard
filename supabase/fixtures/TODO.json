@@ -1,0 +1,214 @@
+[
+  {
+    "id": "todo-1",
+    "url": "https://example.invalid/TODO/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "할일1",
+            "text": {
+              "content": "할일1"
+            }
+          }
+        ]
+      },
+      "유형": {
+        "type": "select",
+        "select": {
+          "name": "클리닉"
+        }
+      },
+      "담당자": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "staff-2"
+          }
+        ]
+      },
+      "관련학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-1"
+          }
+        ]
+      },
+      "관련반": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "class-1"
+          }
+        ]
+      },
+      "예정일": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-03"
+        }
+      },
+      "시간": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "17:00",
+            "text": {
+              "content": "17:00"
+            }
+          }
+        ]
+      },
+      "메모": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      },
+      "완료여부": {
+        "type": "checkbox",
+        "checkbox": false
+      },
+      "우선순위": {
+        "type": "select",
+        "select": {
+          "name": "보통"
+        }
+      },
+      "클리닉보고": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "clinic-1"
+          }
+        ]
+      },
+      "결석수업내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "todo-2",
+    "url": "https://example.invalid/TODO/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "할일2",
+            "text": {
+              "content": "할일2"
+            }
+          }
+        ]
+      },
+      "유형": {
+        "type": "select",
+        "select": {
+          "name": "보강"
+        }
+      },
+      "담당자": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "staff-1"
+          }
+        ]
+      },
+      "관련학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-2"
+          }
+        ]
+      },
+      "관련반": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "class-2"
+          }
+        ]
+      },
+      "예정일": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-04"
+        }
+      },
+      "시간": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "메모": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      },
+      "완료여부": {
+        "type": "checkbox",
+        "checkbox": false
+      },
+      "우선순위": {
+        "type": "select",
+        "select": {
+          "name": "높음"
+        }
+      },
+      "클리닉보고": {
+        "type": "relation",
+        "relation": []
+      },
+      "결석수업내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "2과",
+            "text": {
+              "content": "2과"
+            }
+          }
+        ]
+      }
+    }
+  }
+]

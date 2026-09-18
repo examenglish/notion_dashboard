@@ -6,3 +6,14 @@ npm-debug.log*
 *.tsbuildinfo
 .vercel
 .env*
+
+# supabase/ migration workspace: keep schema/scripts/fixtures/docs tracked,
+# but ignore scratch/log/review artifacts that tend to accumulate during work.
+supabase/*.log
+supabase/.claude-review*
+supabase/.agent-task*
+supabase/.codex-*
+supabase/.baseline-*
+supabase/.current-*
+supabase/.env.vercel.pulled
+supabase/.vercel-pull-scratch/
