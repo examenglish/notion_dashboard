@@ -6,8 +6,7 @@ import { CheckCircle2, XCircle, BookX, ClipboardX } from "lucide-react";
 import StatTile from "./StatTile";
 import ListCard, { ListRow } from "./ListCard";
 import Popup from "./Popup";
-import NaturalLanguageInput from "@/components/NaturalLanguageInput";
-import AiTaskComposer from "@/components/AiTaskComposer";
+import AiUnifiedInput from "@/components/AiUnifiedInput";
 import StaffPicker from "@/components/StaffPicker";
 import MakeupStatusCard from "@/components/MakeupStatusCard";
 import TodayClinicCard from "./TodayClinicCard";
@@ -308,19 +307,13 @@ export default function DirectorDashboardClient({
 
   return (
     <>
-      <div className="mb-3">
-        <AiTaskComposer />
-      </div>
+      <AiUnifiedInput role={role} />
 
       {(role === "원장" || role === "행정") && (
         <div className="mb-3">
           <ReviewInboxCard role={role} />
         </div>
       )}
-
-      <div className="mb-3">
-        <NaturalLanguageInput />
-      </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile

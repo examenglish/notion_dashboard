@@ -47,6 +47,34 @@ export const SLASH_COMMANDS: Record<
   긴급상담: { tool: "log_admin_inbox", inboxType: "긴급상담요청" },
 };
 
+// "/보강 박서재 내일 5시" 같은 슬래시 명령 파싱 — /api/nl-input과 /api/ai-input
+// 둘 다 이 로직이 필요해서(응답 매핑은 각자 다르므로 그건 각 라우트에 남기고)
+// 파싱 자체만 여기로 뽑아 중복을 막는다.
+export function parseSlashCommand(text: string): {
+  isSlashCommand: boolean;
+  rest: string;
+  forceTool?: (typeof SLASH_COMMANDS)[string]["tool"];
+  forcedScheduleType?: (typeof SLASH_COMMANDS)[string]["scheduleType"];
+  forcedInboxType?: (typeof SLASH_COMMANDS)[string]["inboxType"];
+} {
+  const slashMatch = text.match(/^\/\s*(\S+)\s+([\s\S]+)$/);
+  const cmd = slashMatch ? SLASH_COMMANDS[slashMatch[1]] : undefined;
+  if (!slashMatch || !cmd) return { isSlashCommand: false, rest: text };
+  return {
+    isSlashCommand: true,
+    rest: slashMatch[2].trim(),
+    forceTool: cmd.tool,
+    forcedScheduleType: cmd.scheduleType,
+    forcedInboxType: cmd.inboxType,
+  };
+}
+
+// "/to do list ..." — AI 분류를 거치지 않는 결정론적 개인 할일 명령.
+export function matchToDoListShortcut(text: string): string | null {
+  const m = text.match(/^\/\s*to\s*do\s*list\b\s*([\s\S]*)$/i);
+  return m ? m[1].trim() : null;
+}
+
 function candidateLabel(s: StudentInfo, classNameById: Map<string, string>): string {
   const classNames = (s.classIds ?? []).map((id) => classNameById.get(id)).filter((n): n is string => !!n);
   const classLabel = classNames.length > 0 ? classNames.join("·") : "반 미배정";
