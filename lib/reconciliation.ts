@@ -1,9 +1,68 @@
 // Notion(정본) <-> Supabase(미러) 실시간 대조 도구. dual-write(lib/supabaseRepo.ts)가
 // 계속 정상 동작하는지 운영 중에 주기적으로 확인하고, 실패 큐(dual_write_failures)를
 // 재처리하는 영구 운영 도구다 — 마이그레이션 1회성 러너와 달리 계속 남아있는다.
-import { notion, DB } from "./notion";
+import { notion, DB, listClasses, listStaff, listPoolTasks, listManuals } from "./notion";
 import { SOURCES, OPTIONAL_SOURCES, TABLE, makeT, payload, rel } from "@/supabase/scripts/migrate_notion_to_supabase.mjs";
 import { dualWriteEntity, branchCode } from "./supabaseRepo";
+
+// listClasses/listStaff/listPoolTasks/listManuals는 내부적으로
+// getDbProvider()(ACADEMY_DB_PROVIDER env)를 보고 Notion/Postgres 중 하나를
+// 고른다. provider를 실제로 뒤집기 전에, 이 요청 하나 안에서만 잠깐 env를
+// 바꿔가며 두 경로의 결과를 비교해 미리 검증한다(shadow-read). 요청이
+// 끝나면 반드시 원래 값으로 되돌린다.
+async function withProvider<T>(provider: "notion" | "postgres", fn: () => Promise<T>): Promise<T> {
+  const prev = process.env.ACADEMY_DB_PROVIDER;
+  process.env.ACADEMY_DB_PROVIDER = provider;
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env.ACADEMY_DB_PROVIDER;
+    else process.env.ACADEMY_DB_PROVIDER = prev;
+  }
+}
+
+function diffArrays(notionSide: any[], pgSide: any[], keyField = "id"): { onlyInNotion: string[]; onlyInPg: string[]; fieldMismatches: any[] } {
+  const notionByKey = new Map(notionSide.map((r) => [r[keyField], r]));
+  const pgByKey = new Map(pgSide.map((r) => [r[keyField], r]));
+  const onlyInNotion = [...notionByKey.keys()].filter((k) => !pgByKey.has(k));
+  const onlyInPg = [...pgByKey.keys()].filter((k) => !notionByKey.has(k));
+  const fieldMismatches: any[] = [];
+  for (const [key, nRow] of notionByKey) {
+    const pRow = pgByKey.get(key);
+    if (!pRow) continue;
+    for (const field of Object.keys(nRow)) {
+      const a = JSON.stringify(nRow[field] ?? null);
+      const b = JSON.stringify(pRow[field] ?? null);
+      if (a !== b) fieldMismatches.push({ id: key, field, notion: nRow[field], postgres: pRow[field] });
+    }
+  }
+  return { onlyInNotion, onlyInPg, fieldMismatches: fieldMismatches.slice(0, 50) };
+}
+
+export async function shadowReadCompare() {
+  const [notionClasses, pgClasses] = await Promise.all([
+    withProvider("notion", () => listClasses()),
+    withProvider("postgres", () => listClasses()),
+  ]);
+  const [notionStaff, pgStaff] = await Promise.all([
+    withProvider("notion", () => listStaff()),
+    withProvider("postgres", () => listStaff()),
+  ]);
+  const [notionPool, pgPool] = await Promise.all([
+    withProvider("notion", () => listPoolTasks()),
+    withProvider("postgres", () => listPoolTasks()),
+  ]);
+  const [notionManuals, pgManuals] = await Promise.all([
+    withProvider("notion", () => listManuals()),
+    withProvider("postgres", () => listManuals()),
+  ]);
+  return {
+    classes: { notionCount: notionClasses.length, postgresCount: pgClasses.length, ...diffArrays(notionClasses, pgClasses) },
+    staff: { notionCount: notionStaff.length, postgresCount: pgStaff.length, ...diffArrays(notionStaff, pgStaff) },
+    poolTasks: { notionCount: notionPool.length, postgresCount: pgPool.length, ...diffArrays(notionPool, pgPool) },
+    manuals: { notionCount: notionManuals.length, postgresCount: pgManuals.length, ...diffArrays(notionManuals, pgManuals) },
+  };
+}
 
 type Env = { url: string; key: string };
 function supabaseEnv(): Env | null {

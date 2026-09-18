@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runReconciliation, retryDualWriteFailures } from "@/lib/reconciliation";
+import { runReconciliation, retryDualWriteFailures, shadowReadCompare } from "@/lib/reconciliation";
 import { notion } from "@/lib/notion";
 
 export const dynamic = "force-dynamic";
@@ -25,11 +25,15 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => ({}));
-  const mode: string = ["retry-failures", "list-databases"].includes(body?.mode) ? body.mode : "report";
+  const mode: string = ["retry-failures", "list-databases", "shadow-read"].includes(body?.mode) ? body.mode : "report";
 
   try {
     if (mode === "retry-failures") {
       const result = await retryDualWriteFailures(body?.limit ?? 50);
+      return NextResponse.json({ ok: true, mode, ...result });
+    }
+    if (mode === "shadow-read") {
+      const result = await shadowReadCompare();
       return NextResponse.json({ ok: true, mode, ...result });
     }
     if (mode === "list-databases") {

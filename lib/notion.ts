@@ -50,7 +50,8 @@ import {
   type NewTaskInput,
 } from "./tasks";
 import { routeTask, type StaffCandidate, type ClassInfo } from "./task-routing";
-import { dualWriteEntity, dualDeleteEntity } from "./supabaseRepo";
+import { dualWriteEntity, dualDeleteEntity, getDbProvider } from "./supabaseRepo";
+import { pgListClassesRaw, pgListStaff, pgListMyTasks, pgListPoolTasks, pgListManuals, pgStudentNameMap, pgStaffNameMap } from "./supabasePgRead";
 
 const STAFF_CACHE_TAG = "staff-list";
 
@@ -227,6 +228,10 @@ const getCachedStaffList = unstable_cache(
 // relation은 그대로 유효하고, staffNameMap()/firstRelationName으로 이름도
 // 계속 정상적으로 뜬다 — 여기서 걸러지는 건 "새로 고를 수 있는 목록"뿐이다.
 export async function listStaff() {
+  if (getDbProvider() === "postgres") {
+    const rows = await pgListStaff();
+    return rows.map((r) => ({ id: r.id, name: r.name, role: r.role, workHours: parseWorkHours(r.workHoursRaw) }));
+  }
   const all = await getCachedStaffList();
   return all.filter((s) => !s.resigned).map(({ id, name, role, workHours }) => ({
     id,
@@ -316,6 +321,21 @@ export async function createStaff(name: string, role: "강사" | "조교" | "행
 }
 
 export async function listClasses() {
+  if (getDbProvider() === "postgres") {
+    const rows = await pgListClassesRaw();
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      teachers: splitTeachers(r.teachersRaw),
+      dayTeachers: parseDayTeachers(r.dayTeachersRaw),
+      days: r.days,
+      time: r.time,
+      level: r.level,
+      type: r.type,
+      studentIds: r.studentIds,
+      assistantIds: r.assistantIds,
+    }));
+  }
   const results = await queryAllPages({ data_source_id: DB.CLASS });
   return results.map((p: any) => ({
     id: p.id,
@@ -4123,6 +4143,10 @@ export async function createTasks(
 }
 
 export async function listMyTasks(staffId: string): Promise<TaskRecord[]> {
+  if (getDbProvider() === "postgres") {
+    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
+    return pgListMyTasks(staffId, names, staffMap) as unknown as TaskRecord[];
+  }
   const records = await queryAllPages({
     data_source_id: DB.TODO,
     filter: {
@@ -4138,6 +4162,10 @@ export async function listMyTasks(staffId: string): Promise<TaskRecord[]> {
 }
 
 export async function listPoolTasks(): Promise<TaskRecord[]> {
+  if (getDbProvider() === "postgres") {
+    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
+    return pgListPoolTasks(names, staffMap) as unknown as TaskRecord[];
+  }
   const records = await queryAllPages({
     data_source_id: DB.TODO,
     filter: {
@@ -4343,6 +4371,11 @@ export async function createManualDraft(input: {
 }
 
 export async function listManuals(opts: { status?: ManualStatus; role?: string } = {}): Promise<ManualRecord[]> {
+  if (getDbProvider() === "postgres") {
+    let manuals = (await pgListManuals({ status: opts.status })) as unknown as ManualRecord[];
+    if (opts.role) manuals = manuals.filter((m) => m.targetRoles.length === 0 || m.targetRoles.includes(opts.role as string));
+    return manuals;
+  }
   const filters: any[] = [];
   if (opts.status) filters.push({ property: "상태", select: { equals: opts.status } });
   const records = await queryAllPages({
