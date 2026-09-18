@@ -344,14 +344,23 @@ export async function planOrProvisionGeumjeongDatabases(execute: boolean) {
 
   for (const target of PROVISION_TARGETS) {
     const already = DB[target.key as keyof typeof DB];
+    let alreadyWorks = false;
+    if (already) {
+      try {
+        await notion.dataSources.retrieve({ data_source_id: already });
+        alreadyWorks = true;
+      } catch {
+        alreadyWorks = false; // 설정은 돼있지만 존재하지 않는 ID — 새로 만들 필요가 있다.
+      }
+    }
     const src = sajik(target.sajikTitleContains);
     if (!src) {
       plan.push({ key: target.key, sajikTitle: "(찾지 못함)", sajikId: "", newTitle: "", skipped: "사직 원본 DB를 찾지 못함" });
       continue;
     }
     const newTitle = src.title.replace("사직", "금정");
-    if (already) {
-      plan.push({ key: target.key, sajikTitle: src.title, sajikId: src.id, newTitle, skipped: `이미 NOTION_DB_${target.key}가 설정되어 있음(${already}) — 건드리지 않음` });
+    if (alreadyWorks) {
+      plan.push({ key: target.key, sajikTitle: src.title, sajikId: src.id, newTitle, skipped: `이미 NOTION_DB_${target.key}(${already})가 정상 동작함 — 건드리지 않음` });
       continue;
     }
     const existingGeumjeong = allSources.find((d) => d.title === newTitle);
