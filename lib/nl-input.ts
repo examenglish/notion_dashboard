@@ -11,6 +11,7 @@ import {
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
 import { TASK_TYPE_LABELS, TASK_TYPE_LABEL_LIST, taskTypeFromLabel, type NewTaskInput } from "@/lib/tasks";
+import { mark } from "@/lib/timing";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
@@ -174,6 +175,7 @@ export async function runNaturalLanguageCommand(
     forceNewStudent?: boolean;
   }
 ): Promise<NlCommandResult> {
+  mark("legacy:start");
   const today = todayKST();
 
   if (!opts.forceTool && NEW_STUDENT_KEYWORDS.some((k) => text.includes(k))) {
@@ -187,12 +189,15 @@ export async function runNaturalLanguageCommand(
     return { kind: "saved", message: "행정실에 저장했습니다: 신규생문의" };
   }
 
+  mark("legacy:before_getNlRoster");
   const { students: allStudents, classes, staff } = await getNlRoster();
+  mark("legacy:after_getNlRoster");
   const activeStudents = allStudents.filter((s) => s.status === "재원" || !s.status);
   const classNameById = new Map(classes.map((c) => [c.id, stripClassSuffix(c.name)]));
   const weekday = WEEKDAYS[new Date(`${today}T00:00:00Z`).getUTCDay()];
 
   let parsed;
+  mark("legacy:before_llm");
   try {
     parsed = await parseNaturalLanguageInput(
       text,
@@ -205,7 +210,9 @@ export async function runNaturalLanguageCommand(
       },
       opts.forceTool
     );
+    mark("legacy:after_llm");
   } catch {
+    mark("legacy:after_llm_error");
     return { kind: "ai_error", message: "AI 처리 중 오류가 발생했습니다." };
   }
 
@@ -242,12 +249,14 @@ export async function runNaturalLanguageCommand(
     };
   }
 
+  mark("legacy:before_save_section");
   try {
     if (parsed.kind === "log_admin_inbox") {
       const result = await resolveOrReturn(input.studentName);
       if ("kind" in result) return result;
       const studentId = result.studentId;
       const studentName = studentId ? nameById.get(studentId) ?? input.studentName : undefined;
+      mark("legacy:before_write");
       await createAdminInboxEntry({
         type: input.type,
         studentId,
@@ -265,6 +274,7 @@ export async function runNaturalLanguageCommand(
       const studentId = result.studentId;
       if (!studentId) return { kind: "missing_name", message: "학생 이름을 확인할 수 없습니다." };
       const date = regexDate ?? input.date ?? today;
+      mark("legacy:before_write");
       await createScheduleEntry({
         type: input.type,
         studentId,
@@ -285,6 +295,7 @@ export async function runNaturalLanguageCommand(
       const studentId = result.studentId;
       if (!studentId) return { kind: "missing_name", message: "학생 이름을 확인할 수 없습니다." };
       const date = regexDate ?? input.date ?? today;
+      mark("legacy:before_write");
       await createCounselingEntry({
         studentId,
         counselor: input.counselor || "",
@@ -302,6 +313,7 @@ export async function runNaturalLanguageCommand(
       if ("kind" in result) return result;
       const studentId = result.studentId;
       if (!studentId) return { kind: "missing_name", message: "학생 이름을 확인할 수 없습니다." };
+      mark("legacy:before_write");
       await updateStudentInfo({
         studentId,
         action: input.action,
@@ -337,13 +349,17 @@ export async function runCreateTasksCommand(
   text: string,
   opts: { staffName?: string; parentTaskId?: string | null } = {}
 ): Promise<CreateTasksCommandResult> {
+  mark("ct:start");
   const today = todayKST();
+  mark("ct:before_getNlRoster");
   const { students: allStudents, classes, staff } = await getNlRoster();
+  mark("ct:after_getNlRoster");
   const activeStudents = allStudents.filter((s) => s.status === "재원" || !s.status);
   const classNameById = new Map(classes.map((c) => [c.id, stripClassSuffix(c.name)]));
   const weekday = WEEKDAYS[new Date(`${today}T00:00:00Z`).getUTCDay()];
 
   let parsed;
+  mark("ct:before_llm");
   try {
     parsed = await parseCreateTasksInput(
       text,
@@ -356,10 +372,12 @@ export async function runCreateTasksCommand(
       },
       TASK_TYPE_LABEL_LIST
     );
+    mark("ct:after_llm");
   } catch {
+    mark("ct:after_llm_error");
     return { kind: "ai_error", message: "AI 처리 중 오류가 발생했습니다." };
   }
-  if (parsed.kind === "clarify") return { kind: "clarify", message: parsed.message };
+  if (parsed.kind === "clarify") { mark("ct:clarify"); return { kind: "clarify", message: parsed.message }; }
   if (parsed.tasks.length === 0) return { kind: "clarify", message: "업무를 파악하지 못했습니다. 다시 입력해 주세요." };
 
   const regexDate = resolveRelativeDate(text, today);
@@ -404,7 +422,9 @@ export async function runCreateTasksCommand(
   if (inputs.length === 0) return { kind: "clarify", message: "등록할 수 있는 업무가 없습니다." };
 
   try {
+    mark("ct:before_createTasks_write");
     const created = await createTasks(inputs);
+    mark("ct:after_createTasks_write");
     const staffNameById = new Map(staff.map((s) => [s.id, s.name]));
     const nameById = new Map(activeStudents.map((s) => [s.id, s.name]));
     return {

@@ -52,6 +52,7 @@ import {
 import { routeTask, type StaffCandidate, type ClassInfo } from "./task-routing";
 import { dualWriteEntity, dualDeleteEntity, getDbProvider } from "./supabaseRepo";
 import { pgListClassesRaw, pgListStaff, pgListMyTasks, pgListPoolTasks, pgListManuals, pgStudentNameMap, pgStaffNameMap } from "./supabasePgRead";
+import { mark } from "./timing";
 
 const STAFF_CACHE_TAG = "staff-list";
 
@@ -565,7 +566,9 @@ export async function searchStudents(query: string, classId?: string, includeIna
 const NL_ROSTER_CACHE_TAG = "nl-roster";
 const getCachedNlRoster = unstable_cache(
   async () => {
+    mark("nlRoster:cache_miss:before_fetch");
     const [students, classes, staff] = await Promise.all([searchStudents(""), listClasses(), listStaff()]);
+    mark("nlRoster:cache_miss:after_fetch");
     return { students, classes, staff };
   },
   ["nl-roster"],
@@ -4076,6 +4079,7 @@ export async function createTasks(
 ): Promise<{ id: string; type: TaskType; ownerId: string | null; pool: boolean }[]> {
   if (inputs.length === 0) return [];
 
+  mark("createTasks:before_deps");
   const [staffList, classes, existingOpen, names] = await Promise.all([
     listStaff(),
     listClasses(),
@@ -4085,6 +4089,7 @@ export async function createTasks(
     }),
     studentNameMap(),
   ]);
+  mark("createTasks:after_deps");
 
   const openCounts = new Map<string, number>();
   for (const p of existingOpen as any[]) {
@@ -4120,6 +4125,7 @@ export async function createTasks(
     const studentName = input.studentId ? names.get(input.studentId) ?? "" : "";
     const label = TASK_TYPE_LABELS[input.type];
 
+    mark("createTasks:before_notion_create");
     const page = await notion.pages.create({
       parent: { data_source_id: DB.TODO } as any,
       properties: {
@@ -4136,7 +4142,9 @@ export async function createTasks(
         ...(input.parentTaskId ? { 상위업무: { relation: [{ id: input.parentTaskId }] } } : {}),
       } as any,
     });
+    mark("createTasks:after_notion_create/before_dualwrite");
     await dualWriteEntity("TODO", page);
+    mark("createTasks:after_dualwrite");
     results.push({ id: page.id, type: input.type, ownerId, pool: poolFlag });
   }
   return results;

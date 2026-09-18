@@ -5,6 +5,7 @@ import { todayKST } from "@/lib/date";
 import { readStaffName, readStaffId } from "@/lib/session";
 import { runNaturalLanguageCommand, runCreateTasksCommand, parseSlashCommand, matchToDoListShortcut } from "@/lib/nl-input";
 import { notifyTaskAssignments } from "@/lib/slack";
+import { mark } from "@/lib/timing";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,7 @@ export const dynamic = "force-dynamic";
 // 업무를 못 찾겠다"(clarify)고 답하면 그제서야 기존 학생기록 파이프라인
 // (행정실/일정/상담/조치)으로 넘긴다 — 두 체계 모두 그대로 쓸 수 있다.
 export async function POST(req: NextRequest) {
+  mark("route:start");
   const body = await req.json().catch(() => null);
   const text = (body?.text ?? "").trim();
   const confirmNewStudent = !!body?.confirmNewStudent;
@@ -96,15 +98,21 @@ export async function POST(req: NextRequest) {
       return await runLegacy(slashRest, forceTool, forcedScheduleType, forcedInboxType);
     }
 
+    mark("route:before_create_tasks_command");
     const taskResult = await runCreateTasksCommand(text, { staffName });
+    mark("route:after_create_tasks_command");
     if (taskResult.kind === "created") {
       notifyTaskAssignments(taskResult.tasks);
+      mark("route:before_response");
       return NextResponse.json({ ok: true, mode: "tasks", tasks: taskResult.tasks, warnings: taskResult.warnings });
     }
     if (taskResult.kind === "clarify") {
       // 업무로 해석되지 않으면(예: 상담 기록, 행정실 문의성 문장) 기존
       // 학생기록 파이프라인이 이어받는다.
-      return await runLegacy(text);
+      mark("route:before_legacy_fallback");
+      const res = await runLegacy(text);
+      mark("route:before_response");
+      return res;
     }
     // ai_error/save_error — 업무 생성 시도 자체가 실패한 경우는 그대로 반환.
     const status = taskResult.kind === "ai_error" ? 502 : 500;

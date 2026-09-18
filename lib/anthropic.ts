@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { mark } from "@/lib/timing";
 
 // Server-only. Never import this file from a "use client" component.
 if (typeof window !== "undefined") {
@@ -300,6 +301,7 @@ export type TaskDraft = {
 export type CreateTasksParseResult = { kind: "tasks"; tasks: TaskDraft[] } | { kind: "clarify"; message: string };
 
 export async function parseCreateTasksInput(text: string, ref: NlReference, typeLabels: string[]): Promise<CreateTasksParseResult> {
+  mark("anthropic:ct:before_call");
   const res = await anthropic.messages.create({
     model: NL_MODEL,
     max_tokens: 1024,
@@ -308,6 +310,7 @@ export async function parseCreateTasksInput(text: string, ref: NlReference, type
     tool_choice: { type: "any" },
     messages: [{ role: "user", content: text }],
   });
+  mark("anthropic:ct:after_call");
 
   const toolUse = res.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
   if (!toolUse || toolUse.name === "clarify") {
@@ -327,6 +330,7 @@ export async function parseNaturalLanguageInput(
   ref: NlReference,
   forceTool?: "log_admin_inbox" | "log_schedule_entry" | "log_counseling" | "log_student_action"
 ): Promise<NlParseResult> {
+  mark("anthropic:legacy:before_call");
   const res = await anthropic.messages.create({
     model: NL_MODEL,
     max_tokens: 512,
@@ -335,6 +339,7 @@ export async function parseNaturalLanguageInput(
     tool_choice: forceTool ? { type: "tool", name: forceTool } : { type: "any" },
     messages: [{ role: "user", content: text }],
   });
+  mark("anthropic:legacy:after_call");
 
   const toolUse = res.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
   if (!toolUse) {
