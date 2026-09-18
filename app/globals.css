@@ -1361,6 +1361,39 @@ html {
   border-color: var(--primary);
 }
 
+/* 로그인 직후 랜딩(app/director/page.tsx) — 사이드바/상단바 없이 이 화면
+   하나가 뷰포트 전체를 채운다("구글 첫화면"). AiUnifiedInput이
+   fullScreen일 때 .ai-hero-full이 같이 붙는다. */
+.ai-landing {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 20px;
+}
+
+.ai-hero-full {
+  min-height: auto;
+  width: 100%;
+  max-width: 760px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  margin-bottom: 0;
+}
+
+.ai-hero-logo {
+  display: inline-block;
+  margin-bottom: 18px;
+}
+
+.ai-hero-logo-img {
+  height: 40px;
+  width: auto;
+}
+
 .ai-hero-inner {
   max-width: 640px;
   margin: 0 auto;

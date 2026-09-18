@@ -20,7 +20,7 @@ export default async function TopBar({
       </Link>
       <span className="topbar-branch">{process.env.NEXT_PUBLIC_BRANCH_NAME ?? "이그잼영어학원"}</span>
       <nav>
-        <Link href="/director" className={`navlink ${active === "dashboard" ? "active" : ""}`}>
+        <Link href="/director/dashboard" className={`navlink ${active === "dashboard" ? "active" : ""}`}>
           대시보드
         </Link>
         <Link href="/director/input" className={`navlink ${active === "input" ? "active" : ""}`}>

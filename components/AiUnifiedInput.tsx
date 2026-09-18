@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
+import Link from "next/link";
 import ManualHelpLink from "@/components/ManualHelpLink";
 
 type Candidate = { id: string; label: string };
@@ -28,7 +30,17 @@ const ROLE_PLACEHOLDER: Record<string, string> = {
 // 기존에 따로 있던 "업무 만들기"(AiTaskComposer)와 "학생기록 자연어 입력"
 // (NaturalLanguageInput)을 하나로 합쳤다. 백엔드는 두 로직을 그대로
 // 이어붙인 /api/ai-input 하나만 쓴다(각 로직 자체는 안 건드림).
-export default function AiUnifiedInput({ role, onSaved }: { role: string; onSaved?: () => void }) {
+export default function AiUnifiedInput({
+  role,
+  onSaved,
+  fullScreen = false,
+}: {
+  role: string;
+  onSaved?: () => void;
+  // true: 사이드바/상단바 없이 이 컴포넌트 혼자 화면 전체를 채우는 랜딩
+  // (app/director/page.tsx). false: 다른 화면에 카드 형태로 얹는 경우용.
+  fullScreen?: boolean;
+}) {
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -120,11 +132,16 @@ export default function AiUnifiedInput({ role, onSaved }: { role: string; onSave
   const placeholder = ROLE_PLACEHOLDER[role] ?? "무엇을 처리할까요?";
 
   return (
-    <div className="ai-hero">
-      <a href="#dashboard-content" className="ai-hero-dashboard-link">
-        대시보드로 가기 ↓
-      </a>
+    <div className={fullScreen ? "ai-hero ai-hero-full" : "ai-hero"}>
+      <Link href="/director/dashboard" className="ai-hero-dashboard-link">
+        대시보드로 가기 →
+      </Link>
       <div className="ai-hero-inner">
+        {fullScreen && (
+          <Link href="/director" className="ai-hero-logo">
+            <Image src="/logo.png" alt="" width={843} height={157} priority className="ai-hero-logo-img" />
+          </Link>
+        )}
         <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 10 }}>
           <h1 className="ai-hero-title">✨ 이그잼 AI</h1>
           <ManualHelpLink path="/director" />
