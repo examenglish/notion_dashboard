@@ -4371,6 +4371,12 @@ export async function createManualDraft(input: {
 }
 
 export async function listManuals(opts: { status?: ManualStatus; role?: string } = {}): Promise<ManualRecord[]> {
+  // 매뉴얼 기능 자체가 아직 설정 안 됐는지(원장이 /api/admin/setup을 아직
+  // 안 돌림)는 provider와 무관하게 항상 같은 방식으로 확인한다 — Postgres
+  // 경로라고 이 경우에 조용히 빈 배열을 돌려주면(manuals 테이블 자체는
+  // 항상 존재하니) "기능 미설정" 안내가 사라지고 "매뉴얼이 없다"로
+  // 보여서 혼동을 준다.
+  requireManualDb();
   if (getDbProvider() === "postgres") {
     let manuals = (await pgListManuals({ status: opts.status })) as unknown as ManualRecord[];
     if (opts.role) manuals = manuals.filter((m) => m.targetRoles.length === 0 || m.targetRoles.includes(opts.role as string));
