@@ -3,27 +3,35 @@ import {createHash,randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import {resolve} from 'node:path';
 
-const a=process.argv.slice(2),EXECUTE=a.includes('--execute'),fi=a.indexOf('--fixtures'),fixtureDir=fi<0?null:a[fi+1];
-if(fi>=0&&!fixtureDir)throw Error('--fixtures requires a directory.');
+// runMigration()은 기존 CLI 스크립트의 로직을 100% 그대로 유지한 채 함수로 감싼 것이다.
+// (Vercel production runtime의 API route에서 process.argv 없이 프로그래밍적으로 호출하기 위함.)
+// CLI 사용법은 파일 하단의 entrypoint에서 기존과 동일하게 유지된다:
+//   node migrate_notion_to_supabase.mjs --branch=sajik [--execute] [--fixtures <dir>]
+export async function runMigration(opts={}){
+const EXECUTE=!!opts.execute;
+const fixtureDir=opts.fixtureDir??null;
 if(fixtureDir&&EXECUTE)throw Error('--fixtures and --execute cannot be combined.');
+const branchArg=opts.branch;
+if(!branchArg)throw Error('branch is required, e.g. "sajik" or "geumjeong" (see supabase/schema/002_branch_scoping.sql).');
 const SOURCES=[['CLASS','NOTION_DB_CLASS'],['STUDENT','NOTION_DB_STUDENT'],['CLASS_PROGRESS','NOTION_DB_CLASS_PROGRESS'],['DAILY_RECORD','NOTION_DB_DAILY_RECORD'],['BRIEFING','NOTION_DB_BRIEFING'],['EXAM_SCORE','NOTION_DB_EXAM_SCORE'],['COUNSELING','NOTION_DB_COUNSELING'],['ADMIN_INBOX','NOTION_DB_ADMIN_INBOX'],['TODO','NOTION_DB_TODO'],['STAFF','NOTION_DB_STAFF'],['CLINIC','NOTION_DB_CLINIC'],['MATERIAL','NOTION_DB_MATERIAL'],['EXAM_PREP','NOTION_DB_EXAM_PREP'],['SCHOOL_EXAM_RANGE','NOTION_DB_SCHOOL_EXAM_RANGE'],['SLACK_RECORDS','NOTION_SLACK_RECORDS_DB_ID'],['MANUAL','NOTION_DB_MANUAL'],['MANUAL_STEP','NOTION_DB_MANUAL_STEP']];
 // MANUAL/MANUAL_STEP은 lib/notion.ts에서도 optional env var(requireManualDb 패턴)이므로
 // 여기서도 필수로 요구하지 않는다. 값이 없으면 해당 소스는 조용히 건너뛴다.
 const OPTIONAL_SOURCES=new Set(['MANUAL','MANUAL_STEP']);
 const DERIVED=['CLASS_STUDENTS','CLASS_STAFF','CLASS_SCHEDULES','STAFF_WORK_SCHEDULES'];
 const TABLE={CLASS:'classes',STUDENT:'students',CLASS_PROGRESS:'class_progress',DAILY_RECORD:'daily_records',BRIEFING:'briefings',EXAM_SCORE:'exam_scores',COUNSELING:'counseling_entries',ADMIN_INBOX:'admin_inbox_entries',TODO:'tasks',STAFF:'staff',CLINIC:'clinic_records',MATERIAL:'material_tasks',EXAM_PREP:'exam_preps',SCHOOL_EXAM_RANGE:'school_exam_ranges',SLACK_RECORDS:'slack_records',MANUAL:'manuals',MANUAL_STEP:'manual_steps',CLASS_STUDENTS:'class_students',CLASS_STAFF:'class_staff',CLASS_SCHEDULES:'class_schedules',STAFF_WORK_SCHEDULES:'staff_work_schedules'};
-const notionToken=process.env.NOTION_TOKEN,supabaseUrl=process.env.SUPABASE_URL?.replace(/\/$/,''),supabaseKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
+const dbIds=opts.dbIds??{};const getEnv=(e)=>dbIds[e]??process.env[e];
+const notionToken=opts.notionToken??process.env.NOTION_TOKEN,supabaseUrl=(opts.supabaseUrl??process.env.SUPABASE_URL)?.replace(/\/$/,''),supabaseKey=opts.supabaseKey??process.env.SUPABASE_SERVICE_ROLE_KEY;
 if(!fixtureDir&&!notionToken)throw Error('NOTION_TOKEN is required outside fixture mode.');
-if(!fixtureDir){const m=SOURCES.filter(([s,e])=>!OPTIONAL_SOURCES.has(s)&&!process.env[e]).map(([,e])=>e);if(m.length)throw Error(`Missing database IDs: ${m.join(', ')}`);}
+if(!fixtureDir){const m=SOURCES.filter(([s,e])=>!OPTIONAL_SOURCES.has(s)&&!getEnv(e)).map(([,e])=>e);if(m.length)throw Error(`Missing database IDs: ${m.join(', ')}`);}
 if(EXECUTE&&(!supabaseUrl||!supabaseKey))throw Error('--execute requires Supabase credentials.');
 // fixture 모드는 모든 소스의 fixture 파일이 있다고 가정해 항상 SOURCES 전체를 활성화한다.
 // 실행/라이브 모드는 OPTIONAL_SOURCES 중 env var가 없는 소스를 조용히 제외한다.
-const ACTIVE_SOURCES=SOURCES.filter(([s,e])=>fixtureDir||!OPTIONAL_SOURCES.has(s)||process.env[e]);
+const ACTIVE_SOURCES=SOURCES.filter(([s,e])=>fixtureDir||!OPTIONAL_SOURCES.has(s)||getEnv(e));
 const stats=new Map([...SOURCES.map(([s])=>s),...DERIVED].map(s=>[s,{read:0,transformed:0,skipped:0,error:0,unresolved:0}])),errors=[],unresolved=[];
 function issue(s,k,m){(k==='error'?errors:unresolved).push(`${s}:${m}`);stats.get(s)[k]++;}
 async function notionQuery(id){const out=[];let cursor;do{const r=await fetch(`https://api.notion.com/v1/data_sources/${id}/query`,{method:'POST',headers:{Authorization:`Bearer ${notionToken}`,'Notion-Version':process.env.NOTION_VERSION??'2025-09-03','Content-Type':'application/json'},body:JSON.stringify({page_size:100,...(cursor?{start_cursor:cursor}:{})})});if(!r.ok)throw Error(`Notion query failed (${r.status})`);const b=await r.json();out.push(...b.results);cursor=b.has_more?b.next_cursor:null;}while(cursor);return out;}
 async function fixturePages(s){const n=(await readdir(resolve(fixtureDir))).filter(x=>x.toUpperCase()===`${s}.JSON`);if(n.length!==1)throw Error(`fixture missing or duplicate: ${s}.json`);const v=JSON.parse(await readFile(resolve(fixtureDir,n[0]),'utf8'));return Array.isArray(v)?v:v.results??[v];}
-const loaded=new Map();for(const[s,e]of ACTIVE_SOURCES){const rows=fixtureDir?await fixturePages(s):await notionQuery(process.env[e]);loaded.set(s,rows);stats.get(s).read=rows.length;console.log(`[read-only${fixtureDir?' fixture':''}] ${s}: ${rows.length} pages`);}
+const loaded=new Map();for(const[s,e]of ACTIVE_SOURCES){const rows=fixtureDir?await fixturePages(s):await notionQuery(getEnv(e));loaded.set(s,rows);stats.get(s).read=rows.length;console.log(`[read-only${fixtureDir?' fixture':''}] ${s}: ${rows.length} pages`);}
 for(const[s]of SOURCES)if(!loaded.has(s))console.log(`[skipped] ${s}: no database ID configured (optional source)`);
 
 const p=(x,n)=>x.properties?.[n],plain=v=>(v??[]).map(x=>x.plain_text??x.text?.content??'').join(''),title=(x,n)=>plain(p(x,n)?.title),rich=(x,n)=>plain(p(x,n)?.rich_text),select=(x,n)=>p(x,n)?.select?.name??p(x,n)?.status?.name??null,multi=(x,n)=>(p(x,n)?.multi_select??[]).map(v=>v.name),rel=(x,n)=>(p(x,n)?.relation??[]).map(v=>v.id),dat=(x,n)=>p(x,n)?.date?.start??null,num=(x,n)=>p(x,n)?.number??null,check=(x,n)=>p(x,n)?.checkbox??null,phone=(x,n)=>p(x,n)?.phone_number??null,url=(x,n)=>p(x,n)?.url??null,files=(x,n)=>(p(x,n)?.files??[]).map(f=>({name:f.name??'파일',url:(f.type==='file'?f.file?.url:f.external?.url)??''}));
@@ -33,8 +41,6 @@ const headers=()=>({apikey:supabaseKey,Authorization:`Bearer ${supabaseKey}`});
 // 사직/금정 두 지점이 하나의 Supabase 프로젝트를 공유하므로(supabase/schema/002_branch_scoping.sql)
 // 모든 row는 --branch=<code>로 지정한 지점의 branch_id로 태그된다. fixture 모드(Supabase 자격증명 없음)는
 // branches 테이블을 조회할 수 없으므로 다른 fixture id처럼 결정적 UUID로 시뮬레이션한다.
-const branchArg=(a.find(x=>x.startsWith('--branch='))||'').split('=')[1];
-if(!branchArg)throw Error('--branch=<code> is required, e.g. --branch=sajik or --branch=geumjeong (see supabase/schema/002_branch_scoping.sql).');
 async function resolveBranchId(){
   if(supabaseUrl&&supabaseKey){
     const r=await fetch(`${supabaseUrl}/rest/v1/branches?select=id&code=eq.${encodeURIComponent(branchArg)}`,{headers:headers()});
@@ -89,3 +95,17 @@ async function upsert(table,rows,conflict='branch_id,notion_id'){if(!EXECUTE||!r
 for(const s of ['STAFF','STUDENT','CLASS','CLASS_PROGRESS','DAILY_RECORD','BRIEFING','EXAM_SCORE','COUNSELING','ADMIN_INBOX','TODO','CLINIC','MATERIAL','EXAM_PREP','SCHOOL_EXAM_RANGE','SLACK_RECORDS','MANUAL','MANUAL_STEP'])await upsert(TABLE[s],sourceRows.get(s));
 await upsert(TABLE.CLASS_STUDENTS,derived.get('CLASS_STUDENTS'),'class_id,student_id');await upsert(TABLE.CLASS_STAFF,derived.get('CLASS_STAFF'),'class_id,staff_id,assignment_role');await upsert(TABLE.CLASS_SCHEDULES,derived.get('CLASS_SCHEDULES'),'class_id,weekday,period');await upsert(TABLE.STAFF_WORK_SCHEDULES,derived.get('STAFF_WORK_SCHEDULES'),'staff_id,weekday');
 console.log(EXECUTE?'[execute] Supabase upserts complete.':'[dry-run] No Supabase request was made.');console.log('DRY_RUN_SUMMARY_JSON='+JSON.stringify(Object.fromEntries(stats)));for(const x of errors)console.log(`[error] ${x}`);for(const x of unresolved)console.log(`[unresolved] ${x}`);
+return{branch:branchArg,branchId:BRANCH_ID,execute:EXECUTE,stats:Object.fromEntries(stats),errors,unresolved};
+}
+
+// CLI entrypoint — 기존과 동일한 사용법을 그대로 유지한다.
+const isMain=process.argv[1]&&import.meta.url===`file://${process.argv[1]}`;
+if(isMain){
+const argv=process.argv.slice(2);
+const execute=argv.includes('--execute');
+const fi=argv.indexOf('--fixtures');
+const fixtureDir=fi<0?null:argv[fi+1];
+if(fi>=0&&!fixtureDir)throw Error('--fixtures requires a directory.');
+const branch=(argv.find(x=>x.startsWith('--branch='))||'').split('=')[1];
+await runMigration({execute,fixtureDir,branch});
+}
