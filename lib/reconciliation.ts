@@ -315,7 +315,7 @@ export async function planOrProvisionGeumjeongDatabases(execute: boolean) {
   const anchorDb: any = await notion.databases.retrieve({ database_id: anchorDatabaseId });
   const parentPageId: string | undefined = anchorDb.parent?.page_id;
   if (!parentPageId) {
-    return { error: "금정 DB들의 부모 페이지 ID를 찾지 못했습니다 — 임의 진행하지 않습니다." };
+    return { error: "금정 DB들의 부모 페이지 ID를 찾지 못했습니다 — 임의 진행하지 않습니다.", anchorDbParent: anchorDb.parent };
   }
 
   const sajikStaff = sajik("직원계정");
