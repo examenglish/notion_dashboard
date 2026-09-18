@@ -50,6 +50,7 @@ import {
   type NewTaskInput,
 } from "./tasks";
 import { routeTask, type StaffCandidate, type ClassInfo } from "./task-routing";
+import { dualWriteEntity, dualDeleteEntity } from "./supabaseRepo";
 
 const STAFF_CACHE_TAG = "staff-list";
 
@@ -240,7 +241,7 @@ export async function listStaff() {
 // 요일/시간 제한 없이 항상 가능한 것으로 취급한다(기존 강사/원장/행정 계정과
 // 호환 유지).
 export async function updateStaffSchedule(staffId: string, workHours: WorkHours) {
-  await notion.pages.update({
+  const updated = await notion.pages.update({
     page_id: staffId,
     properties: {
       근무시간표: { rich_text: [{ text: { content: serializeWorkHours(workHours) } }] },
@@ -248,6 +249,7 @@ export async function updateStaffSchedule(staffId: string, workHours: WorkHours)
     } as any,
   });
   revalidateTag(STAFF_CACHE_TAG);
+  await dualWriteEntity("STAFF", updated);
 }
 
 export async function findStaffByNameAndPin(name: string, pin: string) {
@@ -267,15 +269,16 @@ export async function findStaffByNameAndPin(name: string, pin: string) {
 // 조교 이름이 더 이상 뜨지 않게 되므로(관계가 가리키는 페이지 자체가 없어짐),
 // 작성한 기록을 그대로 유지하려면 페이지는 살려두고 로그인/목록에서만 걸러야 한다.
 export async function setStaffResigned(staffId: string, resigned: boolean) {
-  await notion.pages.update({
+  const updated = await notion.pages.update({
     page_id: staffId,
     properties: { 퇴사: { checkbox: resigned } } as any,
   });
   revalidateTag(STAFF_CACHE_TAG);
+  await dualWriteEntity("STAFF", updated);
 }
 
 export async function updateStaffPin(staffId: string, newPin: string) {
-  await notion.pages.update({
+  const updated = await notion.pages.update({
     page_id: staffId,
     properties: {
       PIN: { rich_text: [{ text: { content: newPin } }] },
@@ -284,6 +287,9 @@ export async function updateStaffPin(staffId: string, newPin: string) {
   });
   // PIN 변경 직후에도 캐시가 옛 PIN을 들고 있으면 안 되므로 즉시 무효화.
   revalidateTag(STAFF_CACHE_TAG);
+  // dual-write에서도 PIN은 STAFF T() 매핑에 없으니(payload에도 STAFF는 PIN 제외)
+  // 안전하다 — 그대로 재사용.
+  await dualWriteEntity("STAFF", updated);
 }
 
 // 강사/조교 계정 등록. 이름 중복(동명이인 오인/중복 로그인 계정 방지)을
@@ -305,6 +311,7 @@ export async function createStaff(name: string, role: "강사" | "조교" | "행
     } as any,
   });
   revalidateTag(STAFF_CACHE_TAG);
+  await dualWriteEntity("STAFF", created);
   return created.id;
 }
 
@@ -331,10 +338,11 @@ export async function listClasses() {
 // "이 조교는 이 반을 담당한다"를 미리 설정해두면 조교 쪽에서 그 반 명단을
 // 한 번에 불러올 수 있다.
 export async function assignClassAssistants(classId: string, assistantIds: string[]) {
-  await notion.pages.update({
+  const updated = await notion.pages.update({
     page_id: classId,
     properties: { 담당조교: { relation: assistantIds.map((id) => ({ id })) } } as any,
   });
+  await dualWriteEntity("CLASS", updated);
 }
 
 export async function createClass(input: {
@@ -362,6 +370,7 @@ export async function createClass(input: {
       구분: { select: { name: input.type === "시험대비" ? "시험대비" : "정규" } },
     } as any,
   });
+  await dualWriteEntity("CLASS", page);
   return page.id;
 }
 
@@ -390,14 +399,16 @@ export async function updateClass(
   if (input.time !== undefined) properties["시간"] = { rich_text: [{ text: { content: input.time } }] };
   if (input.level !== undefined) properties["레벨"] = input.level ? { select: { name: input.level } } : { select: null };
   if (input.type !== undefined) properties["구분"] = { select: { name: input.type === "시험대비" ? "시험대비" : "정규" } };
-  await notion.pages.update({ page_id: classId, properties });
+  const updated = await notion.pages.update({ page_id: classId, properties });
+  await dualWriteEntity("CLASS", updated);
 }
 
 // 반 삭제(보관 처리) — 학생이 한 명도 등록되지 않은 반을 정리할 때 쓴다.
 // 소속학생/진도기록 등이 이미 있는 반을 실수로 지우는 걸 막기 위해 호출
 // 전에 studentIds가 비어있는지 라우트에서 확인한다.
 export async function deleteClass(classId: string) {
-  await notion.pages.update({ page_id: classId, archived: true });
+  const archived = await notion.pages.update({ page_id: classId, archived: true });
+  await dualWriteEntity("CLASS", archived);
 }
 
 // 반이름 중복 생성/개명을 막을 때 쓴다 — "(숫자)" seed-data 접미사를 떼고
@@ -1371,7 +1382,7 @@ export async function getTodaySchedule(today: string, viewerStaffId?: string) {
 // 본인만 보이는 체크리스트 — 자연어 입력의 "/to do list" 명령이나 오늘의
 // 일정 카드의 빠른등록에서 만든다.
 export async function createPersonalTodo(input: { staffId: string; content: string; date: string }) {
-  await notion.pages.create({
+  const created = await notion.pages.create({
     parent: { data_source_id: DB.TODO } as any,
     properties: {
       제목: { title: [{ text: { content: input.content } }] },
@@ -1382,13 +1393,15 @@ export async function createPersonalTodo(input: { staffId: string; content: stri
       우선순위: { select: { name: "보통" } },
     } as any,
   });
+  await dualWriteEntity("TODO", created);
 }
 
 export async function updatePersonalTodo(id: string, input: { content?: string; date?: string }) {
   const properties: any = {};
   if (input.content !== undefined) properties["제목"] = { title: [{ text: { content: input.content } }] };
   if (input.date) properties["예정일"] = { date: { start: input.date } };
-  await notion.pages.update({ page_id: id, properties });
+  const updated = await notion.pages.update({ page_id: id, properties });
+  await dualWriteEntity("TODO", updated);
 }
 
 async function studentBriefMap(): Promise<
@@ -1483,6 +1496,7 @@ export async function createClassProgress(input: {
       } as any,
     });
     dailyRecordIds.push(daily.id);
+    await dualWriteEntity("DAILY_RECORD", daily);
 
     const briefingText =
       input.briefingTexts?.[studentId] ??
@@ -1511,9 +1525,10 @@ export async function createClassProgress(input: {
       } as any,
     });
     briefingIds.push(briefing.id);
+    await dualWriteEntity("BRIEFING", briefing);
 
     if (input.reviewDays && input.reviewDays > 0) {
-      await notion.pages.create({
+      const reviewTask = await notion.pages.create({
         parent: { data_source_id: DB.TODO } as any,
         properties: {
           제목: { title: [{ text: { content: `복습 - ${studentName}` } }] },
@@ -1526,16 +1541,18 @@ export async function createClassProgress(input: {
           우선순위: { select: { name: "보통" } },
         } as any,
       });
+      await dualWriteEntity("TODO", reviewTask);
     }
   }
 
-  await notion.pages.update({
+  const finalProgressPage = await notion.pages.update({
     page_id: progressPage.id,
     properties: {
       학생기록생성됨: { checkbox: true },
       생성된학생기록: { relation: dailyRecordIds.map((id) => ({ id })) },
     } as any,
   });
+  await dualWriteEntity("CLASS_PROGRESS", finalProgressPage);
 
   return {
     progressPageId: progressPage.id,
@@ -1632,12 +1649,13 @@ export async function saveClassRecordScores(
     (dailyRecords as any[]).map(async (dp) => {
       const studentId = getRelationIds(dp, "학생")[0];
       if (!studentId || !(studentId in scores)) return;
-      await notion.pages.update({
+      const updatedDaily = await notion.pages.update({
         page_id: dp.id,
         properties: {
           성취사항: { rich_text: [{ text: { content: serializeAchievementScores(scores[studentId]) } }] },
         } as any,
       });
+      await dualWriteEntity("DAILY_RECORD", updatedDaily);
       updated++;
     })
   );
@@ -1741,7 +1759,8 @@ export async function updateClassProgress(input: {
   if (input.homework !== undefined) progressPageProperties.과제내용 = { rich_text: [{ text: { content: input.homework } }] };
   if (input.nextAssignment !== undefined) progressPageProperties.다음시간테스트 = { rich_text: [{ text: { content: input.nextAssignment } }] };
   if (input.notice !== undefined) progressPageProperties.전달사항 = { rich_text: [{ text: { content: input.notice } }] };
-  await notion.pages.update({ page_id: input.progressId, properties: progressPageProperties });
+  const updatedProgressPage = await notion.pages.update({ page_id: input.progressId, properties: progressPageProperties });
+  await dualWriteEntity("CLASS_PROGRESS", updatedProgressPage);
 
   const existingDaily = await queryAllPages({
     data_source_id: DB.DAILY_RECORD,
@@ -1766,7 +1785,8 @@ export async function updateClassProgress(input: {
     if (input.progress !== undefined) properties.진도내용 = { rich_text: [{ text: { content: input.progress } }] };
     const existing = dailyByStudent.get(studentId);
     if (existing) {
-      await notion.pages.update({ page_id: existing.id, properties: properties as any });
+      const updatedDaily = await notion.pages.update({ page_id: existing.id, properties: properties as any });
+      await dualWriteEntity("DAILY_RECORD", updatedDaily);
     } else {
       const studentPage: any = await notion.pages.retrieve({ page_id: studentId });
       const studentName = getTitle(studentPage, "이름");
@@ -1782,15 +1802,17 @@ export async function updateClassProgress(input: {
         } as any,
       });
       newDailyIds.push(daily.id);
+      await dualWriteEntity("DAILY_RECORD", daily);
     }
   }
 
   if (newDailyIds.length > 0) {
     const allIds = [...Array.from(dailyByStudent.values()).map((d: any) => d.id), ...newDailyIds];
-    await notion.pages.update({
+    const updatedProgressPage2 = await notion.pages.update({
       page_id: input.progressId,
       properties: { 학생기록생성됨: { checkbox: true }, 생성된학생기록: { relation: allIds.map((id) => ({ id })) } } as any,
     });
+    await dualWriteEntity("CLASS_PROGRESS", updatedProgressPage2);
   }
 
   if (input.progress !== undefined && input.progress.trim() !== "") {
@@ -1820,7 +1842,7 @@ export async function updateClassProgress(input: {
           individualNotice: flags.individualNotice,
           scores: (flags.scores ?? []).map((s) => ({ type: s.type, raw: achievementScoreToRaw(s) })),
         });
-        await notion.pages.create({
+        const newBriefing = await notion.pages.create({
           parent: { data_source_id: DB.BRIEFING } as any,
           properties: {
             제목: { title: [{ text: { content: `${studentName} 데일리브리핑 ${input.date}` } }] },
@@ -1830,6 +1852,7 @@ export async function updateClassProgress(input: {
             브리핑내용: { rich_text: [{ text: { content: briefingText } }] },
           } as any,
         });
+        await dualWriteEntity("BRIEFING", newBriefing);
       })
     );
   }
@@ -1896,12 +1919,14 @@ export async function checkInAttendance(input: {
       } as any,
     });
     dailyRecordIds.push(daily.id);
+    await dualWriteEntity("DAILY_RECORD", daily);
   }
 
-  await notion.pages.update({
+  const finalProgressPage = await notion.pages.update({
     page_id: progressPage.id,
     properties: { 학생기록생성됨: { checkbox: true }, 생성된학생기록: { relation: dailyRecordIds.map((id) => ({ id })) } } as any,
   });
+  await dualWriteEntity("CLASS_PROGRESS", finalProgressPage);
 
   return { progressId: progressPage.id, created: true };
 }
@@ -2039,11 +2064,13 @@ export async function updateCounselingEntry(
   if (input.transcript !== undefined) properties["전사내용"] = { rich_text: [{ text: { content: input.transcript } }] };
   if (input.summary !== undefined) properties["상담내용"] = { rich_text: [{ text: { content: input.summary } }] };
   if (input.followUp !== undefined) properties["후속조치"] = { rich_text: [{ text: { content: input.followUp } }] };
-  await notion.pages.update({ page_id: id, properties });
+  const updated = await notion.pages.update({ page_id: id, properties });
+  await dualWriteEntity("COUNSELING", updated);
 }
 
 export async function deleteCounselingEntry(id: string) {
-  await notion.pages.update({ page_id: id, archived: true });
+  const archived = await notion.pages.update({ page_id: id, archived: true });
+  await dualWriteEntity("COUNSELING", archived);
 }
 
 export async function updateAdminInboxEntry(
@@ -2059,11 +2086,13 @@ export async function updateAdminInboxEntry(
   }
   if (input.owner !== undefined) properties["담당자"] = { rich_text: [{ text: { content: input.owner } }] };
   if (input.done !== undefined) properties["처리완료"] = { checkbox: input.done };
-  await notion.pages.update({ page_id: id, properties });
+  const updated = await notion.pages.update({ page_id: id, properties });
+  await dualWriteEntity("ADMIN_INBOX", updated);
 }
 
 export async function deleteAdminInboxEntry(id: string) {
-  await notion.pages.update({ page_id: id, archived: true });
+  const archived = await notion.pages.update({ page_id: id, archived: true });
+  await dualWriteEntity("ADMIN_INBOX", archived);
 }
 
 // "결석예정"으로 등록된 날짜에 이미 저장된 "오늘 수업 기록"(DB⑥ 일별기록)이
@@ -2083,9 +2112,10 @@ async function syncAttendanceForPlannedAbsence(studentId: string, date: string) 
     },
   });
   await Promise.all(
-    (records as any[]).map((r) =>
-      notion.pages.update({ page_id: r.id, properties: { 출결: { select: { name: "결석" } } } as any })
-    )
+    (records as any[]).map(async (r) => {
+      const updated = await notion.pages.update({ page_id: r.id, properties: { 출결: { select: { name: "결석" } } } as any });
+      await dualWriteEntity("DAILY_RECORD", updated);
+    })
   );
 }
 
@@ -2135,7 +2165,7 @@ export async function createAdminInboxEntry(input: {
     ? getTitle(await notion.pages.retrieve({ page_id: input.studentId }) as any, "이름")
     : "전체";
   const startDate = input.startDate || todayKST();
-  await notion.pages.create({
+  const created = await notion.pages.create({
     parent: { data_source_id: DB.ADMIN_INBOX } as any,
     properties: {
       제목: { title: [{ text: { content: `${input.type} - ${studentName}` } }] },
@@ -2151,6 +2181,7 @@ export async function createAdminInboxEntry(input: {
       ...(input.owner ? { 담당자: { rich_text: [{ text: { content: input.owner } }] } } : {}),
     } as any,
   });
+  await dualWriteEntity("ADMIN_INBOX", created);
 
   if (input.type === "결석예정" && input.studentId) {
     const endDate = input.endDate || startDate;
@@ -2173,7 +2204,8 @@ async function autoPromoteFromEnrolledAt(studentId: string, enrolledAt: string |
   if (!enrolledAt || enrolledAt > todayKST()) return;
   const page: any = await notion.pages.retrieve({ page_id: studentId });
   if (getSelect(page, "상태") === "대기생") {
-    await notion.pages.update({ page_id: studentId, properties: { 상태: { select: { name: "재원" } } } as any });
+    const updated = await notion.pages.update({ page_id: studentId, properties: { 상태: { select: { name: "재원" } } } as any });
+    await dualWriteEntity("STUDENT", updated);
   }
 }
 
@@ -2198,7 +2230,8 @@ export async function updateStudentInfo(input: {
   if (input.actionAlarmDate)
     properties["조치알람일"] = { date: { start: input.actionAlarmDate } };
 
-  await notion.pages.update({ page_id: input.studentId, properties });
+  const updated = await notion.pages.update({ page_id: input.studentId, properties });
+  await dualWriteEntity("STUDENT", updated);
   await autoPromoteFromEnrolledAt(input.studentId, input.enrolledAt);
 
   // DB②의 조치/조치담당자/조치알람일은 매번 덮어써지는 "현재 상태" 필드라
@@ -2209,7 +2242,7 @@ export async function updateStudentInfo(input: {
     const studentPage: any = await notion.pages.retrieve({ page_id: input.studentId });
     const studentName = getTitle(studentPage, "이름");
     const ownerId = input.actionOwner ? await findStaffIdByName(input.actionOwner) : null;
-    await notion.pages.create({
+    const actionTask = await notion.pages.create({
       parent: { data_source_id: DB.TODO } as any,
       properties: {
         제목: { title: [{ text: { content: input.action } }] },
@@ -2221,6 +2254,7 @@ export async function updateStudentInfo(input: {
         우선순위: { select: { name: "보통" } },
       } as any,
     });
+    await dualWriteEntity("TODO", actionTask);
   }
 }
 
@@ -2240,6 +2274,7 @@ export async function createMinimalStudent(name: string, school?: string): Promi
       ...(school ? { 학교: { rich_text: [{ text: { content: school } }] } } : {}),
     } as any,
   });
+  await dualWriteEntity("STUDENT", page);
   return page.id;
 }
 
@@ -2284,6 +2319,7 @@ export async function createStudent(input: {
       ...(input.memo ? { 메모: { rich_text: [{ text: { content: input.memo } }] } } : {}),
     } as any,
   });
+  await dualWriteEntity("STUDENT", page);
   return page.id;
 }
 
@@ -2332,7 +2368,8 @@ export async function updateStudentFull(
   }
   if (input.classIds !== undefined) properties["소속반"] = { relation: input.classIds.map((id) => ({ id })) };
   if (input.memo !== undefined) properties["메모"] = { rich_text: [{ text: { content: input.memo } }] };
-  await notion.pages.update({ page_id: studentId, properties });
+  const updated = await notion.pages.update({ page_id: studentId, properties });
+  await dualWriteEntity("STUDENT", updated);
 
   // status를 이 호출에서 명시적으로 같이 바꾸는 중이면(예: 관리자가 직접
   // 휴원/퇴원으로 바꾸는 경우) 그 판단을 그대로 존중하고 자동 승격을 하지
@@ -2360,7 +2397,8 @@ export async function promoteWaitlistedStudents(today: string): Promise<{ id: st
   });
   const promoted: { id: string; name: string }[] = [];
   for (const p of results as any[]) {
-    await notion.pages.update({ page_id: p.id, properties: { 상태: { select: { name: "재원" } } } as any });
+    const updated = await notion.pages.update({ page_id: p.id, properties: { 상태: { select: { name: "재원" } } } as any });
+    await dualWriteEntity("STUDENT", updated);
     promoted.push({ id: p.id, name: getTitle(p, "이름") });
   }
   return promoted;
@@ -2399,7 +2437,7 @@ export async function createScheduleEntry(input: {
     ? getTitle((await notion.pages.retrieve({ page_id: input.studentId })) as any, "이름")
     : "";
   const ownerId = input.ownerName ? await findStaffIdByName(input.ownerName) : null;
-  await notion.pages.create({
+  const created = await notion.pages.create({
     parent: { data_source_id: DB.TODO } as any,
     properties: {
       제목: { title: [{ text: { content: `${input.type}${studentName ? " - " + studentName : ""}` } }] },
@@ -2413,13 +2451,15 @@ export async function createScheduleEntry(input: {
       우선순위: { select: { name: "보통" } },
     } as any,
   });
+  await dualWriteEntity("TODO", created);
 }
 
 export async function completeScheduleEntry(id: string) {
-  await notion.pages.update({
+  const updated = await notion.pages.update({
     page_id: id,
     properties: { 완료여부: { checkbox: true } } as any,
   });
+  await dualWriteEntity("TODO", updated);
 }
 
 export async function updateScheduleEntry(
@@ -2442,7 +2482,8 @@ export async function updateScheduleEntry(
     }
     properties["담당자"] = { relation: ownerId ? [{ id: ownerId }] : [] };
   }
-  await notion.pages.update({ page_id: id, properties });
+  const updated = await notion.pages.update({ page_id: id, properties });
+  await dualWriteEntity("TODO", updated);
 }
 
 // 학생별 전체기록(StudentHistoryModal)에서 보강/조치사항/복습 이력을 지울 때
@@ -2459,14 +2500,16 @@ export async function deleteScheduleEntry(id: string) {
     if (studentId && content) {
       const studentPage: any = await notion.pages.retrieve({ page_id: studentId });
       if (getRichText(studentPage, "조치") === content) {
-        await notion.pages.update({
+        const updatedStudent = await notion.pages.update({
           page_id: studentId,
           properties: { 조치: { rich_text: [] }, 조치담당자: { rich_text: [] }, 조치알람일: { date: null } },
         });
+        await dualWriteEntity("STUDENT", updatedStudent);
       }
     }
   }
-  await notion.pages.update({ page_id: id, archived: true });
+  const archived = await notion.pages.update({ page_id: id, archived: true });
+  await dualWriteEntity("TODO", archived);
 }
 
 // "오늘의 일정 > 학습레벨/조치사항"에서 알람을 지울 때 — 학생 마스터의
@@ -2475,10 +2518,11 @@ export async function deleteScheduleEntry(id: string) {
 export async function deleteStudentActionAlarm(studentId: string) {
   const studentPage: any = await notion.pages.retrieve({ page_id: studentId });
   const currentAction = getRichText(studentPage, "조치");
-  await notion.pages.update({
+  const updatedStudent = await notion.pages.update({
     page_id: studentId,
     properties: { 조치: { rich_text: [] }, 조치담당자: { rich_text: [] }, 조치알람일: { date: null } },
   });
+  await dualWriteEntity("STUDENT", updatedStudent);
   if (currentAction) {
     const matches = await queryAllPages({
       data_source_id: DB.TODO,
@@ -2490,7 +2534,12 @@ export async function deleteStudentActionAlarm(studentId: string) {
         ],
       },
     });
-    await Promise.all(matches.map((m: any) => notion.pages.update({ page_id: m.id, archived: true })));
+    await Promise.all(
+      matches.map(async (m: any) => {
+        const archived = await notion.pages.update({ page_id: m.id, archived: true });
+        await dualWriteEntity("TODO", archived);
+      })
+    );
   }
 }
 
@@ -2498,7 +2547,8 @@ export async function deleteStudentActionAlarm(studentId: string) {
 // 건드리지 않으므로 같은 반 다른 학생의 기록에는 영향이 없다 — 삭제는
 // 원장만 가능(권한 확인은 라우트에서).
 export async function deleteDailyRecordEntry(id: string) {
-  await notion.pages.update({ page_id: id, archived: true });
+  const archived = await notion.pages.update({ page_id: id, archived: true });
+  await dualWriteEntity("DAILY_RECORD", archived);
 }
 
 // ---- 조교 클리닉 (DB⑮) ----
@@ -2526,7 +2576,7 @@ export async function createClinicRecord(input: {
   ]);
   const assistantName = getTitle(assistantPage as any, "이름");
   const studentNamesJoined = input.studentIds.map((id) => names.get(id) ?? "-").join(", ");
-  await notion.pages.create({
+  const created = await notion.pages.create({
     parent: { data_source_id: DB.CLINIC } as any,
     properties: {
       제목: {
@@ -2544,6 +2594,7 @@ export async function createClinicRecord(input: {
       확인완료: { checkbox: false },
     } as any,
   });
+  await dualWriteEntity("CLINIC", created);
   // 지시받은 할일을 보고로 연결했으면, 지시자가 "완료여부"만 보고도 이행됐다는
   // 걸 바로 알 수 있게 그 할일을 자동으로 완료 처리한다. 지시사항(메모)
   // 자체는 건드리지 않는다 — 원본이 남아 있어야 지시-보고 비교가 가능하다.
@@ -2560,11 +2611,13 @@ export async function updateClinicRecord(
   if (input.checked !== undefined) properties["확인완료"] = { checkbox: input.checked };
   if (input.content !== undefined) properties["진행내용"] = { rich_text: [{ text: { content: input.content } }] };
   if (input.nextPrep !== undefined) properties["다음준비사항"] = { rich_text: [{ text: { content: input.nextPrep } }] };
-  await notion.pages.update({ page_id: id, properties });
+  const updated = await notion.pages.update({ page_id: id, properties });
+  await dualWriteEntity("CLINIC", updated);
 }
 
 export async function deleteClinicRecord(id: string) {
-  await notion.pages.update({ page_id: id, archived: true });
+  const archived = await notion.pages.update({ page_id: id, archived: true });
+  await dualWriteEntity("CLINIC", archived);
 }
 
 // "출근했을 때 오늘 뭘 해야 하는지" — 담당자(조교)로 지정된 오늘자 할일.
@@ -2820,7 +2873,7 @@ export async function createCounselingEntry(input: {
     (await notion.pages.retrieve({ page_id: input.studentId })) as any,
     "이름"
   );
-  await notion.pages.create({
+  const created = await notion.pages.create({
     parent: { data_source_id: DB.COUNSELING } as any,
     properties: {
       제목: { title: [{ text: { content: `${studentName} 상담일지` } }] },
@@ -2833,6 +2886,7 @@ export async function createCounselingEntry(input: {
       ...(input.enteredBy ? { 입력자: { rich_text: [{ text: { content: input.enteredBy } }] } } : {}),
     } as any,
   });
+  await dualWriteEntity("COUNSELING", created);
 }
 
 // ---- 교재·시험자료 제작관리 (DB⑥) ----
@@ -2907,7 +2961,7 @@ export async function createMaterialTask(input: {
     input.requesterName ? findStaffIdByName(input.requesterName) : null,
     input.ownerName ? findStaffIdByName(input.ownerName) : null,
   ]);
-  await notion.pages.create({
+  const created = await notion.pages.create({
     parent: { data_source_id: DB.MATERIAL } as any,
     properties: {
       제목: { title: [{ text: { content: input.title } }] },
@@ -2923,6 +2977,7 @@ export async function createMaterialTask(input: {
         : {}),
     } as any,
   });
+  await dualWriteEntity("MATERIAL", created);
 }
 
 export async function updateMaterialTask(
@@ -2946,7 +3001,8 @@ export async function updateMaterialTask(
   if (input.fileLocation !== undefined) properties["파일저장위치"] = { url: input.fileLocation || null };
   if (input.content !== undefined) properties["작업내용"] = { rich_text: [{ text: { content: input.content } }] };
   if (input.dueDate) properties["마감일"] = { date: { start: input.dueDate } };
-  await notion.pages.update({ page_id: id, properties });
+  const updated = await notion.pages.update({ page_id: id, properties });
+  await dualWriteEntity("MATERIAL", updated);
 }
 
 // 원본파일 업로드 — 이 작업의 최신 원본으로 교체한다(누적 첨부는 지원하지
@@ -3478,7 +3534,8 @@ export async function upsertSchoolExamRange(input: {
     updatedAt,
   };
   if (existing) {
-    await notion.pages.update({ page_id: existing.id, properties });
+    const updated = await notion.pages.update({ page_id: existing.id, properties });
+    await dualWriteEntity("SCHOOL_EXAM_RANGE", updated);
     return { ...resultBase, id: existing.id };
   }
   const page = await notion.pages.create({
@@ -3488,6 +3545,7 @@ export async function upsertSchoolExamRange(input: {
       ...properties,
     } as any,
   });
+  await dualWriteEntity("SCHOOL_EXAM_RANGE", page);
   return { ...resultBase, id: page.id };
 }
 
@@ -3615,7 +3673,7 @@ export async function createExamScore(input: {
 }) {
   const studentPage: any = await notion.pages.retrieve({ page_id: input.studentId });
   const studentName = getTitle(studentPage, "이름");
-  await notion.pages.create({
+  const created = await notion.pages.create({
     parent: { data_source_id: DB.EXAM_SCORE } as any,
     properties: {
       제목: { title: [{ text: { content: `${studentName} ${input.examName}` } }] },
@@ -3626,6 +3684,7 @@ export async function createExamScore(input: {
       날짜: { date: { start: input.date } },
     } as any,
   });
+  await dualWriteEntity("EXAM_SCORE", created);
 }
 
 // ---- 전날 결석자 → 보강 자동 요청 ----
@@ -3724,10 +3783,11 @@ async function ensureMakeupRequestForAbsence(input: {
     // 전에 만들어졌거나, 그때는 교사가 진도를 아직 저장하기 전이었던
     // 경우) 지금 값이 있으면 채워 넣는다 — 다른 필드는 건드리지 않는다.
     if (input.lessonContent && !getRichText(existing, "결석수업내용").trim()) {
-      await notion.pages.update({
+      const updated = await notion.pages.update({
         page_id: existing.id,
         properties: { 결석수업내용: { rich_text: [{ text: { content: input.lessonContent } }] } } as any,
       });
+      await dualWriteEntity("TODO", updated);
     }
     return { id: existing.id as string, created: false, ownerAssigned: !!ownerId, resolved };
   }
@@ -3756,6 +3816,7 @@ async function ensureMakeupRequestForAbsence(input: {
       우선순위: { select: { name: "보통" } },
     } as any,
   });
+  await dualWriteEntity("TODO", page);
   return { id: page.id, created: true, ownerAssigned: !!ownerId, resolved: false };
 }
 
@@ -4055,6 +4116,7 @@ export async function createTasks(
         ...(input.parentTaskId ? { 상위업무: { relation: [{ id: input.parentTaskId }] } } : {}),
       } as any,
     });
+    await dualWriteEntity("TODO", page);
     results.push({ id: page.id, type: input.type, ownerId, pool: poolFlag });
   }
   return results;
@@ -4099,7 +4161,8 @@ export async function claimTask(taskId: string, staffId: string): Promise<{ ok: 
   if (getRelationIds(page, "담당자").length > 0) {
     return { ok: false, message: "이미 다른 직원이 가져간 업무입니다." };
   }
-  await notion.pages.update({ page_id: taskId, properties: { 담당자: { relation: [{ id: staffId }] } } as any });
+  const updated = await notion.pages.update({ page_id: taskId, properties: { 담당자: { relation: [{ id: staffId }] } } as any });
+  await dualWriteEntity("TODO", updated);
   return { ok: true };
 }
 
@@ -4119,7 +4182,7 @@ export async function hasPriorFailure(studentId: string | null, typeLabel: strin
 }
 
 export async function completeTaskEntry(taskId: string, input: { outcome: string; memo?: string; urgent?: boolean }): Promise<void> {
-  await notion.pages.update({
+  const updated = await notion.pages.update({
     page_id: taskId,
     properties: {
       완료여부: { checkbox: true },
@@ -4128,10 +4191,12 @@ export async function completeTaskEntry(taskId: string, input: { outcome: string
       ...(input.urgent !== undefined ? { 긴급여부: { checkbox: input.urgent } } : {}),
     } as any,
   });
+  await dualWriteEntity("TODO", updated);
 }
 
 export async function acknowledgeTask(taskId: string): Promise<void> {
-  await notion.pages.update({ page_id: taskId, properties: { 원장확인: { checkbox: true } } as any });
+  const updated = await notion.pages.update({ page_id: taskId, properties: { 원장확인: { checkbox: true } } as any });
+  await dualWriteEntity("TODO", updated);
 }
 
 export async function getTask(taskId: string): Promise<TaskRecord | null> {
@@ -4273,6 +4338,7 @@ export async function createManualDraft(input: {
       작성자: { rich_text: [{ text: { content: input.createdBy } }] },
     } as any,
   });
+  await dualWriteEntity("MANUAL", page);
   return page.id;
 }
 
@@ -4303,7 +4369,8 @@ export async function updateManual(
   if (input.targetRoles !== undefined) properties["대상역할"] = { multi_select: input.targetRoles.map((r) => ({ name: r })) };
   if (input.status !== undefined) properties["상태"] = { select: { name: input.status } };
   if (input.summary !== undefined) properties["요약"] = { rich_text: chunkRichText(input.summary) };
-  await notion.pages.update({ page_id: id, properties });
+  const updated = await notion.pages.update({ page_id: id, properties });
+  await dualWriteEntity("MANUAL", updated);
 }
 
 export type ManualStepRecord = {
@@ -4349,7 +4416,7 @@ export async function createManualSteps(
 ): Promise<void> {
   const stepDb = requireManualStepDb();
   for (const step of steps) {
-    await notion.pages.create({
+    const created = await notion.pages.create({
       parent: { data_source_id: stepDb } as any,
       properties: {
         제목: { title: [{ text: { content: step.title } }] },
@@ -4363,6 +4430,7 @@ export async function createManualSteps(
         ...(step.keywords ? { 키워드: { rich_text: [{ text: { content: step.keywords } }] } } : {}),
       } as any,
     });
+    await dualWriteEntity("MANUAL_STEP", created);
   }
 }
 
@@ -4385,11 +4453,13 @@ export async function updateManualStep(
   if (input.warning !== undefined) properties["주의사항"] = { rich_text: chunkRichText(input.warning) };
   if (input.relatedPath !== undefined) properties["관련경로"] = { rich_text: [{ text: { content: input.relatedPath } }] };
   if (input.order !== undefined) properties["순서"] = { number: input.order };
-  await notion.pages.update({ page_id: id, properties });
+  const updated = await notion.pages.update({ page_id: id, properties });
+  await dualWriteEntity("MANUAL_STEP", updated);
 }
 
 export async function deleteManualStep(id: string): Promise<void> {
-  await notion.pages.update({ page_id: id, archived: true });
+  const archived = await notion.pages.update({ page_id: id, archived: true });
+  await dualWriteEntity("MANUAL_STEP", archived);
 }
 
 // 화면 연결(섹션23) — "? 사용방법" 링크가 현재 경로와 관련경로가 일치하는

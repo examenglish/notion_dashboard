@@ -7,6 +7,7 @@ import {
   searchStudents,
 } from "./notion";
 import { SLASH_COMMANDS, runNaturalLanguageCommand } from "./nl-input";
+import { dualWriteEntity } from "./supabaseRepo";
 
 const FIVE_MINUTES_SECONDS = 5 * 60;
 const NOTION_RICH_TEXT_LIMIT = 2000;
@@ -273,9 +274,11 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
   };
 
   if (existing) {
-    await notion.pages.update({ page_id: existing.id, properties: commonProperties });
+    const updated = await notion.pages.update({ page_id: existing.id, properties: commonProperties });
+    await dualWriteEntity("SLACK_RECORDS", updated);
   } else {
-    await notion.pages.create({ parent: { data_source_id: DB.SLACK_RECORDS } as any, properties: commonProperties });
+    const created = await notion.pages.create({ parent: { data_source_id: DB.SLACK_RECORDS } as any, properties: commonProperties });
+    await dualWriteEntity("SLACK_RECORDS", created);
   }
   await addSlackReaction(channel, normalized.messageTs, resolved.studentId ? "white_check_mark" : "warning");
 
