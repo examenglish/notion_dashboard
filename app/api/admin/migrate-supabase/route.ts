@@ -21,9 +21,17 @@ export const maxDuration = 60;
 //     -H "Content-Type: application/json" \
 //     -d '{"execute":false}'
 export async function POST(req: NextRequest) {
-  const expected = process.env.MIGRATION_ADMIN_SECRET;
-  const provided = req.headers.get("x-migration-secret");
+  // 대시보드 복사-붙여넣기로 앞뒤 공백/개행이 섞여 들어오는 경우가 흔해서
+  // 양쪽 다 trim 후 비교한다.
+  const expected = process.env.MIGRATION_ADMIN_SECRET?.trim();
+  const provided = req.headers.get("x-migration-secret")?.trim();
   if (!expected || !provided || provided !== expected) {
+    // 값 자체는 절대 로그에 남기지 않고, 길이만 남겨 공백/누락 여부만 진단한다.
+    console.error("migrate-supabase: secret mismatch", {
+      expectedConfigured: !!expected,
+      expectedLength: expected?.length ?? 0,
+      providedLength: provided?.length ?? 0,
+    });
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
