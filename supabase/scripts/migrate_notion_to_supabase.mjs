@@ -31,7 +31,11 @@ const stats=new Map([...SOURCES.map(([s])=>s),...DERIVED].map(s=>[s,{read:0,tran
 function issue(s,k,m){(k==='error'?errors:unresolved).push(`${s}:${m}`);stats.get(s)[k]++;}
 async function notionQuery(id){const out=[];let cursor;do{const r=await fetch(`https://api.notion.com/v1/data_sources/${id}/query`,{method:'POST',headers:{Authorization:`Bearer ${notionToken}`,'Notion-Version':process.env.NOTION_VERSION??'2025-09-03','Content-Type':'application/json'},body:JSON.stringify({page_size:100,...(cursor?{start_cursor:cursor}:{})})});if(!r.ok)throw Error(`Notion query failed (${r.status})`);const b=await r.json();out.push(...b.results);cursor=b.has_more?b.next_cursor:null;}while(cursor);return out;}
 async function fixturePages(s){const n=(await readdir(resolve(fixtureDir))).filter(x=>x.toUpperCase()===`${s}.JSON`);if(n.length!==1)throw Error(`fixture missing or duplicate: ${s}.json`);const v=JSON.parse(await readFile(resolve(fixtureDir,n[0]),'utf8'));return Array.isArray(v)?v:v.results??[v];}
-const loaded=new Map();for(const[s,e]of ACTIVE_SOURCES){const rows=fixtureDir?await fixturePages(s):await notionQuery(getEnv(e));loaded.set(s,rows);stats.get(s).read=rows.length;console.log(`[read-only${fixtureDir?' fixture':''}] ${s}: ${rows.length} pages`);}
+// 소스 하나의 Notion 조회 실패(예: 잘못된 data source ID로 인한 404)가
+// 전체 마이그레이션을 중단시키지 않도록 소스 단위로 격리한다. 실패한
+// 소스는 read=0으로 처리되고 error로 명시적으로 보고되며, 다른 16개
+// 소스는 영향받지 않는다.
+const loaded=new Map();for(const[s,e]of ACTIVE_SOURCES){let rows;try{rows=fixtureDir?await fixturePages(s):await notionQuery(getEnv(e));}catch(err){issue(s,'error',`source-query:${err instanceof Error?err.message:String(err)}`);rows=[];}loaded.set(s,rows);stats.get(s).read=rows.length;console.log(`[read-only${fixtureDir?' fixture':''}] ${s}: ${rows.length} pages`);}
 for(const[s]of SOURCES)if(!loaded.has(s))console.log(`[skipped] ${s}: no database ID configured (optional source)`);
 
 const p=(x,n)=>x.properties?.[n],plain=v=>(v??[]).map(x=>x.plain_text??x.text?.content??'').join(''),title=(x,n)=>plain(p(x,n)?.title),rich=(x,n)=>plain(p(x,n)?.rich_text),select=(x,n)=>p(x,n)?.select?.name??p(x,n)?.status?.name??null,multi=(x,n)=>(p(x,n)?.multi_select??[]).map(v=>v.name),rel=(x,n)=>(p(x,n)?.relation??[]).map(v=>v.id),dat=(x,n)=>p(x,n)?.date?.start??null,num=(x,n)=>p(x,n)?.number??null,check=(x,n)=>p(x,n)?.checkbox??null,phone=(x,n)=>p(x,n)?.phone_number??null,url=(x,n)=>p(x,n)?.url??null,files=(x,n)=>(p(x,n)?.files??[]).map(f=>({name:f.name??'파일',url:(f.type==='file'?f.file?.url:f.external?.url)??''}));
