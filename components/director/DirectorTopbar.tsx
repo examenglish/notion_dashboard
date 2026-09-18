@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Search, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { Search, Loader2, Sparkles } from "lucide-react";
 import DirectorUserMenu from "./DirectorUserMenu";
 import type { StudentRow } from "@/components/StudentTable";
 
@@ -122,6 +123,14 @@ export default function DirectorTopbar({
           {greetingText && <span className="text-muted-foreground"> · {greetingText}</span>}
         </div>
       )}
+
+      <Link
+        href="/director"
+        className="flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground no-underline hover:bg-muted/60"
+      >
+        <Sparkles className="size-3.5" />
+        이그잼 AI
+      </Link>
 
       <DirectorUserMenu staffName={staffName} role={role} />
     </header>
