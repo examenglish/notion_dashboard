@@ -16,7 +16,11 @@ import { SESSION_COOKIE, verifySessionCookieValue } from "./lib/session";
 // used to swallow "/api/staff/[id]" too and skip attaching x-staff-role,
 // which made every role check on that subroute see an empty role and 403
 // even for 원장.
-const PUBLIC_API_EXACT_PATHS = ["/api/login", "/api/slack/events"];
+// "/api/admin/migrate-supabase"도 /api/cron/*와 같은 이유로 쿠키 인증을
+// 건너뛴다 — 세션 쿠키 없이 서버 대 서버로 호출되고, 라우트 자체가
+// MIGRATION_ADMIN_SECRET 헤더로 스스로 인증한다(일치하지 않으면 404).
+// 일회성 마이그레이션 완료 후 이 경로와 route.ts 파일을 함께 제거한다.
+const PUBLIC_API_EXACT_PATHS = ["/api/login", "/api/slack/events", "/api/admin/migrate-supabase"];
 const PUBLIC_API_PREFIX_PATHS = ["/api/cron/"];
 
 export async function middleware(req: NextRequest) {
