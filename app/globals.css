@@ -1071,6 +1071,16 @@ th, td {
   .no-print {
     display: none !important;
   }
+  /* 인쇄 화면들(ClassRosterPrintModal, AssistantClinicPrintModal 등)은 모두
+     모달(.modal-box) 안에 있는데, 그 모달은 화면에서만 스크롤되게 max-height:
+     85vh + overflow-y:auto가 걸려 있다. print-area가 position:absolute로
+     빠져나와도 조상의 overflow 클리핑은 그대로 적용돼서, 인쇄 시점에 모달
+     스크롤창에 보이던 첫 페이지 분량만 찍히고 나머지 내용은 통째로 잘려
+     사라졌다 — 인쇄할 때는 이 높이 제한/overflow를 풀어줘야 전체가 나온다. */
+  .modal-box {
+    max-height: none !important;
+    overflow: visible !important;
+  }
   /* 학생 리포트를 여러 명 한 번에 인쇄할 때 한 학생당 한 페이지씩 나오도록
      — 마지막 카드 뒤에는 빈 페이지가 남지 않게 last-child는 제외한다. */
   .report-page {
@@ -1078,6 +1088,65 @@ th, td {
   }
   .report-page:last-child {
     page-break-after: auto;
+  }
+}
+
+/* 조교별 클리닉 기록 전체 출력 — 조교가 지금까지 쓴 기록을 빠짐없이 날짜
+   오름차순으로, 행 사이 여백 없이 표로 촘촘하게 눌러 붙인다(종이를 아끼는
+   밀도가 목적). 조교가 바뀌는 지점만 새 페이지로 넘긴다. */
+.clinic-print-section-break {
+  margin-top: 32px;
+}
+
+.clinic-print-title {
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+
+.clinic-print-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.clinic-print-table th,
+.clinic-print-table td {
+  border: 1px solid var(--border);
+  padding: 4px 6px;
+  font-size: 12px;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.clinic-print-table th {
+  background: var(--primary-tint);
+  color: var(--primary-dark);
+}
+
+@media print {
+  .clinic-print-section-break {
+    margin-top: 0;
+    page-break-before: always;
+    break-before: page;
+  }
+  .clinic-print-title {
+    font-size: 12pt;
+  }
+  .clinic-print-table th,
+  .clinic-print-table td {
+    border: 0.75pt solid #000;
+    padding: 1px 3px;
+    font-size: 8.5pt;
+    line-height: 1.15;
+  }
+  .clinic-print-table th {
+    background: none !important;
+    color: #000 !important;
+  }
+  .clinic-print-table tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
   }
 }
 
