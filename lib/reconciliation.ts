@@ -238,21 +238,23 @@ const PROVISION_TARGETS: { key: string; sajikTitleContains: string }[] = [
   { key: "SLACK_RECORDS", sajikTitleContains: "Slack" },
 ];
 
-// databases.create()는 parent가 반드시 {type:"page_id"}여야 한다. 기준 DB가
-// 페이지에 바로 속하지 않고 블록(예: 페이지 안 toggle) 안에 중첩돼 있으면
-// 그 블록의 부모를 계속 따라 올라가 실제 page_id를 찾는다.
-async function resolveAncestorPageId(parent: any, depth = 0): Promise<string | null> {
-  if (!parent || depth > 10) return null;
-  if (parent.type === "page_id") return parent.page_id;
-  if (parent.type === "database_id") {
-    const db: any = await notion.databases.retrieve({ database_id: parent.database_id });
-    return resolveAncestorPageId(db.parent, depth + 1);
-  }
-  if (parent.type === "block_id") {
-    const block: any = await notion.blocks.retrieve({ block_id: parent.block_id });
-    return resolveAncestorPageId(block.parent, depth + 1);
-  }
-  return null; // workspace 최상위 등 — API로 데이터베이스를 만들 수 있는 위치가 아님.
+async function findAccessiblePages(): Promise<{ id: string; title: string }[]> {
+  const results: { id: string; title: string }[] = [];
+  let cursor: string | undefined;
+  do {
+    const res: any = await notion.search({
+      filter: { property: "object", value: "page" } as any,
+      start_cursor: cursor,
+      page_size: 100,
+    } as any);
+    for (const r of res.results as any[]) {
+      const titleProp = Object.values(r.properties ?? {}).find((p: any) => p?.type === "title") as any;
+      const title = (titleProp?.title ?? []).map((t: any) => t.plain_text).join("") || "(제목없음)";
+      results.push({ id: r.id, title });
+    }
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+  return results;
 }
 
 async function findAllDataSources(): Promise<{ id: string; title: string }[]> {
@@ -320,20 +322,16 @@ export async function planOrProvisionGeumjeongDatabases(execute: boolean) {
     return { error: "금정의 직원계정/학생마스터/기준 DB를 찾지 못했습니다 — 임의 진행하지 않습니다.", found: allSources.map((s) => s.title) };
   }
 
-  // search()가 돌려주는 건 data_source_id다 — 새 Notion API 모델에서
-  // database(부모 페이지 정보를 가짐)와 data_source는 별개 객체라, 먼저
-  // data_source -> 소속 database, 그 다음 database -> 부모 page 순으로
-  // 두 단계를 거쳐야 한다.
-  const anchorDataSource: any = await notion.dataSources.retrieve({ data_source_id: geumjeongAnchor.id });
-  const anchorDatabaseId: string | undefined = anchorDataSource.parent?.database_id ?? anchorDataSource.database_parent?.database_id;
-  if (!anchorDatabaseId) {
-    return { error: "금정 기준 DB의 database_id를 찾지 못했습니다 — 임의 진행하지 않습니다.", anchorDataSource };
+  // 기존 금정 DB의 부모를 타고 올라가는 방식은 중간 블록이 integration에
+  // 공유되지 않아 실패했다(권한 전파가 페이지 단위라 중첩 블록은 못 봄).
+  // 대신 integration이 직접 접근 가능한(=검색되는) "금정" 페이지를 찾아
+  // 그 아래에 만든다.
+  const pages = await findAccessiblePages();
+  const parentPage = pages.find((p) => p.title.includes("금정")) ?? pages[0];
+  if (!parentPage) {
+    return { error: "새 DB를 만들 부모 페이지를 하나도 찾지 못했습니다 — 임의 진행하지 않습니다." };
   }
-  const anchorDb: any = await notion.databases.retrieve({ database_id: anchorDatabaseId });
-  const parentPageId = await resolveAncestorPageId(anchorDb.parent);
-  if (!parentPageId) {
-    return { error: "금정 DB들의 부모 페이지 ID를 찾지 못했습니다 — 임의 진행하지 않습니다.", anchorDbParent: anchorDb.parent };
-  }
+  const parentPageId = parentPage.id;
 
   const sajikStaff = sajik("직원계정");
   const sajikStudent = sajik("학생마스터");
