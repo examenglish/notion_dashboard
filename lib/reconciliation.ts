@@ -39,29 +39,25 @@ function diffArrays(notionSide: any[], pgSide: any[], keyField = "id"): { onlyIn
   return { onlyInNotion, onlyInPg, fieldMismatches: fieldMismatches.slice(0, 50) };
 }
 
+async function compareDomain<T extends { id: string }>(name: string, load: (provider: "notion" | "postgres") => Promise<T[]>) {
+  try {
+    const [notionSide, pgSide] = await Promise.all([withProvider("notion", () => load("notion")), withProvider("postgres", () => load("postgres"))]);
+    return { domain: name, notionCount: notionSide.length, postgresCount: pgSide.length, ...diffArrays(notionSide, pgSide) };
+  } catch (err) {
+    // 예: 이 지점에 MANUAL DB가 아직 없음(NOTION_DB_MANUAL 미설정) — 그
+    // 도메인만 스킵하고 나머지 비교는 계속 진행한다.
+    return { domain: name, skipped: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function shadowReadCompare() {
-  const [notionClasses, pgClasses] = await Promise.all([
-    withProvider("notion", () => listClasses()),
-    withProvider("postgres", () => listClasses()),
+  const [classes, staff, poolTasks, manuals] = await Promise.all([
+    compareDomain("classes", () => listClasses()),
+    compareDomain("staff", () => listStaff()),
+    compareDomain("poolTasks", () => listPoolTasks()),
+    compareDomain("manuals", () => listManuals()),
   ]);
-  const [notionStaff, pgStaff] = await Promise.all([
-    withProvider("notion", () => listStaff()),
-    withProvider("postgres", () => listStaff()),
-  ]);
-  const [notionPool, pgPool] = await Promise.all([
-    withProvider("notion", () => listPoolTasks()),
-    withProvider("postgres", () => listPoolTasks()),
-  ]);
-  const [notionManuals, pgManuals] = await Promise.all([
-    withProvider("notion", () => listManuals()),
-    withProvider("postgres", () => listManuals()),
-  ]);
-  return {
-    classes: { notionCount: notionClasses.length, postgresCount: pgClasses.length, ...diffArrays(notionClasses, pgClasses) },
-    staff: { notionCount: notionStaff.length, postgresCount: pgStaff.length, ...diffArrays(notionStaff, pgStaff) },
-    poolTasks: { notionCount: notionPool.length, postgresCount: pgPool.length, ...diffArrays(notionPool, pgPool) },
-    manuals: { notionCount: notionManuals.length, postgresCount: pgManuals.length, ...diffArrays(notionManuals, pgManuals) },
-  };
+  return { classes, staff, poolTasks, manuals };
 }
 
 type Env = { url: string; key: string };
