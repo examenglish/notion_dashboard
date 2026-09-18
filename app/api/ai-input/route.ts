@@ -34,18 +34,7 @@ export async function POST(req: NextRequest) {
   const staffName = readStaffName(req) || undefined;
   const staffId = readStaffId(req);
 
-  const todoContent = matchToDoListShortcut(text);
-  if (todoContent !== null) {
-    if (!staffId) return NextResponse.json({ ok: false, message: "로그인이 필요합니다." });
-    if (!todoContent) return NextResponse.json({ ok: false, message: "/to do list 뒤에 할일 내용을 적어주세요." });
-    const date = resolveRelativeDate(todoContent, today) ?? today;
-    await createPersonalTodo({ staffId, content: todoContent, date });
-    return NextResponse.json({ ok: true, mode: "legacy", message: `개인 할일에 저장했습니다: ${todoContent}` });
-  }
-
-  const { isSlashCommand, rest: slashRest, forceTool, forcedScheduleType, forcedInboxType } = parseSlashCommand(text);
-
-  async function runLegacy(t: string) {
+  async function runLegacy(t: string, forceTool?: ReturnType<typeof parseSlashCommand>["forceTool"], forcedScheduleType?: ReturnType<typeof parseSlashCommand>["forcedScheduleType"], forcedInboxType?: ReturnType<typeof parseSlashCommand>["forcedInboxType"]) {
     const result = await runNaturalLanguageCommand(t, {
       staffName,
       forceTool,
@@ -84,23 +73,45 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 슬래시 명령(/보강 등)은 처음부터 그 카테고리가 확정된 것이므로 업무 생성을
-  // 시도할 이유가 없다 — 곧바로 기존 파이프라인으로.
-  if (isSlashCommand || forceLegacy) {
-    return runLegacy(slashRest);
-  }
+  // 이 아래 전체를 감싼다 — runCreateTasksCommand/runNaturalLanguageCommand
+  // 양쪽 다 자기 안에서 던지는 예외까지 전부 막지는 않으므로(예: 학생/직원
+  // 목록을 처음 불러오는 시점의 Notion 오류), 여기서 최종적으로 한 번 더
+  // 막아 항상 사람이 읽을 수 있는 JSON을 돌려준다("오류발생"으로만 보이던
+  // 문제 대응).
+  try {
+    const todoContent = matchToDoListShortcut(text);
+    if (todoContent !== null) {
+      if (!staffId) return NextResponse.json({ ok: false, message: "로그인이 필요합니다." });
+      if (!todoContent) return NextResponse.json({ ok: false, message: "/to do list 뒤에 할일 내용을 적어주세요." });
+      const date = resolveRelativeDate(todoContent, today) ?? today;
+      await createPersonalTodo({ staffId, content: todoContent, date });
+      return NextResponse.json({ ok: true, mode: "legacy", message: `개인 할일에 저장했습니다: ${todoContent}` });
+    }
 
-  const taskResult = await runCreateTasksCommand(text, { staffName });
-  if (taskResult.kind === "created") {
-    notifyTaskAssignments(taskResult.tasks);
-    return NextResponse.json({ ok: true, mode: "tasks", tasks: taskResult.tasks, warnings: taskResult.warnings });
+    const { isSlashCommand, rest: slashRest, forceTool, forcedScheduleType, forcedInboxType } = parseSlashCommand(text);
+
+    // 슬래시 명령(/보강 등)은 처음부터 그 카테고리가 확정된 것이므로 업무
+    // 생성을 시도할 이유가 없다 — 곧바로 기존 파이프라인으로.
+    if (isSlashCommand || forceLegacy) {
+      return await runLegacy(slashRest, forceTool, forcedScheduleType, forcedInboxType);
+    }
+
+    const taskResult = await runCreateTasksCommand(text, { staffName });
+    if (taskResult.kind === "created") {
+      notifyTaskAssignments(taskResult.tasks);
+      return NextResponse.json({ ok: true, mode: "tasks", tasks: taskResult.tasks, warnings: taskResult.warnings });
+    }
+    if (taskResult.kind === "clarify") {
+      // 업무로 해석되지 않으면(예: 상담 기록, 행정실 문의성 문장) 기존
+      // 학생기록 파이프라인이 이어받는다.
+      return await runLegacy(text);
+    }
+    // ai_error/save_error — 업무 생성 시도 자체가 실패한 경우는 그대로 반환.
+    const status = taskResult.kind === "ai_error" ? 502 : 500;
+    return NextResponse.json({ ok: false, mode: "tasks", message: taskResult.message }, { status });
+  } catch (err) {
+    console.error("/api/ai-input failed", err);
+    const message = err instanceof Error ? err.message : "처리 중 오류가 발생했습니다.";
+    return NextResponse.json({ ok: false, message }, { status: 500 });
   }
-  if (taskResult.kind === "clarify") {
-    // 업무로 해석되지 않으면(예: 상담 기록, 행정실 문의성 문장) 기존 학생기록
-    // 파이프라인이 이어받는다.
-    return runLegacy(text);
-  }
-  // ai_error/save_error — 업무 생성 시도 자체가 실패한 경우는 그대로 반환.
-  const status = taskResult.kind === "ai_error" ? 502 : 500;
-  return NextResponse.json({ ok: false, mode: "tasks", message: taskResult.message }, { status });
 }

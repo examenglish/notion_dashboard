@@ -17,17 +17,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, message: "로그인이 필요합니다." }, { status: 401 });
   }
 
-  const result = await runCreateTasksCommand(text, { staffName: readStaffName(req) || undefined });
+  try {
+    const result = await runCreateTasksCommand(text, { staffName: readStaffName(req) || undefined });
 
-  switch (result.kind) {
-    case "created":
-      notifyTaskAssignments(result.tasks);
-      return NextResponse.json({ ok: true, tasks: result.tasks, warnings: result.warnings });
-    case "clarify":
-      return NextResponse.json({ ok: false, message: result.message });
-    case "ai_error":
-      return NextResponse.json({ ok: false, message: result.message }, { status: 502 });
-    case "save_error":
-      return NextResponse.json({ ok: false, message: result.message }, { status: 500 });
+    switch (result.kind) {
+      case "created":
+        notifyTaskAssignments(result.tasks);
+        return NextResponse.json({ ok: true, tasks: result.tasks, warnings: result.warnings });
+      case "clarify":
+        return NextResponse.json({ ok: false, message: result.message });
+      case "ai_error":
+        return NextResponse.json({ ok: false, message: result.message }, { status: 502 });
+      case "save_error":
+        return NextResponse.json({ ok: false, message: result.message }, { status: 500 });
+    }
+  } catch (err) {
+    console.error("/api/tasks/from-text failed", err);
+    const message = err instanceof Error ? err.message : "처리 중 오류가 발생했습니다.";
+    return NextResponse.json({ ok: false, message }, { status: 500 });
   }
 }
