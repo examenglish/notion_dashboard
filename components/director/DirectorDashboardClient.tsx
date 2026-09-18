@@ -315,7 +315,7 @@ export default function DirectorDashboardClient({
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div id="dashboard-content" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile
           icon={CheckCircle2}
           label="오늘 출석"

@@ -1323,6 +1323,7 @@ th, td {
    않고 그대로 아래에 남겨두되(스크롤하면 보임), 처음 열었을 때는 검색창만
    보이는 "빈 화면" 느낌을 준다. */
 .ai-hero {
+  position: relative;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -1334,6 +1335,30 @@ th, td {
   padding: 40px 20px 32px;
   margin-bottom: 20px;
   text-align: center;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+.ai-hero-dashboard-link {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.ai-hero-dashboard-link:hover {
+  background: var(--primary-tint);
+  border-color: var(--primary);
 }
 
 .ai-hero-inner {

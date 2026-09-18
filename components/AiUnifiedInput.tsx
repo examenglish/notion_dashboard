@@ -121,6 +121,9 @@ export default function AiUnifiedInput({ role, onSaved }: { role: string; onSave
 
   return (
     <div className="ai-hero">
+      <a href="#dashboard-content" className="ai-hero-dashboard-link">
+        대시보드로 가기 ↓
+      </a>
       <div className="ai-hero-inner">
         <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 10 }}>
           <h1 className="ai-hero-title">✨ 이그잼 AI</h1>
