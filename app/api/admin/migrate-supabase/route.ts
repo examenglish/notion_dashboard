@@ -3,7 +3,7 @@ import { runMigration } from "@/supabase/scripts/migrate_notion_to_supabase.mjs"
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // 일회성 Notion -> Supabase 마이그레이션 러너. 이 지점(사직/금정) production
 // 배포는 이미 실제 NOTION_TOKEN/NOTION_DB_*를 갖고 있으므로, 여기서는 그
