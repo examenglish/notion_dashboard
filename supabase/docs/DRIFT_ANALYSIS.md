@@ -1,5 +1,7 @@
 # Drift 분석 — 원본 감사(56ac054) 대비 현재 academy-webapp
 
+> **2026-09-18 업데이트**: 아래 B/C 항목은 Phase 1 작업으로 `schema/001_initial_schema.sql`과 `scripts/migrate_notion_to_supabase.mjs`에 반영 완료됨(fixture dry-run 재검증 통과). 이 문서는 조사 근거 기록으로 그대로 남겨둔다.
+
 원본 `REAL_SCHEMA_AUDIT.md`/`SCHEMA_DESIGN.md`/`schema/001_initial_schema.sql`/`scripts/migrate_notion_to_supabase.mjs`는 당시 `lib/notion.ts`(3873행) 스냅샷 기준이다. 현재 이 저장소의 `lib/notion.ts`는 4414행이다. 아래는 코드 기준(파일:라인) 재조사 결과다. 이 문서는 실제 Notion/Supabase에 아무것도 실행하지 않고, 다음 단계(Phase 1: schema/script 갱신)를 위한 입력이다.
 
 ## A. 그대로 지원됨 (수정 불필요)

@@ -1,0 +1,186 @@
+[
+  {
+    "id": "manual_step-1",
+    "url": "https://example.invalid/MANUAL_STEP/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "단계1",
+            "text": {
+              "content": "단계1"
+            }
+          }
+        ]
+      },
+      "매뉴얼": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "manual-1"
+          }
+        ]
+      },
+      "순서": {
+        "type": "number",
+        "number": 1
+      },
+      "설명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "첫 단계",
+            "text": {
+              "content": "첫 단계"
+            }
+          }
+        ]
+      },
+      "스크린샷": {
+        "type": "url",
+        "url": "https://example.invalid/shot/1"
+      },
+      "영상타임스탬프": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "00:10",
+            "text": {
+              "content": "00:10"
+            }
+          }
+        ]
+      },
+      "주의사항": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "관련경로": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "/director/students",
+            "text": {
+              "content": "/director/students"
+            }
+          }
+        ]
+      },
+      "키워드": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "학생,등록",
+            "text": {
+              "content": "학생,등록"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "manual_step-2",
+    "url": "https://example.invalid/MANUAL_STEP/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "단계2",
+            "text": {
+              "content": "단계2"
+            }
+          }
+        ]
+      },
+      "매뉴얼": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "manual-1"
+          }
+        ]
+      },
+      "순서": {
+        "type": "number",
+        "number": 2
+      },
+      "설명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "두 번째 단계",
+            "text": {
+              "content": "두 번째 단계"
+            }
+          }
+        ]
+      },
+      "스크린샷": {
+        "type": "url",
+        "url": ""
+      },
+      "영상타임스탬프": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "00:20",
+            "text": {
+              "content": "00:20"
+            }
+          }
+        ]
+      },
+      "주의사항": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "주의",
+            "text": {
+              "content": "주의"
+            }
+          }
+        ]
+      },
+      "관련경로": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "/director/students",
+            "text": {
+              "content": "/director/students"
+            }
+          }
+        ]
+      },
+      "키워드": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      }
+    }
+  }
+]

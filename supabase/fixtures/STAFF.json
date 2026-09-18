@@ -39,6 +39,10 @@
         "type": "checkbox",
         "checkbox": false
       },
+      "퇴사": {
+        "type": "checkbox",
+        "checkbox": false
+      },
       "근무시간표": {
         "type": "rich_text",
         "rich_text": [
@@ -97,6 +101,10 @@
         ]
       },
       "비번변경필요": {
+        "type": "checkbox",
+        "checkbox": true
+      },
+      "퇴사": {
         "type": "checkbox",
         "checkbox": true
       },

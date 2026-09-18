@@ -104,6 +104,33 @@
             }
           }
         ]
+      },
+      "결과값": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "긴급여부": {
+        "type": "checkbox",
+        "checkbox": false
+      },
+      "원장확인": {
+        "type": "checkbox",
+        "checkbox": false
+      },
+      "업무풀": {
+        "type": "checkbox",
+        "checkbox": false
+      },
+      "상위업무": {
+        "type": "relation",
+        "relation": []
       }
     }
   },
@@ -206,6 +233,37 @@
             "text": {
               "content": "2과"
             }
+          }
+        ]
+      },
+      "결과값": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "완료됨",
+            "text": {
+              "content": "완료됨"
+            }
+          }
+        ]
+      },
+      "긴급여부": {
+        "type": "checkbox",
+        "checkbox": true
+      },
+      "원장확인": {
+        "type": "checkbox",
+        "checkbox": true
+      },
+      "업무풀": {
+        "type": "checkbox",
+        "checkbox": true
+      },
+      "상위업무": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "todo-1"
           }
         ]
       }

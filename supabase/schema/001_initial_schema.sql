@@ -1,6 +1,9 @@
 -- 사직이그잼영어학원 Notion -> Supabase 초기 최소 스키마
--- 근거: docs/INVESTIGATION_NOTES.md. 실제 속성명/형식 확인 전에는 확장하지 않는다.
+-- 근거: docs/INVESTIGATION_NOTES.md, docs/DRIFT_ANALYSIS.md. 실제 속성명/형식 확인 전에는 확장하지 않는다.
 -- notion_id는 Notion page id 원문을 보존한다. 관계에서 파생된 행은 원본 page가 없으므로 NULL이다.
+-- 2026-09-18: 감사 이후 drift 반영(docs/DRIFT_ANALYSIS.md) — tasks에 outcome/urgent/
+-- director_ack/pool/parent_task_id, staff에 resigned 추가, manuals/manual_steps 신설.
+-- 원본 15개 소스 대상 스키마는 변경하지 않았다.
 
 begin;
 
@@ -13,12 +16,14 @@ create table staff (
   role text,
   pin_hash text,
   must_change_password boolean not null default false,
+  resigned boolean not null default false,
   work_schedule text, work_days text[] not null default '{}',
   source_payload jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 comment on column staff.pin_hash is '평문 PIN은 적재하지 않는다. 해시 방식/인증 전환은 확인 필요.';
+comment on column staff.resigned is 'Notion STAFF.퇴사(감사 이후 추가). 퇴사자는 페이지를 삭제하지 않고 이 플래그로 로그인/신규 배정에서만 제외한다(과거 relation 조회 보존 목적).';
 
 create table students (
   id uuid primary key default gen_random_uuid(),
@@ -205,12 +210,21 @@ create table tasks (
   type text, staff_notion_ids text[] not null default '{}', student_notion_ids text[] not null default '{}',
   class_notion_ids text[] not null default '{}', time_text text, memo text, complete boolean,
   priority text, clinic_report_notion_ids text[] not null default '{}', absence_lesson text,
+  outcome text, urgent boolean not null default false, director_ack boolean not null default false,
+  pool boolean not null default false,
+  parent_task_id uuid references tasks(id) on delete set null,
+  parent_task_notion_ids text[] not null default '{}',
   source_payload jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 comment on column tasks.memo is 'Notion TODO.메모의 정본. 중복 content 컬럼은 두지 않는다.';
 comment on column tasks.complete is 'Notion TODO.완료여부의 정본. 중복 status/is_complete 컬럼은 두지 않는다.';
+comment on column tasks.outcome is 'Notion TODO.결과값(감사 이후 추가).';
+comment on column tasks.urgent is 'Notion TODO.긴급여부(감사 이후 추가).';
+comment on column tasks.director_ack is 'Notion TODO.원장확인(감사 이후 추가).';
+comment on column tasks.pool is 'Notion TODO.업무풀(감사 이후 추가). 담당자 미지정 공용 업무 여부.';
+comment on column tasks.parent_task_id is 'Notion TODO.상위업무(감사 이후 추가) self-relation. 원본 relation은 parent_task_notion_ids에도 보존.';
 
 create table exam_preps (
   id uuid primary key default gen_random_uuid(),
@@ -255,6 +269,43 @@ create table slack_records (
 alter table clinic_records add constraint clinic_records_task_id_fkey
   foreign key (task_id) references tasks(id) on delete set null;
 
+-- 화면녹화 AI 매뉴얼 기능(감사 이후 신규, MANUAL/MANUAL_STEP 두 Notion DB).
+-- 영상 바이너리는 Vercel Blob에 있고 이 테이블엔 URL만 저장한다.
+create table manuals (
+  id uuid primary key default gen_random_uuid(),
+  notion_id text unique,
+  title text not null,
+  category text,
+  target_roles text[] not null default '{}',
+  status text,
+  video_url text,
+  summary text,
+  author text,
+  source_payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+comment on column manuals.status is 'Notion 값: DRAFT | REVIEW | PUBLISHED.';
+comment on column manuals.video_url is '실제 영상 바이너리는 Vercel Blob에 있다. 여기엔 URL만 보존.';
+
+create table manual_steps (
+  id uuid primary key default gen_random_uuid(),
+  notion_id text unique,
+  manual_id uuid references manuals(id) on delete cascade,
+  manual_notion_ids text[] not null default '{}',
+  step_order integer,
+  description text,
+  screenshot_url text,
+  video_timestamp text,
+  caution text,
+  related_path text,
+  keywords text,
+  source_payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+comment on column manual_steps.related_path is '앱 내 라우트 경로. ManualHelpLink의 "이 화면 사용법" 연결에 쓰인다.';
+
 create index class_students_student_idx on class_students(student_id);
 create index briefings_student_date_idx on briefings(student_id, record_date desc);
 create index counseling_student_date_idx on counseling_entries(student_id, record_date desc);
@@ -262,6 +313,9 @@ create index clinic_date_idx on clinic_records(record_date desc);
 create index daily_records_student_date_idx on daily_records(student_id, record_date desc);
 create index exam_scores_student_date_idx on exam_scores(student_id, exam_date desc);
 create index tasks_staff_due_idx on tasks(staff_id, due_date);
+create index tasks_parent_idx on tasks(parent_task_id);
+create index tasks_pool_idx on tasks(pool) where pool;
+create index manual_steps_manual_order_idx on manual_steps(manual_id, step_order);
 
 -- RLS 골격: 이번 단계에는 의도적으로 활성화하지 않는다. API 인증/RBAC와 서비스 역할
 -- 사용 범위를 확정한 뒤 ALTER TABLE ... ENABLE ROW LEVEL SECURITY 및 정책을 추가한다.
