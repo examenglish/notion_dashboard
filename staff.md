@@ -4,7 +4,7 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-18
+마지막 업데이트: 2026-09-18 (PART 2 대폭 갱신 — Notion→Supabase 실제 전환 진행 중)
 
 ---
 
@@ -69,57 +69,109 @@
 
 ---
 
-## PART 2 — Notion → VPS 이전 + DNS 작업 (요청만 받음, 시작 전)
+## PART 2 — Notion → Supabase(PostgreSQL) 이전 (대부분 완료, 아래 "미완료"만 남음)
 
-### 상태: 🔴 시작 전. 이 세션에서는 VPS/DNS 자격증명이 없어 실행이 불가능했음(아래 참고).
+### 상태: 🟡 실제 데이터 이전 + dual-write + READ 전환(일부) 완료·검증됨.
+WRITE의 정본은 아직 의도적으로 Notion에 남겨뒀음(아래 이유 참고).
 
-### 사용자 요청 원문
-> 안전하게 vps로 옮기는 작업 진행. 노션에서 vps로 옮기고 dns 작업.
-> 사직은 staffsj.examenglishsj.co.kr, 금정은 staff.examenglishsj.co.kr로.
+VPS 이전(원래 PART 2 계획)은 폐기하고, 같은 목적(Notion API 429 완화, 정본 DB
+독립)을 **Supabase(관리형 Postgres)** 로 달성하는 쪽으로 방향을 바꿨다. Vercel
+배포 구조(사직/금정 이중 배포)는 그대로 유지.
 
-### 왜 아직 시작 못 했는지
-이 개발 세션(샌드박스)은 `.env.local`의 모든 실제 비밀값(NOTION_TOKEN, DB ID 등)이
-`[SENSITIVE]`로 마스킹되어 있고, VPS SSH 접속 정보나 DNS 등록기관(가비아/코리아센터
-등으로 추정) 접근 권한도 전혀 없습니다. 코드 작성/배포(git push, vercel deploy)만
-가능한 구조입니다. 그래서 이 작업은:
-- 코드/설계는 미리 준비할 수 있지만
-- 실제 VPS 프로비저닝, 데이터 이전 실행, DNS 레코드 변경은 **원장이 직접 하거나,
-  실제 자격증명이 있는 환경(원장 로컬 PC 등)에서 실행해야** 합니다.
+### 지금 실제로 동작 중인 구조
+- **정본(WRITE)**: 여전히 Notion. `lib/notion.ts`의 모든 write 함수(create/update/
+  delete, 42개 이상)가 Notion에 쓴 직후 `dualWriteEntity()`를 호출해 같은 데이터를
+  Supabase에도 real-time으로 미러링한다(`lib/supabaseRepo.ts`). Supabase 쪽 실패는
+  1회 재시도 후 `dual_write_failures` 테이블에 기록만 하고 Notion write의 성공/실패에는
+  전혀 영향 없음.
+- **READ 일부 전환**: `ACADEMY_DB_PROVIDER=postgres`가 사직/금정 Production에 설정돼
+  있고, 이 값이 있으면 `listClasses`/`listStaff`/`listMyTasks`/`listPoolTasks`/
+  `listManuals` 5개 함수가 Postgres에서 읽는다(`lib/supabasePgRead.ts`). 나머지 read
+  함수는 전부 여전히 Notion에서 읽는다(아래 "의도적으로 안 옮긴 것" 참고).
+- **Supabase 프로젝트**: `academy-webapp-migration`(Seoul), 사직/금정이 `branches`
+  테이블의 `branch_id`로 격리된 하나의 프로젝트를 공유. 스키마:
+  `supabase/schema/001_initial_schema.sql`(17 source + 4 derived 테이블),
+  `002_branch_scoping.sql`(branch_id 격리), `003_dual_write_infra.sql`
+  (`dual_write_failures` 큐) — 셋 다 실제 프로젝트에 적용 완료.
+- **필드 매핑 단일 소스**: `supabase/scripts/migrate_notion_to_supabase.mjs`가
+  `TABLE`/`targets`/`makeT()` 등을 export하고, 일괄 마이그레이션(`runMigration`)과
+  실시간 dual-write(`lib/supabaseRepo.ts`)와 reconciliation(`lib/reconciliation.ts`)
+  이 전부 이 파일 하나만 참조한다 — 매핑 규칙이 여러 곳에 중복되지 않음.
+- **운영 도구**: `app/api/admin/reconciliation`(영구 보존, 삭제하지 않음) —
+  `X-Migration-Secret` 헤더(env `MIGRATION_ADMIN_SECRET`, 사직/금정 값 다름, 원장만
+  파일로 보관 중)로만 호출 가능, 없으면 404. 모드:
+  - `{"mode":"report"}` — Notion 전량 vs Supabase 미러 대조(수량/ID/필드 샘플).
+  - `{"mode":"shadow-read"}` — provider를 실제로 안 바꾸고 요청 안에서만 양쪽 다 호출해
+    classes/staff/poolTasks/manuals 비교.
+  - `{"mode":"retry-failures"}` — `dual_write_failures` 재시도.
+  - `{"mode":"list-databases"}` — integration이 보는 모든 Notion 데이터소스 목록(읽기 전용).
+  - `{"mode":"provision-geumjeong-dbs","execute":true|false}` — 금정에 없는 DB를
+    사직과 동일 구조로 생성(아래 참고, 이미 1회 실행 완료).
+  일회성이었던 `/api/admin/migrate-supabase`(실제 벌크 마이그레이션 러너)는 작업
+  완료 후 코드에서 삭제했다 — 필요하면 git 히스토리(`supabase/scripts/
+  migrate_notion_to_supabase.mjs`의 `runMigration`)로 되살릴 수 있음.
 
-### 시작 전 반드시 정해야 할 것 (다음 세션 첫 질문으로 물어볼 것)
-1. **VPS 사양/제공자**: 이미 계약한 VPS가 있는지, 없다면 어떤 사양(vCPU/RAM/디스크)과
-   제공자(가비아/AWS Lightsail/네이버클라우드/Vultr 등)를 쓸지. OS는 Ubuntu 기준으로 가정.
-2. **DB 엔진 선택**: Notion을 대체할 DB를 무엇으로 할지 — 가장 무난한 선택은
-   **PostgreSQL**(관계형, 이 앱의 데이터 구조와 제일 잘 맞음). Notion의 relation/rollup
-   구조를 그대로 옮기려면 스키마를 새로 설계해야 함(단순 1:1 이전이 아님).
-3. **이전 범위**: 지금 쓰는 모든 Notion DB(학생마스터/반/출결/성적/상담/행정실/할일관리/
-   직원/클리닉/자료제작/시험대비/학교시험범위/Slack기록, 이번에 추가된 업무유형/매뉴얼
-   포함, 총 15개 이상)를 한 번에 옮길지, 단계적으로 옮길지.
-4. **다운타임 허용 범위**: 무중단 전환(듀얼라이트/시간차 마이그레이션)이 필요한지,
-   아니면 새벽 시간대 등 짧은 다운타임을 허용할지 — "안전하게"라고 하셨으니 기본값은
-   무중단/롤백 가능 전략으로 잡는 게 맞아 보이지만 확인 필요.
-5. **앱 실행 위치**: Next.js 앱 자체도 VPS로 옮기는지(Vercel 탈피), 아니면 Vercel은
-   그대로 두고 DB만 VPS로 옮겨서 Vercel 서버리스 함수가 VPS의 DB에 원격 접속하는
-   구조로 할지. 후자가 훨씬 리스크가 낮고 지금 배포 파이프라인(금정/사직 이중 배포)을
-   그대로 쓸 수 있어 권장되지만, "vps로 옮기는 작업"이라는 표현을 보면 앱 자체도 옮기고
-   싶어하실 수 있어 확인 필요.
-6. **DNS**: `staff.examenglishsj.co.kr`(금정), `staffsj.examenglishsj.co.kr`(사직) —
-   이 두 서브도메인이 가리킬 대상이 (a) 그대로 Vercel(앱은 Vercel에 남고 DB만 이전)인지
-   (b) VPS의 IP(앱도 VPS로 이전)인지에 따라 DNS 작업 내용이 완전히 달라짐. 현재
-   `examenglishsj.co.kr`의 DNS를 어디서 관리 중인지(가비아 등)와 그 계정 접근 권한도 필요.
-7. **백업/롤백 계획**: 이전 실패 시 Notion으로 즉시 되돌릴 수 있는 방법을 먼저 확정.
+### 실행/검증 완료된 것 (실제 production 데이터 기준)
+- **사직**: 17개 소스 전부 `--execute`로 실제 이전 완료. 검증: Notion read count와
+  Supabase count 100% 일치, branch 격리 확인(사직+금정 합계 = 전체), 재실행 멱등성
+  확인(중복 없음).
+- **금정**: CLASS(30)/STUDENT(86)/STAFF(9) 등 이전 완료. 처음엔 MATERIAL/EXAM_PREP/
+  SCHOOL_EXAM_RANGE/SLACK_RECORDS 4개가 **Notion에 DB 자체가 없어서**(ID 오류가
+  아니라 진짜 없었음, `list-databases`로 실측 확인) 이전 불가 상태였으나, 사직과
+  동일한 property 구조로 금정에 새로 생성(`provision-geumjeong-dbs`, relation은
+  금정 자신의 직원/학생마스터로 재연결)하고 `NOTION_DB_MATERIAL`/`NOTION_DB_EXAM_PREP`/
+  `NOTION_DB_SCHOOL_EXAM_RANGE`/`NOTION_SLACK_RECORDS_DB_ID` env를 새 ID로 교체 완료.
+  재검증 결과 4개 다 정상(현재는 빈 DB, 데이터는 없음).
+- **READ 전환**: classes/staff는 사직·금정 둘 다 Notion과 Postgres 결과 0건 불일치로
+  확인 후 `ACADEMY_DB_PROVIDER=postgres` 실제 적용, production에서 실제 응답 확인함
+  (`/api/staff` 등).
+- **DNS(Vercel 쪽)**: `staffsj.examenglishsj.co.kr`→`notion-dashboard`(사직),
+  `staff.examenglishsj.co.kr`→`notion-dashboard-geumjeong`(금정) 프로젝트에 도메인
+  등록 완료.
 
-### 권장 진행 순서 (다음 세션에서, 위 질문에 답을 받은 뒤)
-1. 현재 Notion 스키마 전수 조사(이미 이번 세션에서 상당 부분 파악됨 — `lib/notion.ts`의
-   `DB` 객체와 각 `map*Page` 함수들이 정확한 스키마 문서 역할을 함) → Postgres(또는
-   선택한 DB) 스키마 설계안 작성.
-2. 읽기 전용 마이그레이션 스크립트(Notion → 새 DB로 데이터 복사, 기존 Notion은 안 건드림)
-   먼저 작성 + 스테이징에서 검증.
-3. `lib/notion.ts`의 각 함수를 새 DB 클라이언트로 바꾸는 어댑터 계층 설계(가능하면
-   함수 시그니처는 그대로 유지해서 호출부 400곳 이상을 안 건드리는 방향).
-4. 전환 리허설(실제 트래픽 없이) → 실제 전환(사용자와 합의된 시간에) → DNS 전환 →
-   모니터링 → 문제 시 롤백.
-5. 이 문서(`staff.md`)의 진행 상황을 매 단계 갱신.
+### ⬜ 미완료 — 다음에 이어서 할 것
+1. **DNS 레코드를 실제 등록기관(카페24)에 등록** — Vercel에 도메인만 추가된 상태고
+   실제 A 레코드는 아직 안 넣음(이 세션은 카페24 로그인 권한 없음). 카페24 DNS
+   관리 화면에서 `examenglishsj.co.kr`에:
+   - `staffsj` A `76.76.21.21`
+   - `staff` A `76.76.21.21`
+   등록 필요. 등록 후 Vercel이 자동으로 인증(이메일 알림).
+2. **stray Vercel 프로젝트 삭제** — 링크 실수로 생성된 빈 프로젝트
+   `academy-webapp`(projectId `prj_UlF0n2ibbAxPvuralbCYwzBNvCak`, GitHub 연결됨,
+   Production 배포 없음). 원장 지시: "모든 작업이 끝나면 삭제." 아직 안 지움 —
+   다음 세션에서 이 문서의 나머지 항목이 다 끝나면 `vercel project rm academy-webapp
+   --scope examenglish`(또는 대시보드)로 삭제.
+3. **WRITE 정본을 Postgres로 전환하는 건 의도적으로 아직 안 함.** dual-write가
+   배포된 지 얼마 안 됐고 실제 운영 트래픽으로 검증된 적이 없어서, 지금 바로
+   "Postgres가 정본"으로 바꾸는 건 실제 학생 데이터가 걸린 리스크가 너무 크다고
+   판단했다. 다음 세션에서:
+   - `{"mode":"report"}`/`{"mode":"retry-failures"}`로 dual_write_failures가 계속
+     비어있는지(=dual-write가 실제 운영 트래픽에서도 안정적인지) 며칠 관찰.
+   - 문제 없으면 write 경로도 provider 분기(지금 read처럼)를 추가해 단계적으로
+     Postgres를 정본으로 전환. Notion write는 fallback/dual-write로 당분간 유지.
+4. **학생 목록/상세는 Postgres로 안 옮겼고, 앞으로도 그대로 두거나 별도 설계 필요.**
+   Notion의 누적출석률/숙제제출률/단어테스트통과율은 Notion 서버가 relation을 따라
+   실시간 계산하는 rollup이라 Supabase에 미러링되지 않는다. 옮기려면 Notion의
+   정확한 rollup 집계 규칙(기간/필터)을 먼저 확인해서 Postgres에서 재계산하는 로직을
+   새로 만들어야 한다 — 추측으로 만들면 학생 화면에 잘못된 통계가 보일 위험이 있어
+   이번엔 손대지 않았다.
+5. **금정의 TODO 스키마(`/api/admin/setup`)가 아직 미실행** — `poolTasks` shadow-read가
+   금정에서 `"Could not find property with name or id: 업무풀"`로 스킵됨. 사직은 이미
+   실행된 상태(정상 동작 확인). 금정도 원장이 로그인해서 PART 1의 "지금 설정하기"를
+   한 번 눌러야 함(이번 세션 범위 아님, PART 1 미완료 항목과 동일 건).
+6. **`supabase/.env.migration`, `.env.sajik`, `.env.geumjeong`, 스크래치패드의
+   `secrets/supabase_pat.txt`** 등 이번 세션에서 로컬에 저장했던 자격증명 파일들은
+   세션 종료 시 스크래치패드와 함께 사라진다(저장소에는 커밋 안 됨, `.gitignore`
+   확인됨) — 다음 세션은 다시 요청해야 함. `MIGRATION_ADMIN_SECRET`/
+   `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`/`MIGRATION_BRANCH_CODE`/
+   `ACADEMY_DB_PROVIDER`는 Vercel Production env에 이미 영구 저장돼 있으니
+   원장에게 다시 물어보면 됨(값은 [SENSITIVE]라 이 세션에서도 못 읽음).
 
-### 이번 세션에서 한 일 (PART 2 관련)
-- 없음(문서화만). 코드/DNS/VPS에 어떤 변경도 하지 않았습니다.
+### 핵심 신규/변경 파일
+`lib/supabaseRepo.ts`(dual-write 엔진), `lib/supabasePgRead.ts`(postgres read),
+`lib/reconciliation.ts` + `app/api/admin/reconciliation/route.ts`(운영 도구),
+`supabase/scripts/migrate_notion_to_supabase.mjs`(공유 필드 매핑, `makeT()` 팩토리로
+리팩터링됨), `supabase/schema/00{1,2,3}_*.sql`, `lib/notion.ts`(모든 write 함수에
+`dualWriteEntity()` 한 줄씩 추가 + 5개 read 함수 provider 분기), `lib/slack.ts`
+(SLACK_RECORDS dual-write), `middleware.ts`(`/api/admin/reconciliation` 쿠키 인증
+예외).
