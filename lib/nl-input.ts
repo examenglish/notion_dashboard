@@ -1,4 +1,4 @@
-import { parseNaturalLanguageInput, resolveRelativeDate } from "@/lib/anthropic";
+import { parseNaturalLanguageInput, parseCreateTasksInput, resolveRelativeDate } from "@/lib/anthropic";
 import {
   listClasses,
   listStaff,
@@ -8,9 +8,11 @@ import {
   createCounselingEntry,
   updateStudentInfo,
   createMinimalStudent,
+  createTasks,
 } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
+import { TASK_TYPE_LABELS, TASK_TYPE_LABEL_LIST, taskTypeFromLabel, type NewTaskInput } from "@/lib/tasks";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
@@ -284,6 +286,104 @@ export async function runNaturalLanguageCommand(
     }
 
     return { kind: "clarify", message: "요청을 이해하지 못했습니다. 다시 입력해 주세요." };
+  } catch {
+    return { kind: "save_error", message: "저장 중 오류가 발생했습니다." };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AI 업무운영 시스템(섹션3) — "한 문장 → 여러 업무" 생성 전용 경로.
+// 위 runNaturalLanguageCommand는 그대로 두고 완전히 별도 함수로 둔다 — 기존
+// 대시보드 입력창/Slack 슬래시태그가 이 함수를 호출하는 일은 없다(전용
+// 엔드포인트 app/api/tasks/from-text/route.ts에서만 사용).
+// ---------------------------------------------------------------------------
+export type CreateTasksCommandResult =
+  | {
+      kind: "created";
+      tasks: { id: string; typeLabel: string; studentName: string; ownerName: string | null; pool: boolean }[];
+      warnings: string[];
+    }
+  | { kind: "clarify"; message: string }
+  | { kind: "ai_error"; message: string }
+  | { kind: "save_error"; message: string };
+
+export async function runCreateTasksCommand(
+  text: string,
+  opts: { staffName?: string; parentTaskId?: string | null } = {}
+): Promise<CreateTasksCommandResult> {
+  const today = todayKST();
+  const [allStudents, classes, staff] = await Promise.all([searchStudents(""), listClasses(), listStaff()]);
+  const activeStudents = allStudents.filter((s) => s.status === "재원" || !s.status);
+  const classNameById = new Map(classes.map((c) => [c.id, stripClassSuffix(c.name)]));
+  const weekday = WEEKDAYS[new Date(`${today}T00:00:00Z`).getUTCDay()];
+
+  let parsed;
+  try {
+    parsed = await parseCreateTasksInput(
+      text,
+      {
+        today,
+        weekday,
+        students: activeStudents.map((s) => `${s.name}(${s.school || "학교미상"})`),
+        classes: classes.map((c) => stripClassSuffix(c.name)),
+        staff: staff.map((s) => s.name),
+      },
+      TASK_TYPE_LABEL_LIST
+    );
+  } catch {
+    return { kind: "ai_error", message: "AI 처리 중 오류가 발생했습니다." };
+  }
+  if (parsed.kind === "clarify") return { kind: "clarify", message: parsed.message };
+  if (parsed.tasks.length === 0) return { kind: "clarify", message: "업무를 파악하지 못했습니다. 다시 입력해 주세요." };
+
+  const regexDate = resolveRelativeDate(text, today);
+  const warnings: string[] = [];
+  const inputs: NewTaskInput[] = [];
+
+  for (const draft of parsed.tasks) {
+    const type = taskTypeFromLabel(draft.type);
+    if (!type) {
+      warnings.push(`"${draft.type}"은(는) 알 수 없는 업무 유형이라 건너뛰었습니다.`);
+      continue;
+    }
+
+    let studentId: string | null = null;
+    if (draft.studentName) {
+      const resolution = await resolveStudentForIntent(text, draft.studentName, activeStudents, classNameById, {
+        school: draft.studentSchool || undefined,
+      });
+      if (resolution.kind === "resolved") studentId = resolution.studentId;
+      else warnings.push(`"${draft.studentName}" 학생을 정확히 찾지 못해 담당학생 지정 없이 등록했습니다 — 업무 상세에서 직접 연결해주세요.`);
+    }
+
+    inputs.push({
+      type,
+      studentId,
+      content: draft.content || "",
+      date: draft.date || regexDate || today,
+      time: draft.time || "",
+      priority: draft.priority,
+      parentTaskId: opts.parentTaskId ?? undefined,
+    });
+  }
+
+  if (inputs.length === 0) return { kind: "clarify", message: "등록할 수 있는 업무가 없습니다." };
+
+  try {
+    const created = await createTasks(inputs);
+    const staffNameById = new Map(staff.map((s) => [s.id, s.name]));
+    const nameById = new Map(activeStudents.map((s) => [s.id, s.name]));
+    return {
+      kind: "created",
+      tasks: created.map((c, i) => ({
+        id: c.id,
+        typeLabel: TASK_TYPE_LABELS[c.type],
+        studentName: inputs[i].studentId ? nameById.get(inputs[i].studentId as string) ?? "" : "",
+        ownerName: c.ownerId ? staffNameById.get(c.ownerId) ?? null : null,
+        pool: c.pool,
+      })),
+      warnings,
+    };
   } catch {
     return { kind: "save_error", message: "저장 중 오류가 발생했습니다." };
   }

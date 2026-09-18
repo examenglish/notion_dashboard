@@ -40,6 +40,16 @@ import {
   splitTeachers,
   parseNumberRange,
 } from "./examPrep";
+import {
+  TASK_TYPE_LABELS,
+  TASK_TYPE_LABEL_LIST,
+  taskTypeFromLabel,
+  classifyFeedback,
+  isReviewOutcome,
+  type TaskType,
+  type NewTaskInput,
+} from "./tasks";
+import { routeTask, type StaffCandidate, type ClassInfo } from "./task-routing";
 
 const STAFF_CACHE_TAG = "staff-list";
 
@@ -66,6 +76,11 @@ export const DB = {
   EXAM_PREP: process.env.NOTION_DB_EXAM_PREP!,
   SCHOOL_EXAM_RANGE: process.env.NOTION_DB_SCHOOL_EXAM_RANGE!,
   SLACK_RECORDS: process.env.NOTION_SLACK_RECORDS_DB_ID!,
+  // 화면녹화 AI 매뉴얼(섹션16~24)용 신규 DB — app/api/admin/setup/route.ts로
+  // 한 번 생성하기 전까지는 비어있을 수 있다(다른 DB들과 달리 `!`로 단언하지
+  // 않는다). lib/manuals.ts가 사용 전에 항상 존재 여부를 확인한다.
+  MANUAL: process.env.NOTION_DB_MANUAL,
+  MANUAL_STEP: process.env.NOTION_DB_MANUAL_STEP,
 };
 
 // ---- Property value extraction helpers ----
@@ -199,15 +214,20 @@ const getCachedStaffList = unstable_cache(
       // {start,end} 맵으로 풀어준다. 예전에 쓰던 근무요일(멀티셀렉트)/
       // 근무시작/근무종료(전체 요일 공통 한 세트)는 더는 쓰지 않는다.
       workHours: parseWorkHours(getRichText(p, "근무시간표")),
+      resigned: getCheckbox(p, "퇴사"),
     }));
   },
   ["staff-list"],
   { revalidate: 30, tags: [STAFF_CACHE_TAG] }
 );
 
+// 퇴사한 직원은 로그인 화면/새 배정 목록에서 제외한다. 페이지 자체는 지우지
+// 않으므로(setStaffResigned 참고) 과거에 그 직원이 작성한 기록(클리닉 등)의
+// relation은 그대로 유효하고, staffNameMap()/firstRelationName으로 이름도
+// 계속 정상적으로 뜬다 — 여기서 걸러지는 건 "새로 고를 수 있는 목록"뿐이다.
 export async function listStaff() {
   const all = await getCachedStaffList();
-  return all.map(({ id, name, role, workHours }) => ({
+  return all.filter((s) => !s.resigned).map(({ id, name, role, workHours }) => ({
     id,
     name,
     role,
@@ -233,13 +253,25 @@ export async function updateStaffSchedule(staffId: string, workHours: WorkHours)
 export async function findStaffByNameAndPin(name: string, pin: string) {
   const all = await getCachedStaffList();
   const staff = all.find((s) => s.name === name);
-  if (!staff || staff.pin !== pin) return null;
+  if (!staff || staff.pin !== pin || staff.resigned) return null;
   return {
     id: staff.id,
     name: staff.name,
     role: staff.role,
     mustChangePin: staff.mustChangePin,
   };
+}
+
+// 퇴사 처리 — Notion 페이지를 지우거나 보관(archive)하지 않고 "퇴사" 체크박스만
+// 켠다. 페이지를 지우면 그 직원이 relation으로 연결된 과거 기록(클리닉 등)에서
+// 조교 이름이 더 이상 뜨지 않게 되므로(관계가 가리키는 페이지 자체가 없어짐),
+// 작성한 기록을 그대로 유지하려면 페이지는 살려두고 로그인/목록에서만 걸러야 한다.
+export async function setStaffResigned(staffId: string, resigned: boolean) {
+  await notion.pages.update({
+    page_id: staffId,
+    properties: { 퇴사: { checkbox: resigned } } as any,
+  });
+  revalidateTag(STAFF_CACHE_TAG);
 }
 
 export async function updateStaffPin(staffId: string, newPin: string) {
@@ -258,7 +290,7 @@ export async function updateStaffPin(staffId: string, newPin: string) {
 // 막기 위해 캐시가 아니라 매번 최신 명단을 직접 조회해서 확인한다. 최초
 // 비밀번호는 그대로 PIN에 저장하고 "비번변경필요"를 켜서, 등록된 직원이
 // 처음 로그인할 때 반드시 자기 비밀번호로 바꾸도록 유도한다.
-export async function createStaff(name: string, role: "강사" | "조교", pin: string) {
+export async function createStaff(name: string, role: "강사" | "조교" | "행정", pin: string) {
   const res: any = await notion.dataSources.query({ data_source_id: DB.STAFF, page_size: 100 });
   const dup = res.results.find((p: any) => getTitle(p, "이름") === name);
   if (dup) throw new Error(`이미 "${name}" 이름의 계정이 있습니다.`);
@@ -3870,4 +3902,484 @@ export async function getMakeupScheduleStatus(opts: { staffId?: string } = {}): 
       confirmed: time.trim() !== "",
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// AI 업무운영 시스템(섹션4~14) — 새 DB를 만들지 않고 기존 DB.TODO를 그대로
+// 쓴다. "유형" select에 새 값(TASK_TYPE_LABELS)을 추가하고, 결과값/긴급여부/
+// 원장확인/상위업무/업무풀 속성만 더해 보강/재시/클리닉과 같은 테이블을
+// 공유한다. 이 속성들은 운영 Notion에 사전에 추가되어 있어야 한다
+// (app/api/admin/setup/route.ts 참고).
+// ---------------------------------------------------------------------------
+
+export type TaskRecord = {
+  id: string;
+  type: TaskType | null;
+  typeLabel: string;
+  title: string;
+  studentId: string | null;
+  studentName: string;
+  ownerId: string | null;
+  ownerName: string;
+  date: string | null;
+  time: string;
+  note: string;
+  priority: string | null;
+  done: boolean;
+  outcome: string;
+  urgent: boolean;
+  directorAck: boolean;
+  pool: boolean;
+  parentTaskId: string | null;
+};
+
+function mapTaskPage(p: any, studentNames: Map<string, string>, staffNames: Map<string, string>): TaskRecord {
+  const studentId = getRelationIds(p, "관련학생")[0] ?? null;
+  const ownerId = getRelationIds(p, "담당자")[0] ?? null;
+  const typeLabel = getSelect(p, "유형") ?? "";
+  return {
+    id: p.id,
+    type: taskTypeFromLabel(typeLabel),
+    typeLabel,
+    title: getTitle(p, "제목"),
+    studentId,
+    studentName: studentId ? studentNames.get(studentId) ?? "-" : "-",
+    ownerId,
+    ownerName: ownerId ? staffNames.get(ownerId) ?? "-" : "",
+    date: getDate(p, "예정일"),
+    time: getRichText(p, "시간"),
+    note: getRichText(p, "메모"),
+    priority: getSelect(p, "우선순위"),
+    done: getCheckbox(p, "완료여부"),
+    outcome: getRichText(p, "결과값"),
+    urgent: getCheckbox(p, "긴급여부"),
+    directorAck: getCheckbox(p, "원장확인"),
+    pool: getCheckbox(p, "업무풀"),
+    parentTaskId: getRelationIds(p, "상위업무")[0] ?? null,
+  };
+}
+
+// TODO DB는 보강/재시/클리닉 등 기존 유형과 공유하므로, "새 업무유형"만
+// 골라내려면 항상 이 OR 필터를 같이 건다.
+function taskTypeOrFilter() {
+  return TASK_TYPE_LABEL_LIST.map((label) => ({ property: "유형" as const, select: { equals: label } }));
+}
+
+// 자연어 복수 업무 생성(섹션3)의 저장 담당. 담당자는 AI가 아니라 routeTask()
+// (근무시간/반담당 기준 결정론적 규칙)가 정한다 — AI는 문장을 업무 목록으로
+// 나누는 해석만 담당한다(섹션3 요구사항).
+export async function createTasks(
+  inputs: NewTaskInput[]
+): Promise<{ id: string; type: TaskType; ownerId: string | null; pool: boolean }[]> {
+  if (inputs.length === 0) return [];
+
+  const [staffList, classes, existingOpen, names] = await Promise.all([
+    listStaff(),
+    listClasses(),
+    queryAllPages({
+      data_source_id: DB.TODO,
+      filter: { and: [{ property: "완료여부", checkbox: { equals: false } }, { or: taskTypeOrFilter() }] },
+    }),
+    studentNameMap(),
+  ]);
+
+  const openCounts = new Map<string, number>();
+  for (const p of existingOpen as any[]) {
+    const ownerId = getRelationIds(p, "담당자")[0];
+    if (ownerId) openCounts.set(ownerId, (openCounts.get(ownerId) ?? 0) + 1);
+  }
+  const candidates: StaffCandidate[] = staffList.map((s) => ({
+    id: s.id,
+    name: s.name,
+    role: s.role,
+    workHours: s.workHours,
+    openTaskCount: openCounts.get(s.id) ?? 0,
+  }));
+  const classInfos: ClassInfo[] = classes.map((c) => ({ id: c.id, studentIds: c.studentIds, assistantIds: c.assistantIds }));
+
+  const results: { id: string; type: TaskType; ownerId: string | null; pool: boolean }[] = [];
+  for (const input of inputs) {
+    const route = routeTask(
+      { type: input.type, studentId: input.studentId, date: input.date, time: input.time },
+      { staff: candidates, classes: classInfos }
+    );
+    const ownerId = route.assigned ? route.staffId : null;
+    if (ownerId) {
+      // 같은 배치 안에서 여러 업무가 한 사람에게 몰리지 않도록 즉시 반영.
+      const c = candidates.find((c) => c.id === ownerId);
+      if (c) c.openTaskCount += 1;
+    }
+    const poolFlag = !route.assigned && route.pool;
+    const studentName = input.studentId ? names.get(input.studentId) ?? "" : "";
+    const label = TASK_TYPE_LABELS[input.type];
+
+    const page = await notion.pages.create({
+      parent: { data_source_id: DB.TODO } as any,
+      properties: {
+        제목: { title: [{ text: { content: `${label}${studentName ? " - " + studentName : ""}` } }] },
+        유형: { select: { name: label } },
+        ...(input.studentId ? { 관련학생: { relation: [{ id: input.studentId }] } } : {}),
+        ...(ownerId ? { 담당자: { relation: [{ id: ownerId }] } } : {}),
+        예정일: { date: { start: input.date } },
+        시간: { rich_text: [{ text: { content: input.time } }] },
+        ...(input.content ? { 메모: { rich_text: chunkRichText(input.content) } } : {}),
+        완료여부: { checkbox: false },
+        우선순위: { select: { name: input.priority ?? "보통" } },
+        업무풀: { checkbox: poolFlag },
+        ...(input.parentTaskId ? { 상위업무: { relation: [{ id: input.parentTaskId }] } } : {}),
+      } as any,
+    });
+    results.push({ id: page.id, type: input.type, ownerId, pool: poolFlag });
+  }
+  return results;
+}
+
+export async function listMyTasks(staffId: string): Promise<TaskRecord[]> {
+  const records = await queryAllPages({
+    data_source_id: DB.TODO,
+    filter: {
+      and: [
+        { property: "담당자", relation: { contains: staffId } },
+        { property: "완료여부", checkbox: { equals: false } },
+        { or: taskTypeOrFilter() },
+      ],
+    },
+  });
+  const [names, staffMap] = await Promise.all([studentNameMap(), staffNameMap()]);
+  return (records as any[]).map((p) => mapTaskPage(p, names, staffMap));
+}
+
+export async function listPoolTasks(): Promise<TaskRecord[]> {
+  const records = await queryAllPages({
+    data_source_id: DB.TODO,
+    filter: {
+      and: [
+        { property: "업무풀", checkbox: { equals: true } },
+        { property: "완료여부", checkbox: { equals: false } },
+      ],
+    },
+  });
+  const open = (records as any[]).filter((p) => getRelationIds(p, "담당자").length === 0);
+  const [names, staffMap] = await Promise.all([studentNameMap(), staffNameMap()]);
+  return open.map((p) => mapTaskPage(p, names, staffMap));
+}
+
+// 동시에 두 직원이 같은 공용업무를 가져가지 못하게 막는다(섹션6). Notion API에는
+// 트랜잭션/조건부 업데이트가 없어 완벽한 원자성은 아니지만, 가져가기 직전에
+// 담당자가 비어있는지 다시 확인한 뒤에만 배정해 클릭 사이의 왕복 지연 동안
+// 다른 사람이 먼저 가져간 경우는 확실히 걸러낸다.
+export async function claimTask(taskId: string, staffId: string): Promise<{ ok: boolean; message?: string }> {
+  const page: any = await notion.pages.retrieve({ page_id: taskId });
+  if (getRelationIds(page, "담당자").length > 0) {
+    return { ok: false, message: "이미 다른 직원이 가져간 업무입니다." };
+  }
+  await notion.pages.update({ page_id: taskId, properties: { 담당자: { relation: [{ id: staffId }] } } as any });
+  return { ok: true };
+}
+
+export async function hasPriorFailure(studentId: string | null, typeLabel: string, excludeTaskId: string): Promise<boolean> {
+  if (!studentId) return false;
+  const records = await queryAllPages({
+    data_source_id: DB.TODO,
+    filter: {
+      and: [
+        { property: "관련학생", relation: { contains: studentId } },
+        { property: "유형", select: { equals: typeLabel } },
+        { property: "완료여부", checkbox: { equals: true } },
+      ],
+    },
+  });
+  return (records as any[]).some((p) => p.id !== excludeTaskId && isReviewOutcome(getRichText(p, "결과값")));
+}
+
+export async function completeTaskEntry(taskId: string, input: { outcome: string; memo?: string; urgent?: boolean }): Promise<void> {
+  await notion.pages.update({
+    page_id: taskId,
+    properties: {
+      완료여부: { checkbox: true },
+      결과값: { rich_text: [{ text: { content: input.outcome } }] },
+      ...(input.memo !== undefined ? { 메모: { rich_text: chunkRichText(input.memo) } } : {}),
+      ...(input.urgent !== undefined ? { 긴급여부: { checkbox: input.urgent } } : {}),
+    } as any,
+  });
+}
+
+export async function acknowledgeTask(taskId: string): Promise<void> {
+  await notion.pages.update({ page_id: taskId, properties: { 원장확인: { checkbox: true } } as any });
+}
+
+export async function getTask(taskId: string): Promise<TaskRecord | null> {
+  const page: any = await notion.pages.retrieve({ page_id: taskId }).catch(() => null);
+  if (!page) return null;
+  const [names, staffMap] = await Promise.all([studentNameMap(), staffNameMap()]);
+  return mapTaskPage(page, names, staffMap);
+}
+
+// 지시→처리→결과→재지시 히스토리(섹션13) — 같은 줄기의 업무를 상위업무
+// relation으로 따라간다.
+export async function getTaskThread(taskId: string): Promise<TaskRecord[]> {
+  const root = await getTask(taskId);
+  if (!root) return [];
+  const children = await queryAllPages({
+    data_source_id: DB.TODO,
+    filter: { property: "상위업무", relation: { contains: taskId } },
+  });
+  const [names, staffMap] = await Promise.all([studentNameMap(), staffNameMap()]);
+  return [root, ...(children as any[]).map((p) => mapTaskPage(p, names, staffMap))];
+}
+
+// 원장 확인함(섹션11/12): 완료됐지만 원장이 아직 확인 안 한 업무 중
+// REVIEW/URGENT로 분류되는 것만 돌려준다 — NORMAL 완료는 원장 화면에 아예
+// 올라가지 않는다(알림 폭탄 방지, 섹션15와 동일한 원칙).
+export async function listReviewInbox(): Promise<TaskRecord[]> {
+  const records = await queryAllPages({
+    data_source_id: DB.TODO,
+    filter: {
+      and: [
+        { property: "완료여부", checkbox: { equals: true } },
+        { property: "원장확인", checkbox: { equals: false } },
+        { or: taskTypeOrFilter() },
+      ],
+    },
+  });
+  const [names, staffMap] = await Promise.all([studentNameMap(), staffNameMap()]);
+  return (records as any[])
+    .map((p) => mapTaskPage(p, names, staffMap))
+    .filter((t) => classifyFeedback({ outcome: t.outcome, urgentFlag: t.urgent }) !== "NORMAL");
+}
+
+// "완료" 탭(섹션7) — 오늘 내가 처리한 업무만 보여준다(전체 이력이 아님).
+export async function listCompletedToday(staffId: string, date: string): Promise<TaskRecord[]> {
+  const records = await queryAllPages({
+    data_source_id: DB.TODO,
+    filter: {
+      and: [
+        { property: "담당자", relation: { contains: staffId } },
+        { property: "완료여부", checkbox: { equals: true } },
+        { property: "예정일", date: { equals: date } },
+        { or: taskTypeOrFilter() },
+      ],
+    },
+  });
+  const [names, staffMap] = await Promise.all([studentNameMap(), staffNameMap()]);
+  return (records as any[]).map((p) => mapTaskPage(p, names, staffMap));
+}
+
+// 기본업무(섹션9): 새 레코드를 대량 생성하지 않고, 오늘/지연된 미완료 업무를
+// 유형별로 집계해 "재시험 대상 4명" 같은 동적 체크리스트를 만든다.
+export async function getBasicChecklist(staffId: string, date: string): Promise<{ label: string; count: number }[]> {
+  const mine = await listMyTasks(staffId);
+  const due = mine.filter((t) => !t.date || t.date <= date);
+  const countOf = (types: TaskType[]) => due.filter((t) => t.type && types.includes(t.type)).length;
+  return [
+    { label: "재시험 대상", count: countOf(["RETEST", "VOCAB_RETEST"]) },
+    { label: "미처리 암기 확인", count: countOf(["MEMORIZATION_CHECK"]) },
+    { label: "숙제 미완료 확인", count: countOf(["HOMEWORK_CHECK"]) },
+    { label: "출력/전달 대기", count: countOf(["PRINT", "DELIVERY"]) },
+    { label: "보충지도 준비", count: countOf(["SUPPLEMENT_TEACHING"]) },
+  ].filter((c) => c.count > 0);
+}
+
+// ---------------------------------------------------------------------------
+// 화면녹화 AI 매뉴얼(섹션16~24) — DB.MANUAL/DB.MANUAL_STEP은 app/api/admin/setup
+// 으로 한 번 생성하기 전까지 비어있을 수 있어(lib/notion.ts 상단 DB 참고),
+// 모든 함수가 사용 전에 먼저 확인한다. 영상/스크린샷 실제 바이너리는 Notion이
+// 아니라 Vercel Blob에 저장하고, 여기는 그 URL과 메타데이터만 갖는다.
+// ---------------------------------------------------------------------------
+
+function requireManualDb(): string {
+  if (!DB.MANUAL) throw new Error("NOTION_DB_MANUAL이 설정되지 않았습니다. 먼저 /api/admin/setup을 실행하세요.");
+  return DB.MANUAL;
+}
+function requireManualStepDb(): string {
+  if (!DB.MANUAL_STEP) throw new Error("NOTION_DB_MANUAL_STEP이 설정되지 않았습니다. 먼저 /api/admin/setup을 실행하세요.");
+  return DB.MANUAL_STEP;
+}
+
+export type ManualStatus = "DRAFT" | "REVIEW" | "PUBLISHED";
+
+export type ManualRecord = {
+  id: string;
+  title: string;
+  category: string;
+  targetRoles: string[];
+  status: ManualStatus;
+  sourceVideoUrl: string | null;
+  summary: string;
+  createdBy: string;
+  createdAt: string | null;
+};
+
+function mapManualPage(p: any): ManualRecord {
+  return {
+    id: p.id,
+    title: getTitle(p, "제목"),
+    category: getSelect(p, "카테고리") ?? "",
+    targetRoles: getMultiSelect(p, "대상역할"),
+    status: (getSelect(p, "상태") as ManualStatus) ?? "DRAFT",
+    sourceVideoUrl: getUrl(p, "원본영상"),
+    summary: getRichText(p, "요약"),
+    createdBy: getRichText(p, "작성자"),
+    createdAt: p.created_time ?? null,
+  };
+}
+
+export async function createManualDraft(input: {
+  title: string;
+  category: string;
+  targetRoles: string[];
+  sourceVideoUrl: string;
+  summary: string;
+  createdBy: string;
+}): Promise<string> {
+  const page = await notion.pages.create({
+    parent: { data_source_id: requireManualDb() } as any,
+    properties: {
+      제목: { title: [{ text: { content: input.title } }] },
+      카테고리: { select: { name: input.category || "기타" } },
+      대상역할: { multi_select: input.targetRoles.map((r) => ({ name: r })) },
+      상태: { select: { name: "DRAFT" } },
+      원본영상: { url: input.sourceVideoUrl },
+      요약: { rich_text: chunkRichText(input.summary) },
+      작성자: { rich_text: [{ text: { content: input.createdBy } }] },
+    } as any,
+  });
+  return page.id;
+}
+
+export async function listManuals(opts: { status?: ManualStatus; role?: string } = {}): Promise<ManualRecord[]> {
+  const filters: any[] = [];
+  if (opts.status) filters.push({ property: "상태", select: { equals: opts.status } });
+  const records = await queryAllPages({
+    data_source_id: requireManualDb(),
+    filter: filters.length > 0 ? { and: filters } : undefined,
+  });
+  let manuals = (records as any[]).map(mapManualPage);
+  if (opts.role) manuals = manuals.filter((m) => m.targetRoles.length === 0 || m.targetRoles.includes(opts.role as string));
+  return manuals;
+}
+
+export async function getManual(id: string): Promise<ManualRecord | null> {
+  const page: any = await notion.pages.retrieve({ page_id: id }).catch(() => null);
+  return page ? mapManualPage(page) : null;
+}
+
+export async function updateManual(
+  id: string,
+  input: { title?: string; category?: string; targetRoles?: string[]; status?: ManualStatus; summary?: string }
+): Promise<void> {
+  const properties: any = {};
+  if (input.title !== undefined) properties["제목"] = { title: [{ text: { content: input.title } }] };
+  if (input.category !== undefined) properties["카테고리"] = { select: { name: input.category || "기타" } };
+  if (input.targetRoles !== undefined) properties["대상역할"] = { multi_select: input.targetRoles.map((r) => ({ name: r })) };
+  if (input.status !== undefined) properties["상태"] = { select: { name: input.status } };
+  if (input.summary !== undefined) properties["요약"] = { rich_text: chunkRichText(input.summary) };
+  await notion.pages.update({ page_id: id, properties });
+}
+
+export type ManualStepRecord = {
+  id: string;
+  manualId: string;
+  order: number;
+  title: string;
+  description: string;
+  screenshot: string | null;
+  videoTimestamp: string;
+  warning: string;
+  relatedPath: string;
+  keywords: string;
+};
+
+function mapManualStepPage(p: any): ManualStepRecord {
+  return {
+    id: p.id,
+    manualId: getRelationIds(p, "매뉴얼")[0] ?? "",
+    order: getNumber(p, "순서") ?? 0,
+    title: getTitle(p, "제목"),
+    description: getRichText(p, "설명"),
+    screenshot: getUrl(p, "스크린샷"),
+    videoTimestamp: getRichText(p, "영상타임스탬프"),
+    warning: getRichText(p, "주의사항"),
+    relatedPath: getRichText(p, "관련경로"),
+    keywords: getRichText(p, "키워드"),
+  };
+}
+
+export async function createManualSteps(
+  manualId: string,
+  steps: {
+    order: number;
+    title: string;
+    description: string;
+    screenshot: string;
+    videoTimestamp: string;
+    warning?: string;
+    relatedPath?: string;
+    keywords?: string;
+  }[]
+): Promise<void> {
+  const stepDb = requireManualStepDb();
+  for (const step of steps) {
+    await notion.pages.create({
+      parent: { data_source_id: stepDb } as any,
+      properties: {
+        제목: { title: [{ text: { content: step.title } }] },
+        매뉴얼: { relation: [{ id: manualId }] },
+        순서: { number: step.order },
+        설명: { rich_text: chunkRichText(step.description) },
+        스크린샷: { url: step.screenshot },
+        영상타임스탬프: { rich_text: [{ text: { content: step.videoTimestamp } }] },
+        ...(step.warning ? { 주의사항: { rich_text: chunkRichText(step.warning) } } : {}),
+        ...(step.relatedPath ? { 관련경로: { rich_text: [{ text: { content: step.relatedPath } }] } } : {}),
+        ...(step.keywords ? { 키워드: { rich_text: [{ text: { content: step.keywords } }] } } : {}),
+      } as any,
+    });
+  }
+}
+
+export async function listManualSteps(manualId: string): Promise<ManualStepRecord[]> {
+  const records = await queryAllPages({
+    data_source_id: requireManualStepDb(),
+    filter: { property: "매뉴얼", relation: { contains: manualId } },
+  });
+  return (records as any[]).map(mapManualStepPage).sort((a, b) => a.order - b.order);
+}
+
+export async function updateManualStep(
+  id: string,
+  input: { title?: string; description?: string; screenshot?: string | null; warning?: string; relatedPath?: string; order?: number }
+): Promise<void> {
+  const properties: any = {};
+  if (input.title !== undefined) properties["제목"] = { title: [{ text: { content: input.title } }] };
+  if (input.description !== undefined) properties["설명"] = { rich_text: chunkRichText(input.description) };
+  if (input.screenshot !== undefined) properties["스크린샷"] = { url: input.screenshot };
+  if (input.warning !== undefined) properties["주의사항"] = { rich_text: chunkRichText(input.warning) };
+  if (input.relatedPath !== undefined) properties["관련경로"] = { rich_text: [{ text: { content: input.relatedPath } }] };
+  if (input.order !== undefined) properties["순서"] = { number: input.order };
+  await notion.pages.update({ page_id: id, properties });
+}
+
+export async function deleteManualStep(id: string): Promise<void> {
+  await notion.pages.update({ page_id: id, archived: true });
+}
+
+// 화면 연결(섹션23) — "? 사용방법" 링크가 현재 경로와 관련경로가 일치하는
+// 게시된 스텝을 찾을 때 쓴다. DB.MANUAL_STEP이 아직 없으면 조용히 빈 배열.
+export async function listPublishedStepsByPath(path: string): Promise<ManualStepRecord[]> {
+  if (!DB.MANUAL_STEP || !DB.MANUAL) return [];
+  const steps = await queryAllPages({
+    data_source_id: DB.MANUAL_STEP,
+    filter: { property: "관련경로", rich_text: { equals: path } },
+  });
+  if (steps.length === 0) return [];
+  const manualIds = new Set((steps as any[]).map((s) => getRelationIds(s, "매뉴얼")[0]).filter(Boolean));
+  const publishedManualIds = new Set<string>();
+  for (const id of manualIds) {
+    const m = await getManual(id as string);
+    if (m?.status === "PUBLISHED") publishedManualIds.add(id as string);
+  }
+  return (steps as any[])
+    .map(mapManualStepPage)
+    .filter((s) => publishedManualIds.has(s.manualId))
+    .sort((a, b) => a.order - b.order);
 }

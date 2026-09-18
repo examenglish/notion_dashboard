@@ -12,6 +12,8 @@ import {
   BarChart3,
   FileText,
   ChevronRight,
+  ListChecks,
+  BookOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -30,6 +32,7 @@ type NavItem = {
 // tinted background instead, which is enough signal on its own.
 const NAV_ITEMS: NavItem[] = [
   { href: "/director", label: "대시보드", icon: LayoutDashboard, exact: true },
+  { href: "/director/tasks", label: "내 업무", icon: ListChecks, exact: false },
   { href: "/director/students", label: "학생 관리", icon: Users, exact: false },
   { href: "/director/exam-prep", label: "시험대비", icon: GraduationCap, exact: false },
   {
@@ -46,6 +49,7 @@ const NAV_ITEMS: NavItem[] = [
   },
   { href: "/director/student-levels", label: "학생 레벨", icon: BarChart3, exact: false },
   { href: "/director/reports", label: "학생 리포트", icon: FileText, exact: false },
+  { href: "/director/manuals", label: "매뉴얼", icon: BookOpen, exact: false },
 ];
 
 // useSearchParams() forces any statically-rendered page that embeds this

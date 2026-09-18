@@ -215,6 +215,109 @@ export type NlParseResult =
   | { kind: "clarify"; message: string }
   | { kind: "log_admin_inbox" | "log_schedule_entry" | "log_counseling" | "log_student_action"; input: any };
 
+// ---------------------------------------------------------------------------
+// AI 업무운영 시스템(섹션3) — "한 문장 → 여러 업무"로 쪼개는 전용 경로.
+// 위 NL_TOOLS/parseNaturalLanguageInput은 건드리지 않고 완전히 별도의 tool +
+// 별도의 호출부(app/api/tasks/from-text/route.ts)로만 쓰인다 — 기존 대시보드
+// 입력창/Slack 슬래시태그 동작에는 전혀 영향이 없다. 담당자 배정은 여기서
+// 하지 않는다(AI는 "무슨 업무들인지"만 판단하고, 배정은 lib/task-routing.ts의
+// 결정론적 규칙이 맡는다 — 섹션3 요구사항).
+// ---------------------------------------------------------------------------
+
+const CREATE_TASKS_TOOL = (typeLabels: string[]): Anthropic.Tool => ({
+  name: "create_tasks",
+  description:
+    "직원이 학생 상황이나 업무를 자연어로 설명한 문장을, 실행 가능한 개별 업무 여러 건으로 쪼갠다. 문장 하나에 여러 조치가 섞여 있으면(예: 암기 확인 + 재시험 + 숙제 확인) 각각을 별도 업무로 분리한다.",
+  input_schema: {
+    type: "object",
+    properties: {
+      tasks: {
+        type: "array",
+        minItems: 1,
+        items: {
+          type: "object",
+          properties: {
+            type: { type: "string", enum: typeLabels, description: "업무 유형(한글 라벨 중 하나)" },
+            studentName: { type: "string", description: "학생 이름. 해당 없으면 빈 문자열." },
+            studentSchool: { type: "string", description: "학생 학교. 언급 없으면 빈 문자열." },
+            content: { type: "string", description: "업무 내용 요약 — 무엇을, 왜 해야 하는지." },
+            date: { type: "string", description: "YYYY-MM-DD. 언급 없으면 오늘." },
+            time: { type: "string", description: "예: 16:00. 언급 없으면 빈 문자열." },
+            priority: { type: "string", enum: ["긴급", "보통"], description: "문장에 '급하다/오늘 꼭' 같은 긴급 표현이 있으면 긴급." },
+          },
+          required: ["type", "content", "date"],
+        },
+      },
+    },
+    required: ["tasks"],
+  },
+});
+
+const CREATE_TASKS_CLARIFY_TOOL: Anthropic.Tool = {
+  name: "clarify",
+  description: "문장에서 실행 가능한 업무를 전혀 찾을 수 없을 때만 사용한다.",
+  input_schema: {
+    type: "object",
+    properties: { message: { type: "string", description: "무엇이 불명확한지 설명하는 한국어 메시지" } },
+    required: ["message"],
+  },
+};
+
+function buildCreateTasksSystemBlocks(ref: NlReference, typeLabels: string[]): Anthropic.TextBlockParam[] {
+  const text = `너는 영어학원 관리 시스템에서, 직원이 자연어로 쓴 업무 지시를 실행 가능한 개별 업무 목록으로 구조화하는 도우미다.
+
+오늘 날짜는 ${ref.today} (${ref.weekday}요일)이다.
+날짜 참고표 (YYYY-MM-DD(요일,주차) 형식):
+${buildDateTable(ref.today)}
+
+규칙:
+- 문장 하나에 여러 조치가 섞여 있으면 각각을 별도 업무로 나눈다. 예: "민수 대화문 암기 안 됨. 관계대명사도 잘 모름. 문제 뽑아서 오늘 재시험시키고 본문 숙제도 확인" → (1)암기확인 (2)재시험 (3)숙제확인, 세 건.
+- 업무 유형(type)은 반드시 아래 목록 중 하나를 그대로 쓴다: ${typeLabels.join(", ")}
+- 담당자를 임의로 정하지 않는다 — ownerName 같은 필드는 없다. 시스템이 근무시간/담당반 기준으로 자동 배정한다.
+- 학생 이름이 문장에 있으면 studentName에 정확히 채운다(재원생 명단과 최대한 일치시킨다). 학교가 언급되면 studentSchool도 채운다.
+- 날짜/시간이 명시되지 않으면 date는 오늘(${ref.today}), time은 빈 문자열로 둔다.
+- 실행 가능한 업무를 전혀 찾을 수 없는 문장(잡담, 의미 불명 등)에서만 clarify를 쓴다.
+- 도구는 반드시 하나만 호출한다.
+
+재원생 명단 (이름(학교)):
+${ref.students.join(", ")}
+
+직원 명단:
+${ref.staff.join(", ")}`;
+  return [{ type: "text", text, cache_control: { type: "ephemeral" } }];
+}
+
+export type TaskDraft = {
+  type: string;
+  studentName: string;
+  studentSchool: string;
+  content: string;
+  date: string;
+  time: string;
+  priority?: "긴급" | "보통";
+};
+
+export type CreateTasksParseResult = { kind: "tasks"; tasks: TaskDraft[] } | { kind: "clarify"; message: string };
+
+export async function parseCreateTasksInput(text: string, ref: NlReference, typeLabels: string[]): Promise<CreateTasksParseResult> {
+  const res = await anthropic.messages.create({
+    model: NL_MODEL,
+    max_tokens: 1024,
+    system: buildCreateTasksSystemBlocks(ref, typeLabels),
+    tools: [CREATE_TASKS_TOOL(typeLabels), CREATE_TASKS_CLARIFY_TOOL],
+    tool_choice: { type: "any" },
+    messages: [{ role: "user", content: text }],
+  });
+
+  const toolUse = res.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+  if (!toolUse || toolUse.name === "clarify") {
+    const input = (toolUse?.input as { message?: string }) ?? {};
+    return { kind: "clarify", message: input.message || "업무를 파악하지 못했습니다. 다시 입력해 주세요." };
+  }
+  const input = toolUse.input as { tasks: TaskDraft[] };
+  return { kind: "tasks", tasks: input.tasks ?? [] };
+}
+
 // forceTool: "/보강", "/상담" 같은 슬래시 명령으로 카테고리를 이미 알고 있을
 // 때 넘긴다 — Haiku의 분류(어느 도구를 쓸지) 단계를 완전히 건너뛰고 해당
 // 도구 하나만 강제 호출해서, 그 안의 필드(학생 이름/날짜/시간 등) 추출만

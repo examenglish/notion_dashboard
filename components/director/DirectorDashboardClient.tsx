@@ -7,9 +7,11 @@ import StatTile from "./StatTile";
 import ListCard, { ListRow } from "./ListCard";
 import Popup from "./Popup";
 import NaturalLanguageInput from "@/components/NaturalLanguageInput";
+import AiTaskComposer from "@/components/AiTaskComposer";
 import StaffPicker from "@/components/StaffPicker";
 import MakeupStatusCard from "@/components/MakeupStatusCard";
 import TodayClinicCard from "./TodayClinicCard";
+import ReviewInboxCard from "./ReviewInboxCard";
 import { InquiryEditRow, CounselingEditRow, type InquiryItem, type CounselingItem } from "./EditableScheduleRow";
 import type { DailyOutcomeStudent } from "@/lib/notion";
 import { cn } from "@/lib/utils";
@@ -306,6 +308,16 @@ export default function DirectorDashboardClient({
 
   return (
     <>
+      <div className="mb-3">
+        <AiTaskComposer />
+      </div>
+
+      {(role === "원장" || role === "행정") && (
+        <div className="mb-3">
+          <ReviewInboxCard role={role} />
+        </div>
+      )}
+
       <div className="mb-3">
         <NaturalLanguageInput />
       </div>

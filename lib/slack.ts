@@ -120,6 +120,27 @@ export async function addSlackReaction(
   await slackApi("reactions.add", { channel, timestamp: messageTs, name });
 }
 
+// AI 업무운영 시스템의 첫 아웃바운드 발신(섹션15) — 이 파일은 지금까지 인바운드
+// (Slack → 앱)만 처리했다. NORMAL 완료는 여기서 절대 호출하지 않는다(알림
+// 폭탄 방지) — 호출부(app/api/tasks/**)가 REVIEW/URGENT/신규배정에만 쓴다.
+// SLACK_TASK_CHANNEL_ID가 설정되어 있지 않으면 조용히 아무 일도 하지 않는다
+// (기존 배포가 이 env var 없이도 그대로 동작해야 하므로).
+export async function postSlackMessage(channel: string | undefined, text: string): Promise<void> {
+  if (!channel) return;
+  await slackApi("chat.postMessage", { channel, text });
+}
+
+// 신규 업무 배정 알림(섹션15) — app/api/tasks/from-text, app/api/tasks/[id]/followup
+// 양쪽에서 재사용한다. SLACK_TASK_CHANNEL_ID 미설정 시 조용히 아무 일도 하지 않는다.
+export function notifyTaskAssignments(tasks: { typeLabel: string; studentName: string; ownerName: string | null; pool: boolean }[]): void {
+  const channel = process.env.SLACK_TASK_CHANNEL_ID;
+  if (!channel) return;
+  for (const t of tasks) {
+    if (!t.ownerName) continue;
+    void postSlackMessage(channel, `📌 새 업무: ${t.typeLabel}${t.studentName ? " · " + t.studentName : ""} → ${t.ownerName}`);
+  }
+}
+
 async function getSlackMetadata(channel: string, messageTs: string, userId: string) {
   const [user, permalink] = await Promise.all([
     userId
