@@ -225,6 +225,134 @@ export async function runReconciliation(): Promise<{ branch: string; branchId: s
 }
 
 /** dual_write_failures 큐에서 아직 안 풀린 항목들을 다시 시도한다. */
+// 금정 워크스페이스에 아직 없는 4개 DB(자료제작/시험대비/학교별시험범위/
+// Slack 학생기록)를 사직의 것과 "동일한 구조"로 새로 만든다. relation
+// 속성(요청자/담당자→직원, 학생→학생마스터)은 사직 DB를 그대로 복사하면
+// 사직 직원/학생을 가리키게 되므로, 금정 자신의 직원/학생마스터 DB를
+// 가리키도록 다시 연결한다. execute=false(기본)면 아무것도 만들지 않고
+// "무엇을 어떻게 만들 것인지"만 보고한다.
+const PROVISION_TARGETS: { key: string; sajikTitleContains: string }[] = [
+  { key: "MATERIAL", sajikTitleContains: "교재" },
+  { key: "EXAM_PREP", sajikTitleContains: "학생시험대비" },
+  { key: "SCHOOL_EXAM_RANGE", sajikTitleContains: "학교별시험범위" },
+  { key: "SLACK_RECORDS", sajikTitleContains: "Slack" },
+];
+
+async function findAllDataSources(): Promise<{ id: string; title: string }[]> {
+  const results: { id: string; title: string }[] = [];
+  let cursor: string | undefined;
+  do {
+    const res: any = await notion.search({
+      filter: { property: "object", value: "data_source" } as any,
+      start_cursor: cursor,
+      page_size: 100,
+    } as any);
+    for (const r of res.results as any[]) {
+      const title = (r.title ?? []).map((t: any) => t.plain_text).join("") || "(제목없음)";
+      results.push({ id: r.id, title });
+    }
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+  return results;
+}
+
+function remapRelationProperties(properties: Record<string, any>, remap: Record<string, string>): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const [name, config] of Object.entries(properties)) {
+    if (config?.type === "relation") {
+      const targetOldId = config.relation?.data_source_id;
+      const newTargetId = targetOldId ? remap[targetOldId] : undefined;
+      if (!newTargetId) {
+        // 이 relation이 가리키는 대상을 금정 쪽으로 못 찾았으면(예상 밖
+        // 대상), 안전을 위해 이 속성 자체를 새 DB에서는 빼고 이름만 rich_text로
+        // 남겨 데이터 구조가 깨지지 않게 한다 — 추측으로 아무 데나 연결하지 않는다.
+        out[name] = { rich_text: {} };
+        continue;
+      }
+      // dual_property(양방향 sync)는 원본 쪽 동기화 속성 이름까지 다시
+      // 만들어야 해서 복잡하고 오류 위험이 크다 — single_property(단방향)로
+      // 통일한다. 이 4개 DB의 relation은 어차피 앱 코드가 단방향으로만
+      // 읽으므로(targets 매핑) 기능상 차이가 없다.
+      out[name] = { relation: { data_source_id: newTargetId, type: "single_property", single_property: {} } };
+      continue;
+    }
+    if (config?.type === "created_time" || config?.type === "last_edited_time" || config?.type === "formula" || config?.type === "rollup") {
+      // 계산/자동 속성은 그대로 복사하면 새 DB 생성 API가 거부하거나
+      // 의미 없는 값이 된다 — 안전하게 건너뛴다(사직 쪽에도 이 4개 DB엔
+      // 안 쓰였을 가능성이 높지만 방어적으로 처리).
+      continue;
+    }
+    if (name === "title" || config?.type === "title") {
+      out[name] = { title: {} };
+      continue;
+    }
+    out[name] = config;
+  }
+  return out;
+}
+
+export async function planOrProvisionGeumjeongDatabases(execute: boolean) {
+  const allSources = await findAllDataSources();
+  const sajik = (needle: string) => allSources.find((d) => d.title.includes("사직") && d.title.includes(needle));
+  const geumjeong = (needle: string) => allSources.find((d) => d.title.includes("금정") && d.title.includes(needle));
+
+  const geumjeongStaff = geumjeong("직원계정");
+  const geumjeongStudent = geumjeong("학생마스터");
+  const geumjeongAnchor = geumjeong("반") ?? geumjeong("직원계정"); // parent page 추정용
+  if (!geumjeongStaff || !geumjeongStudent || !geumjeongAnchor) {
+    return { error: "금정의 직원계정/학생마스터/기준 DB를 찾지 못했습니다 — 임의 진행하지 않습니다.", found: allSources.map((s) => s.title) };
+  }
+
+  const anchorDb: any = await notion.databases.retrieve({ database_id: geumjeongAnchor.id });
+  const parentPageId: string | undefined = anchorDb.parent?.page_id;
+  if (!parentPageId) {
+    return { error: "금정 DB들의 부모 페이지 ID를 찾지 못했습니다 — 임의 진행하지 않습니다." };
+  }
+
+  const sajikStaff = sajik("직원계정");
+  const sajikStudent = sajik("학생마스터");
+  const relationRemap: Record<string, string> = {};
+  if (sajikStaff) relationRemap[sajikStaff.id] = geumjeongStaff.id;
+  if (sajikStudent) relationRemap[sajikStudent.id] = geumjeongStudent.id;
+
+  const plan: { key: string; sajikTitle: string; sajikId: string; newTitle: string; skipped?: string }[] = [];
+  const created: { key: string; newDataSourceId: string; newTitle: string }[] = [];
+
+  for (const target of PROVISION_TARGETS) {
+    const already = DB[target.key as keyof typeof DB];
+    const src = sajik(target.sajikTitleContains);
+    if (!src) {
+      plan.push({ key: target.key, sajikTitle: "(찾지 못함)", sajikId: "", newTitle: "", skipped: "사직 원본 DB를 찾지 못함" });
+      continue;
+    }
+    const newTitle = src.title.replace("사직", "금정");
+    if (already) {
+      plan.push({ key: target.key, sajikTitle: src.title, sajikId: src.id, newTitle, skipped: `이미 NOTION_DB_${target.key}가 설정되어 있음(${already}) — 건드리지 않음` });
+      continue;
+    }
+    const existingGeumjeong = allSources.find((d) => d.title === newTitle);
+    if (existingGeumjeong) {
+      plan.push({ key: target.key, sajikTitle: src.title, sajikId: src.id, newTitle, skipped: `이미 같은 이름의 금정 DB가 존재함(${existingGeumjeong.id}) — 새로 만들지 않음, 이 ID를 env로 등록하면 됨` });
+      continue;
+    }
+    plan.push({ key: target.key, sajikTitle: src.title, sajikId: src.id, newTitle });
+
+    if (execute) {
+      const sourceSchema: any = await notion.dataSources.retrieve({ data_source_id: src.id });
+      const properties = remapRelationProperties(sourceSchema.properties ?? {}, relationRemap);
+      const createdDb: any = await notion.databases.create({
+        parent: { type: "page_id", page_id: parentPageId },
+        title: [{ type: "text", text: { content: newTitle } }],
+        initial_data_source: { properties } as any,
+      });
+      const newId = createdDb.data_sources?.[0]?.id;
+      created.push({ key: target.key, newDataSourceId: newId, newTitle });
+    }
+  }
+
+  return { execute, parentPageId, plan, created };
+}
+
 export async function retryDualWriteFailures(limit = 50): Promise<{ retried: number; resolved: number; stillFailing: number }> {
   const env = supabaseEnv();
   const branch = branchCode();

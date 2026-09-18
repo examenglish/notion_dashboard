@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runReconciliation, retryDualWriteFailures, shadowReadCompare } from "@/lib/reconciliation";
+import { runReconciliation, retryDualWriteFailures, shadowReadCompare, planOrProvisionGeumjeongDatabases } from "@/lib/reconciliation";
 import { notion } from "@/lib/notion";
 
 export const dynamic = "force-dynamic";
@@ -25,7 +25,9 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => ({}));
-  const mode: string = ["retry-failures", "list-databases", "shadow-read"].includes(body?.mode) ? body.mode : "report";
+  const mode: string = ["retry-failures", "list-databases", "shadow-read", "provision-geumjeong-dbs"].includes(body?.mode)
+    ? body.mode
+    : "report";
 
   try {
     if (mode === "retry-failures") {
@@ -34,6 +36,10 @@ export async function POST(req: NextRequest) {
     }
     if (mode === "shadow-read") {
       const result = await shadowReadCompare();
+      return NextResponse.json({ ok: true, mode, ...result });
+    }
+    if (mode === "provision-geumjeong-dbs") {
+      const result = await planOrProvisionGeumjeongDatabases(body?.execute === true);
       return NextResponse.json({ ok: true, mode, ...result });
     }
     if (mode === "list-databases") {
