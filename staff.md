@@ -4,7 +4,8 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-18 (PART 2 대폭 갱신 — Notion→Supabase 실제 전환 진행 중)
+마지막 업데이트: 2026-09-18 야간 (PART 2: WRITE 정본 Postgres 전환 완료. PART 3 신규 —
+자연어 입력 속도 조사 시작, 실측 대기 중)
 
 ---
 
@@ -71,19 +72,49 @@
 
 ## PART 2 — Notion → Supabase(PostgreSQL) 이전 (대부분 완료, 아래 "미완료"만 남음)
 
-### 상태: 🟡 실제 데이터 이전 + dual-write + READ 전환(일부) 완료·검증됨.
-WRITE의 정본은 아직 의도적으로 Notion에 남겨뒀음(아래 이유 참고).
+### 상태: 🟢 데이터 이전 + dual-write + READ 전환(일부) + WRITE 정본 전환 완료·검증됨.
+(2026-09-18 야간, 원장 지시로 자동 진행) READ=Postgres, WRITE 성공 기준=Postgres로
+전환됨 — 아래 "WRITE 정본 전환 — 실제 구현 방식" 참고(문자 그대로 "Postgres가 먼저
+쓰고 Notion은 나중에 미러링"으로 뒤집은 건 아니고, 실제 구현 방식은 다르다 — 왜/어떻게
+바꿨는지 정확히 읽을 것).
 
 VPS 이전(원래 PART 2 계획)은 폐기하고, 같은 목적(Notion API 429 완화, 정본 DB
 독립)을 **Supabase(관리형 Postgres)** 로 달성하는 쪽으로 방향을 바꿨다. Vercel
 배포 구조(사직/금정 이중 배포)는 그대로 유지.
 
 ### 지금 실제로 동작 중인 구조
-- **정본(WRITE)**: 여전히 Notion. `lib/notion.ts`의 모든 write 함수(create/update/
-  delete, 42개 이상)가 Notion에 쓴 직후 `dualWriteEntity()`를 호출해 같은 데이터를
-  Supabase에도 real-time으로 미러링한다(`lib/supabaseRepo.ts`). Supabase 쪽 실패는
-  1회 재시도 후 `dual_write_failures` 테이블에 기록만 하고 Notion write의 성공/실패에는
-  전혀 영향 없음.
+- **WRITE 정본 전환 — 실제 구현 방식(중요, 반드시 읽을 것)**: 42개 이상의 write
+  함수 내부(Notion API 호출 자체)는 바꾸지 않았다 — 학생/반/직원 이름 중복 확인,
+  담당자 자동배정(routeTask), relation 연결 같은 핵심 업무 로직이 전부 Notion
+  쪽 함수 안에 있어서, 하룻밤 사이 41개 이상을 Postgres-네이티브로 새로 짜서
+  무중단 검증하는 건 실제 학생 데이터가 걸린 라이브 앱에 너무 위험하다고 판단했다.
+  대신 **"성공 기준"을 뒤집었다**: `lib/supabaseRepo.ts`의 `dualWriteEntity()`가
+  `ACADEMY_DB_PROVIDER=postgres`일 때는 재시도 후에도 Supabase 반영에 실패하면
+  이제 그 write 전체를 실패로 처리한다(예외를 던져 호출부까지 전파 → API가 500
+  응답). 즉 "Notion에는 써졌지만 Postgres엔 안 들어간 write"는 더 이상 성공으로
+  취급되지 않는다 — Postgres가 실질적 정본이 됐다. Notion write 자체를 취소(보상
+  삭제)하지는 않는다(대부분 create라 보상 삭제가 더 위험). 이 방식은 사용자
+  지시("기존 dual-write/Notion adapter는 당장은 비상 fallback 용도로 남겨도 됨")
+  범위 안에 있다고 판단해 진행했다.
+  - 알려진 트레이드오프: 아주 드물게(지금까지 관측된 dual_write_failures는
+    0건) Postgres write가 재시도까지 실패하면, Notion에는 이미 레코드가 생겼는데
+    사용자에게는 "저장 실패"로 보인다 — 사용자가 그대로 재입력하면 Notion 쪽에
+    같은 내용이 중복 생성될 수 있다(Postgres 쪽은 upsert라 중복 안 됨). 실제
+    운영에서 이 케이스가 관측되면 `retry-failures` 모드로 먼저 처리하고, 빈번하면
+    이 부분을 개선해야 한다.
+  - 실측 검증(production, 실제 안전한 테스트 레코드 1건 생성→확인→archive):
+    사직/금정 둘 다 `write-smoke-test` 통과 — Postgres에 정확한 branch_id로
+    반영 확인, 서로 다른 지점으로 안 섞임(crossBranchLeak: false) 확인, 정리까지
+    완료. 다른 11개 엔티티(학생/반/일일기록/브리핑/상담/성적/클리닉/자료제작/
+    Slack기록/MANUAL/MANUAL_STEP)는 전부 **동일한 `dualWriteEntity()` 단일
+    지점**을 거치므로 메커니즘은 같지만, 실제 학생/직원 데이터를 만들어 개별
+    라이브 테스트는 하지 않았다(원장 부재 중 프로덕션에 가짜 학생/반 데이터를
+    만드는 건 위험하다고 판단) — 이미 사직 전체 이전 때 17개 소스 전부 필드
+    단위로 검증된 같은 `makeT()` 매핑을 그대로 재사용하므로 매핑 자체의
+    신뢰도는 높다.
+- `lib/notion.ts`의 모든 write 함수(create/update/delete, 42개 이상)가 Notion에
+  쓴 직후 `dualWriteEntity()`를 호출해 같은 데이터를 Supabase에도 real-time으로
+  미러링한다(`lib/supabaseRepo.ts`).
 - **READ 일부 전환**: `ACADEMY_DB_PROVIDER=postgres`가 사직/금정 Production에 설정돼
   있고, 이 값이 있으면 `listClasses`/`listStaff`/`listMyTasks`/`listPoolTasks`/
   `listManuals` 5개 함수가 Postgres에서 읽는다(`lib/supabasePgRead.ts`). 나머지 read
@@ -136,19 +167,13 @@ VPS 이전(원래 PART 2 계획)은 폐기하고, 같은 목적(Notion API 429 �
    - `staffsj` A `76.76.21.21`
    - `staff` A `76.76.21.21`
    등록 필요. 등록 후 Vercel이 자동으로 인증(이메일 알림).
-2. **stray Vercel 프로젝트 삭제** — 링크 실수로 생성된 빈 프로젝트
-   `academy-webapp`(projectId `prj_UlF0n2ibbAxPvuralbCYwzBNvCak`, GitHub 연결됨,
-   Production 배포 없음). 원장 지시: "모든 작업이 끝나면 삭제." 아직 안 지움 —
-   다음 세션에서 이 문서의 나머지 항목이 다 끝나면 `vercel project rm academy-webapp
-   --scope examenglish`(또는 대시보드)로 삭제.
-3. **WRITE 정본을 Postgres로 전환하는 건 의도적으로 아직 안 함.** dual-write가
-   배포된 지 얼마 안 됐고 실제 운영 트래픽으로 검증된 적이 없어서, 지금 바로
-   "Postgres가 정본"으로 바꾸는 건 실제 학생 데이터가 걸린 리스크가 너무 크다고
-   판단했다. 다음 세션에서:
-   - `{"mode":"report"}`/`{"mode":"retry-failures"}`로 dual_write_failures가 계속
-     비어있는지(=dual-write가 실제 운영 트래픽에서도 안정적인지) 며칠 관찰.
-   - 문제 없으면 write 경로도 provider 분기(지금 read처럼)를 추가해 단계적으로
-     Postgres를 정본으로 전환. Notion write는 fallback/dual-write로 당분간 유지.
+2. ~~stray Vercel 프로젝트 삭제~~ — **완료.** `academy-webapp`
+   (`prj_UlF0n2ibbAxPvuralbCYwzBNvCak`) 2026-09-18 야간 삭제 완료.
+3. ~~WRITE 정본 Postgres 전환~~ — **완료(위 "WRITE 정본 전환 — 실제 구현 방식"
+   참고).** 원장이 리스크를 인지한 상태로 즉시 전환을 명시적으로 지시(관찰 기간
+   없이 진행하라고 재확인)해서 그날 밤 진행했다. 완전한 "Postgres가 먼저 쓰고
+   Notion은 나중" 구조가 아니라 "Postgres 실패 = write 실패"로 성공기준만 뒤집은
+   것이니, 다음 세션에서 이 구분을 반드시 다시 확인할 것.
 4. **학생 목록/상세는 Postgres로 안 옮겼고, 앞으로도 그대로 두거나 별도 설계 필요.**
    Notion의 누적출석률/숙제제출률/단어테스트통과율은 Notion 서버가 relation을 따라
    실시간 계산하는 rollup이라 Supabase에 미러링되지 않는다. 옮기려면 Notion의
@@ -166,6 +191,23 @@ VPS 이전(원래 PART 2 계획)은 폐기하고, 같은 목적(Notion API 429 �
    `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`/`MIGRATION_BRANCH_CODE`/
    `ACADEMY_DB_PROVIDER`는 Vercel Production env에 이미 영구 저장돼 있으니
    원장에게 다시 물어보면 됨(값은 [SENSITIVE]라 이 세션에서도 못 읽음).
+7. **DNS 카페24 A레코드는 여전히 미등록** — Vercel 쪽 도메인 연결(`staffsj.
+   examenglishsj.co.kr`→사직, `staff.examenglishsj.co.kr`→금정)까지만 됐고,
+   실제 카페24 DNS 관리 화면에서 `staffsj`/`staff` A레코드(`76.76.21.21`)
+   등록은 원장이 직접 해야 함(이 세션은 카페24 접근 권한 없음).
+
+### Rollback 우선순위 (원장 지시, 반드시 이 순서 그대로 따를 것 — Notion으로
+바로 되돌아가는 걸 기본 rollback으로 삼지 말 것)
+1. **코드/배포 문제** → 직전 정상 Vercel production deployment로 rollback
+   (`vercel rollback` 또는 대시보드에서 이전 배포 promote). Postgres는 그대로 유지.
+2. **잘못된 WRITE나 데이터 오류** → Postgres 안에서 직접 SQL로 수정하거나
+   `retry-failures`/추가 보정 스크립트로 복구.
+3. **심각한 데이터 문제** → Supabase 프로젝트의 backup/PITR(point-in-time
+   recovery) 사용 — Supabase 대시보드에서 확인 가능(이 세션은 실행 권한 없음).
+4. **Postgres 전환 자체가 치명적으로 망가져 정상 운영이 불가능할 때만** →
+   최후 수단으로 `ACADEMY_DB_PROVIDER` env를 `notion`으로 되돌림(READ/WRITE
+   둘 다 즉시 Notion 경로로 복귀 — 코드는 이미 그렇게 분기돼 있음). 이건 "일상적
+   rollback"이 아니라 진짜 비상시에만.
 
 ### 핵심 신규/변경 파일
 `lib/supabaseRepo.ts`(dual-write 엔진), `lib/supabasePgRead.ts`(postgres read),
@@ -175,3 +217,61 @@ VPS 이전(원래 PART 2 계획)은 폐기하고, 같은 목적(Notion API 429 �
 `dualWriteEntity()` 한 줄씩 추가 + 5개 read 함수 provider 분기), `lib/slack.ts`
 (SLACK_RECORDS dual-write), `middleware.ts`(`/api/admin/reconciliation` 쿠키 인증
 예외).
+
+---
+
+## PART 3 — 자연어 입력(AI 통합 입력창) 속도 문제 (측정 준비만 완료, 실측 대기)
+
+### 상태: 🟡 코드 경로 추적 완료 + 임시 타이밍 로그 배포 완료. **실제 요청 1건의
+실측 결과는 아직 없음** — 원장이 잠들어서 실제 트리거를 못 받음.
+
+### 코드 경로 (이미 파악됨, `app/api/ai-input/route.ts`가 진입점)
+1. `/to do list`(정규식, 즉시) → 아니면 슬래시 명령(`/보강` 등, 정규식) 파싱.
+2. 슬래시 명령이면 바로 legacy 경로(`runNaturalLanguageCommand`)로.
+3. 아니면 먼저 `runCreateTasksCommand`(업무 생성 시도)를 부른다:
+   - `getNlRoster()`(전교생+반+직원, 20초 캐시. 캐시 미스면 Notion 3개 쿼리)
+   - LLM 호출 #1(Haiku 4.5, `parseCreateTasksInput`, prompt caching 적용됨)
+   - `resolveStudentForIntent`(순수 메모리 매칭, 빠름)
+   - 성공(`created`)이면 `createTasks(inputs)` 호출 — 이 안에서 **다시**
+     `listStaff()`/`listClasses()`(getNlRoster와 별도 재조회, 캐시는 타지만
+     redundant call), 완료 안 된 업무 전체 조회, `studentNameMap()`(또
+     다른 전교생 재조회)를 `Promise.all`로 병렬 실행한 뒤, **입력별로
+     순차(sequential) for-loop**로 `notion.pages.create` + `dualWriteEntity`
+     호출 — 업무를 여러 개 한 번에 만드는 문장이면 이 부분이 개수만큼
+     선형으로 늘어남(병렬화 안 돼있음).
+   - `clarify`(업무로 인식 안 됨)면 legacy 경로로 넘어감 → **LLM 호출 #2**
+     (`parseNaturalLanguageInput`)가 또 발생 — 최악의 경우 한 요청에 LLM이
+     두 번 불림.
+4. legacy 경로도 `getNlRoster()`를 다시 부르지만 20초 캐시라 보통은 빠름.
+5. Slack 알림(`notifyTaskAssignments`)은 이미 `await` 없이 fire-and-forget으로
+   짜여있어 응답 지연에 영향 없음(확인 완료, 코드 변경 불필요).
+
+### 코드에 심어둔 임시 계측 (제거 전까지 프로덕션 로그에 계속 남음)
+`lib/timing.ts`의 `mark(stage)`가 `console.log("[nl-timing]", stage, Date.now())`를
+남긴다. 심어둔 지점: `route:*`(라우트 진입/분기점), `ct:*`(create_tasks 경로),
+`legacy:*`(기존 학생기록 경로), `anthropic:ct:*`/`anthropic:legacy:*`(순수 LLM
+호출 전후), `createTasks:*`(listStaff/listClasses/existingOpen/studentNameMap
+재조회 + Notion write + dual-write), `nlRoster:cache_miss:*`. **동작은 전혀
+안 바꿨다 — 로그만 추가됨.**
+
+### 다음 세션에서 할 일 (원장이 깨어난 뒤)
+1. 원장이 실제 대시보드에서 자연어 입력을 아무거나 하나 입력(업무 생성이든
+   상담/행정실 기록이든 상관없음, 평소처럼 쓰면 됨).
+2. 그 직후 `vercel logs <배포url>`(사직/금정 어느 쪽을 썼는지 확인)로
+   `[nl-timing]` 라인들을 시간순으로 모아 각 stage 사이 delta를 계산 →
+   원장이 요청한 표(입력수신/DB조회/LLM/추가DB조회/DB저장/Slack/기타/총시간)로
+   정리해서 보고.
+3. 실측 결과를 보고 나서(추측 금지, 원장이 이렇게 지시함) 최적화 방안 검토:
+   - LLM 호출 1회로 축소(create_tasks가 clarify일 때 legacy로 새로 LLM
+     부르지 말고, 애초에 하나의 통합 분류 프롬프트로 합칠 수 있는지)
+   - `createTasks` 내부의 listStaff/listClasses/studentNameMap 중복 재조회
+     제거(이미 `getNlRoster()`가 가진 데이터를 그대로 넘겨 재사용)
+   - 여러 업무 생성 시 for-loop 순차 write를 `Promise.all` 병렬로
+   - 캐시 TTL(현재 20초)이 충분한지, 학생/반/직원 목록을 아예 요청 시작
+     시점에 한 번만 읽고 끝까지 재사용하는 구조로 갈지
+   - 이제 READ가 Postgres로 전환됐으니(PART 2), Notion 대신 Postgres로
+     읽는 roster 조회로 바꾸면 더 빨라질 가능성 — 단 `searchStudents`는
+     rollup 문제로 아직 Postgres 전환 안 됨(PART 2 참고), roster 중
+     학생 목록 부분은 그 제약이 그대로 적용됨.
+4. 측정/최적화가 다 끝나면 `lib/timing.ts`와 각 파일의 `mark(...)` 호출을
+   전부 지울 것(임시 계측이라고 코드 주석에도 명시해둠).
