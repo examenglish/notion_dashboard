@@ -238,6 +238,23 @@ const PROVISION_TARGETS: { key: string; sajikTitleContains: string }[] = [
   { key: "SLACK_RECORDS", sajikTitleContains: "Slack" },
 ];
 
+// databases.create()는 parent가 반드시 {type:"page_id"}여야 한다. 기준 DB가
+// 페이지에 바로 속하지 않고 블록(예: 페이지 안 toggle) 안에 중첩돼 있으면
+// 그 블록의 부모를 계속 따라 올라가 실제 page_id를 찾는다.
+async function resolveAncestorPageId(parent: any, depth = 0): Promise<string | null> {
+  if (!parent || depth > 10) return null;
+  if (parent.type === "page_id") return parent.page_id;
+  if (parent.type === "database_id") {
+    const db: any = await notion.databases.retrieve({ database_id: parent.database_id });
+    return resolveAncestorPageId(db.parent, depth + 1);
+  }
+  if (parent.type === "block_id") {
+    const block: any = await notion.blocks.retrieve({ block_id: parent.block_id });
+    return resolveAncestorPageId(block.parent, depth + 1);
+  }
+  return null; // workspace 최상위 등 — API로 데이터베이스를 만들 수 있는 위치가 아님.
+}
+
 async function findAllDataSources(): Promise<{ id: string; title: string }[]> {
   const results: { id: string; title: string }[] = [];
   let cursor: string | undefined;
@@ -313,7 +330,7 @@ export async function planOrProvisionGeumjeongDatabases(execute: boolean) {
     return { error: "금정 기준 DB의 database_id를 찾지 못했습니다 — 임의 진행하지 않습니다.", anchorDataSource };
   }
   const anchorDb: any = await notion.databases.retrieve({ database_id: anchorDatabaseId });
-  const parentPageId: string | undefined = anchorDb.parent?.page_id;
+  const parentPageId = await resolveAncestorPageId(anchorDb.parent);
   if (!parentPageId) {
     return { error: "금정 DB들의 부모 페이지 ID를 찾지 못했습니다 — 임의 진행하지 않습니다.", anchorDbParent: anchorDb.parent };
   }
