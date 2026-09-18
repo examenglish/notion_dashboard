@@ -386,6 +386,63 @@ export async function planOrProvisionGeumjeongDatabases(execute: boolean) {
   return { execute, parentPageId, plan, created };
 }
 
+/**
+ * WRITE 정본 전환(ACADEMY_DB_PROVIDER=postgres) 검증용 — 실제 프로덕션에
+ * 안전하고 되돌릴 수 있는 테스트 레코드 1건을 만들어서, dual-write가
+ * 실제로 Postgres에 올바른 branch_id로 반영되는지 확인한 뒤 즉시
+ * archive(soft-delete, 기존 앱의 삭제 방식과 동일)한다. 실제 학생/직원
+ * 데이터는 전혀 건드리지 않는다 — TODO(개인할일) 테스트 레코드 1건만
+ * 생성/확인/보관 처리한다.
+ */
+export async function writeSmokeTest() {
+  const env = supabaseEnv();
+  const branch = branchCode();
+  if (!env || !branch) return { ok: false, error: "Supabase/branch 설정이 없습니다." };
+  const branchId = await resolveBranchId(env, branch);
+  if (!branchId) return { ok: false, error: `branch not found: ${branch}` };
+
+  const staffRes: any = await notion.dataSources.query({ data_source_id: DB.STAFF, page_size: 1 } as any);
+  const staffPage = staffRes.results[0];
+  if (!staffPage) return { ok: false, error: "테스트에 쓸 직원 레코드를 찾지 못했습니다." };
+
+  const marker = `[자동검증-삭제가능] write-smoke-test ${new Date().toISOString()}`;
+  const created: any = await notion.pages.create({
+    parent: { data_source_id: DB.TODO } as any,
+    properties: {
+      제목: { title: [{ text: { content: marker } }] },
+      유형: { select: { name: "개인할일" } },
+      담당자: { relation: [{ id: staffPage.id }] },
+      예정일: { date: { start: new Date().toISOString().slice(0, 10) } },
+      완료여부: { checkbox: false },
+      우선순위: { select: { name: "보통" } },
+    } as any,
+  });
+  await dualWriteEntity("TODO", created);
+
+  const check = await fetch(`${env.url}/rest/v1/tasks?notion_id=eq.${created.id}&select=*`, { headers: headers(env) });
+  const rows = (await check.json()) as any[];
+  const row = rows[0] ?? null;
+  const verified = !!row && row.branch_id === branchId && row.notion_id === created.id;
+
+  // 다른 branch에 안 섞였는지: 전체(branch 무관) 조회에서 정확히 1건만
+  // 나와야 한다(사직/금정 둘 다에 같은 notion_id가 있을 수 없으므로).
+  const crossBranchLeak = rows.length !== 1;
+
+  const archived: any = await notion.pages.update({ page_id: created.id, archived: true });
+  await dualWriteEntity("TODO", archived);
+
+  return {
+    ok: true,
+    branch,
+    branchId,
+    notionId: created.id,
+    supabaseRow: row,
+    verified,
+    crossBranchLeak,
+    cleanedUp: true,
+  };
+}
+
 export async function retryDualWriteFailures(limit = 50): Promise<{ retried: number; resolved: number; stillFailing: number }> {
   const env = supabaseEnv();
   const branch = branchCode();

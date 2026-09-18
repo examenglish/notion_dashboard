@@ -172,6 +172,16 @@ export async function dualWriteEntity(entityKey: EntityKey, notionPage: NotionPa
     } catch (err) {
       if (attempt === 2) {
         await recordFailure(entityKey, notionPage?.id, err);
+        // WRITE 정본이 Postgres인 배포(ACADEMY_DB_PROVIDER=postgres)에서는
+        // Postgres에 실제로 반영되지 못한 write를 "성공"으로 사용자에게
+        // 보여주면 안 된다 — Notion에는 이미 써졌더라도(정본이 아니라
+        // 비상 백업이므로) 호출부에 실패를 알려 재시도/확인을 유도한다.
+        // Notion write 자체를 되돌리지는 않는다(대부분 create이고, 보상
+        // delete는 별도 위험을 만든다) — dual_write_failures에 남은 기록으로
+        // reconciliation이 사후 처리한다.
+        if (getDbProvider() === "postgres") {
+          throw err instanceof Error ? err : new Error(String(err));
+        }
         return;
       }
       await new Promise((r) => setTimeout(r, 300));
