@@ -1480,6 +1480,17 @@ html {
   padding: 20px;
 }
 
+/* /director 첫 화면 전용 — 상단바가 없는 화면이라 계정 메뉴만 뷰포트
+   기준으로 우측 상단에 독립적으로 띄운다(검색창 레이아웃은 그대로 둠).
+   .ai-hero-dashboard-link는 이 안의 .ai-hero 박스 기준 absolute(top/right
+   16px)라 화면이 충분히 넓거나 박스가 뷰포트보다 짧으면 겹치지 않는다. */
+.ai-account-menu-float {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 50;
+}
+
 .ai-hero-full {
   min-height: auto;
   width: 100%;

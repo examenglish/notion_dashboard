@@ -4,13 +4,14 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (PART 9 갱신 — Account Menu를 구 디자인 화면
-(/dashboard, /input, /exam-prep, /student-levels, `components/TopBar.tsx`)
-에도 확장. `/director/*`는 DirectorUserMenu(shadcn), 구 화면은 신규
-`components/AccountMenu.tsx`(순수 CSS) — 두 디자인 시스템이 CSS 로딩
-범위가 달라(director.css는 /director 전용) 하나를 억지로 공유하지 않고
-표시 내용/데이터 출처만 동일하게 맞췄다. `supabase/schema/004_manual_steps_title.sql`은
-아직 미적용 — 계속 blocker. 아래 "PART 9" 섹션 먼저 확인)
+마지막 업데이트: 2026-09-19 (PART 9 3차 갱신 — 원장이 실제로 매일 보는
+첫 화면 `/director`(상단바 자체가 없는 "구글 첫화면" 랜딩)에도 Account
+Menu 적용. 상단바를 새로 추가하지 않고 `DirectorUserMenu`를 우측 상단에
+`position: fixed`로 단독 배치(이 페이지도 director.css 적용 범위 안이라
+그대로 재사용 가능했음). 이전 2차 갱신: 구 디자인 화면(/dashboard, /input,
+/exam-prep, /student-levels)에도 확장(신규 `components/AccountMenu.tsx`,
+순수 CSS). `supabase/schema/004_manual_steps_title.sql`은 아직 미적용 —
+계속 blocker. 아래 "PART 9" 섹션 먼저 확인)
 
 ---
 
@@ -113,6 +114,37 @@ student-levels}/page.tsx`)는 **한 줄도 안 고쳤다** — `<TopBar active="
 `components/AccountMenu.tsx`(신규, 순수 CSS 계정 메뉴), `components/TopBar.tsx`
 (AccountMenu로 교체), `app/globals.css`(`.account-menu-*` 스타일 추가),
 `components/LogoutButton.tsx`(삭제, 더 이상 참조 없음).
+
+### 3차 확장 (2026-09-19, 같은 날) — `/director`(원장이 실제로 매일 보는 첫 화면)
+1·2차 모두 `/director`의 **하위** 화면(`/director/dashboard` 등)과 구
+디자인 화면만 처리했는데, 정작 원장이 로그인 직후 매번 보는 화면은
+`app/director/page.tsx`(상단바/사이드바 없이 `AiUnifiedInput`만 렌더링하는
+"구글 첫화면" 랜딩)였다 — 그래서 지금까지 계정 메뉴가 안 보였다.
+
+**재사용 검토 결과**: 이 페이지는 `app/director/layout.tsx`(→
+`director.css`, Tailwind+shadcn 토큰)가 적용되는 `/director` 라우트
+트리 **안**이라, `DirectorUserMenu`를 스타일 깨짐 없이 그대로 재사용할 수
+있었다 — 새 컴포넌트나 wrapper 로직을 따로 만들 필요가 없었다. 상단바
+전체를 추가하면 "구글 첫화면" 분위기가 깨지므로, `DirectorUserMenu` 하나만
+`.ai-account-menu-float`(신규 CSS, `position: fixed; top: 18px; right:
+18px; z-index: 50;`)로 감싸 화면 우측 상단에 독립적으로 띄웠다. 중앙
+검색창(`AiUnifiedInput`)의 위치/폭/레이아웃은 전혀 안 건드림.
+
+기존에 같은 자리 근처에 있던 "대시보드로 가기" 링크(`AiUnifiedInput` 내부,
+`.ai-hero-dashboard-link`)는 `.ai-hero` 박스 기준 absolute라 이번에 추가한
+뷰포트 기준 fixed 메뉴와 좌표 기준이 달라 대부분의 화면 크기에서 안
+겹친다 — 다만 뷰포트가 매우 짧은 경우(세로로 짧은 모바일 가로모드 등)
+겹칠 가능성은 완전히 배제 못 함(브라우저 확인 필요, 아래 참고).
+
+**렌더 체인(코드 확인)**: `app/director/page.tsx` → `import DirectorUserMenu` →
+`<div className="ai-account-menu-float"><DirectorUserMenu .../></div>`.
+
+**검증**: `tsc --noEmit`/`vitest run`(13/13)/`next build` 전부 통과.
+브라우저로 실제 겹침 여부/모바일 축약 확인은 로그인 세션이 없어 못함.
+
+### 신규/변경 파일 (3차)
+`app/director/page.tsx`(DirectorUserMenu import + floating wrapper),
+`app/globals.css`(`.ai-account-menu-float` 추가).
 
 ---
 
