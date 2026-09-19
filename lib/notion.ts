@@ -76,6 +76,9 @@ import {
   pgListPoolTasks,
   pgListReviewInbox,
   pgListCompletedToday,
+  pgGetTask,
+  pgHasPriorFailure,
+  pgGetTaskChildren,
   pgListManuals,
   pgStudentNameMap,
   pgStaffNameMap,
@@ -5201,6 +5204,9 @@ export async function claimTask(taskId: string, staffId: string): Promise<{ ok: 
 
 export async function hasPriorFailure(studentId: string | null, typeLabel: string, excludeTaskId: string): Promise<boolean> {
   if (!studentId) return false;
+  if (getDbProvider() === "postgres") {
+    return pgHasPriorFailure(studentId, typeLabel, excludeTaskId);
+  }
   const records = await queryAllPages({
     data_source_id: DB.TODO,
     filter: {
@@ -5258,6 +5264,10 @@ export async function acknowledgeTask(taskId: string): Promise<void> {
 }
 
 export async function getTask(taskId: string): Promise<TaskRecord | null> {
+  if (getDbProvider() === "postgres") {
+    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
+    return (await pgGetTask(taskId, names, staffMap)) as unknown as TaskRecord | null;
+  }
   const page: any = await notion.pages.retrieve({ page_id: taskId }).catch(() => null);
   if (!page) return null;
   const [names, staffMap] = await Promise.all([studentNameMap(), staffNameMap()]);
@@ -5269,6 +5279,13 @@ export async function getTask(taskId: string): Promise<TaskRecord | null> {
 export async function getTaskThread(taskId: string): Promise<TaskRecord[]> {
   const root = await getTask(taskId);
   if (!root) return [];
+  if (getDbProvider() === "postgres") {
+    const rootPgId = await pgResolveRelationId("TODO", taskId);
+    if (!rootPgId) return [root];
+    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
+    const children = await pgGetTaskChildren(rootPgId, names, staffMap);
+    return [root, ...(children as unknown as TaskRecord[])];
+  }
   const children = await queryAllPages({
     data_source_id: DB.TODO,
     filter: { property: "상위업무", relation: { contains: taskId } },

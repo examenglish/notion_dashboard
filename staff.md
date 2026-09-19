@@ -4,20 +4,18 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (**PART 10 신규, 긴급 버그 수정** — Phase 3
-착수 전 기존 기능 점검 중 발견: `pgListMyTasks`/`pgListPoolTasks`가
-"내 업무"/"공용업무" 필터에 AI 업무운영 13종(암기확인 등) 대신 정반대로
-옛 "일정"류 8종(보강/재시 등)을 쓰고 있었다 — PART 8에서 createTasks를
-postgres-primary로 바꾼 뒤로 새로 만든 업무가 화면에서 전부 안 보이는
-실제 버그였음(원인은 이번 세션 이전부터 있던 코드, 이번에 발견/수정).
-`listReviewInbox`/`listCompletedToday`도 여전히 Notion 전용이라 같은
-문제(Notion 미러 영구실패 유형은 검토함/완료탭에 영원히 안 뜸) —
-전부 postgres-primary로 전환. 테스트 4건 추가(35/35 통과). Phase
-2(PART 8, 실측 9.9초→3.96초)/Account Menu(PART 9) 완료 처리는 유지.
-다음은 Phase 3(업무 자동배정 엔진 + 상황판) — 기존 `lib/task-routing.ts`
-(근무시간 기반 결정론적 배정)와 `/director/tasks` 보드가 이미 상당 부분
-구현돼 있음 확인, 진짜 gap 파악 중. `supabase/schema/
-004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 10"
+마지막 업데이트: 2026-09-19 (**PART 11 신규, 더 심각한 버그 수정** —
+Phase 3 audit 중 발견: `getTask`(업무 상세 조회, `GET /api/tasks/[id]`가
+씀)가 여전히 100% Notion 전용(`notion.pages.retrieve`)이라, postgres-primary로
+생성된 업무(notion_id가 없거나 암기확인처럼 미러가 영구실패하는 유형)는
+**업무 상세를 열 수도, 완료 처리도 할 수 없었다**(`completeTaskEntry`
+라우트가 먼저 `getTask`로 학생/유형을 읽으므로 그 자체가 404로 막힘) —
+PART 10의 "목록엔 뜨지만 클릭하면 깨짐"에 이어지는, 사실상 더 치명적인
+gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
+이력)도 같은 문제라 전부 dual-id(postgres-primary) 지원 추가. 테스트
+6건 추가(41/41 통과). PART 10(AI 업무 필터 버그)/PART 8(Phase 2 실측)/
+PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
+004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
 
 ---
@@ -152,6 +150,69 @@ student-levels}/page.tsx`)는 **한 줄도 안 고쳤다** — `<TopBar active="
 ### 신규/변경 파일 (3차)
 `app/director/page.tsx`(DirectorUserMenu import + floating wrapper),
 `app/globals.css`(`.ai-account-menu-float` 추가).
+
+---
+
+## PART 11 — 업무 상세/완료/재시 승격/후속업무 이력이 postgres-primary 업무에서 전부 막혀있던 문제 수정 (2026-09-19)
+
+### 발견 경위
+원장 지시(Phase 3 진행)의 audit 항목 3("업무 생성 후 상황판까지 lifecycle
+전체 추적")과 8("displayId 규약이 상세/완료/검토함/후속업무 전 경로에서
+정상 동작하는지")을 따라가다가 발견. `GET /api/tasks/[id]`(업무 상세,
+`TaskDetailModal`이 씀) → `getTaskThread` → `getTask` 체인을 읽어보니:
+
+```ts
+export async function getTask(taskId: string): Promise<TaskRecord | null> {
+  const page: any = await notion.pages.retrieve({ page_id: taskId }).catch(() => null);
+  ...
+}
+```
+
+`getDbProvider()` 분기가 아예 없다 — **postgres-primary로 생성돼
+notion_id가 없는 업무(암기확인처럼 Notion 미러가 구조적으로 영구
+실패하는 유형 포함)는 `taskId`가 Notion page id가 아니므로
+`notion.pages.retrieve`가 무조건 실패 → `getTask`가 null → 업무 상세가
+항상 404.** 더 심각한 건 `POST /api/tasks/[id]/complete`(완료 처리)도
+맨 앞에서 `getTask(params.id)`로 학생/유형을 읽으므로, **완료 처리 자체가
+이 시점에서 막힌다** — PART 10에서 "목록엔 뜨게" 고쳤지만 클릭해서
+열거나 완료 처리하는 순간 다시 깨지는 구조였다. `hasPriorFailure`(재시
+자동 URGENT 승격, 섹션11)와 `getTaskThread`의 후속업무 조회도 같은
+Notion 전용 구조라 동일 문제.
+
+(참고로 `claimTask`/`acknowledgeTask`/`completeTaskEntry` 자체의 postgres
+쓰기 경로는 이미 `pgPatchByNotionId`를 통해 PART 6의 dual-id resolver
+혜택을 받고 있어 정상이었다 — 문제는 오직 이 세 READ 함수.)
+
+### 수정 내용
+1. `lib/supabasePgRead.ts`에 3개 함수 신규 추가, 전부 `pgGetStudent`와
+   동일한 `or=(notion_id.eq.X,id.eq.X)` dual-id 조회 + branch_id 스코프
+   규약:
+   - `pgGetTask(taskId, ...)` — 업무 상세.
+   - `pgHasPriorFailure(studentId, typeLabel, excludeTaskId)` — 같은
+     학생·유형의 과거 REVIEW등급 완료 이력 조회(`student_notion_ids`
+     배열에 `cs.` 연산자로 포함 여부 확인).
+   - `pgGetTaskChildren(parentPgId, ...)` — `parent_task_id`(네이티브 FK)
+     기준 후속업무.
+2. `lib/notion.ts`의 `getTask`/`hasPriorFailure`/`getTaskThread`에
+   `getDbProvider()==="postgres"` 분기 추가, Notion 코드는 그대로 폴백.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(41/41, 이번에 6건 추가 — native UUID로
+상세 조회, legacy notion_id로 상세 조회, id 문자열 충돌 시 branch 격리,
+재시 실패이력 탐지, 본인 제외, 후속업무 조회)/`npm run build` 전부 통과.
+
+### ⬜ 미완료 — 다음 세션(또는 원장)이 확인할 것
+브라우저로 로그인해서 (1) "내 업무"에서 방금 만든 암기확인 같은 업무를
+실제로 클릭해서 상세가 열리는지, (2) 완료 처리가 정상 동작하는지 직접
+확인 — 코드/테스트 레벨 검증까지만 했다. PART 10과 마찬가지로 이
+버그가 실제로 얼마나 오래(어느 정도 규모로) 운영에 영향을 줬는지는
+로그로 확인 불가.
+
+### 신규/변경 파일
+`lib/supabasePgRead.ts`(`pgGetTask`/`pgHasPriorFailure`/`pgGetTaskChildren`
+신규), `lib/notion.ts`(`getTask`/`hasPriorFailure`/`getTaskThread`에
+postgres 분기), `lib/supabasePgRead.test.ts`(6건 추가 + fake fetch에
+`cs.` 배열-포함 연산자 지원 추가).
 
 ---
 

@@ -7,6 +7,13 @@ import { displayId } from "./supabasePgRead";
 type Row = Record<string, unknown> & { id: string; notion_id: string | null; branch_id: string };
 
 function parseClause(clause: string, row: Row): boolean {
+  const csMatch = clause.match(/^([a-z_]+)\.cs\.\{(.*)\}$/);
+  if (csMatch) {
+    const [, col, rawVal] = csMatch;
+    const v = decodeURIComponent(rawVal);
+    const cell = row[col];
+    return Array.isArray(cell) && cell.includes(v);
+  }
   const m = clause.match(/^([a-z_]+)\.eq\.(.*)$/);
   if (!m) throw new Error(`fake-fetch: unsupported clause "${clause}"`);
   const [, col, rawVal] = m;
@@ -249,5 +256,91 @@ describe("pgListMyTasks/pgListPoolTasks/pgListReviewInbox — AI 업무 유형 �
 
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe("pg-t4");
+  });
+});
+
+describe("pgGetTask/pgHasPriorFailure/pgGetTaskChildren — dual-id + branch isolation (staff.md PART 11)", () => {
+  let tables: Record<string, Row[]>;
+
+  beforeEach(() => {
+    tables = {
+      tasks: [
+        // notion 미러가 아직 없는(또는 영구실패하는, 암기확인 같은) postgres-primary 업무.
+        { id: "pg-task-new", notion_id: null, branch_id: "branch-sajik", type: "암기확인", complete: false, pool: false, staff_notion_ids: ["staff-1"], student_notion_ids: ["student-1"], director_ack: false, outcome: null, urgent: false },
+        // 기존(legacy) 업무 — notion_id 있음.
+        { id: "pg-task-legacy", notion_id: "notion-task-legacy", branch_id: "branch-sajik", type: "재시험", complete: true, pool: false, staff_notion_ids: ["staff-1"], student_notion_ids: ["student-1"], director_ack: false, outcome: "미통과", urgent: false },
+        // 같은 id 문자열이 다른 지점에도 존재(충돌 테스트).
+        { id: "pg-task-new", notion_id: null, branch_id: "branch-geumjeong", type: "암기확인", complete: false, pool: false, staff_notion_ids: ["staff-geumjeong"], student_notion_ids: [], director_ack: false, outcome: null, urgent: false },
+        // 후속업무(부모: pg-task-legacy).
+        { id: "pg-task-followup", notion_id: null, branch_id: "branch-sajik", type: "재시험", complete: false, pool: false, staff_notion_ids: [], student_notion_ids: ["student-1"], director_ack: false, outcome: null, urgent: false, parent_task_id: "pg-task-legacy" },
+      ],
+    };
+    process.env.SUPABASE_URL = "https://fake.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-key";
+    process.env.ACADEMY_BRANCH_ID = "sajik";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    delete process.env.ACADEMY_BRANCH_ID;
+  });
+
+  it("pgGetTask: native postgres UUID(notion_id 없음)로도 조회된다 — 2026-09-19 이전엔 이 경로가 Notion 전용이라 항상 404였음", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgGetTask } = await import("./supabasePgRead");
+
+    const task = await pgGetTask("pg-task-new", new Map(), new Map());
+    expect(task?.typeLabel).toBe("암기확인");
+    expect(task?.id).toBe("pg-task-new");
+  });
+
+  it("pgGetTask: legacy notion_id로도 그대로 조회된다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgGetTask } = await import("./supabasePgRead");
+
+    const task = await pgGetTask("notion-task-legacy", new Map(), new Map());
+    expect(task?.id).toBe("notion-task-legacy");
+    expect(task?.done).toBe(true);
+  });
+
+  it("pgGetTask: id 문자열이 같아도 다른 지점 업무를 절대 섞지 않는다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgGetTask } = await import("./supabasePgRead");
+
+    const task = await pgGetTask("pg-task-new", new Map(), new Map());
+    expect(task?.ownerId).not.toBe("staff-geumjeong");
+  });
+
+  it("pgHasPriorFailure: 같은 학생·같은 유형의 과거 REVIEW 등급 완료 이력을 찾는다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgHasPriorFailure } = await import("./supabasePgRead");
+
+    const result = await pgHasPriorFailure("student-1", "재시험", "some-other-task-id");
+    expect(result).toBe(true); // pg-task-legacy: 재시험/완료/미통과(REVIEW 등급)
+  });
+
+  it("pgHasPriorFailure: 지금 완료 처리 중인 업무 자기 자신은 제외한다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgHasPriorFailure } = await import("./supabasePgRead");
+
+    const result = await pgHasPriorFailure("student-1", "재시험", "notion-task-legacy");
+    expect(result).toBe(false);
+  });
+
+  it("pgGetTaskChildren: 상위업무(parent_task_id) 기준 후속업무를 찾는다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgGetTaskChildren } = await import("./supabasePgRead");
+
+    const children = await pgGetTaskChildren("pg-task-legacy", new Map(), new Map());
+    expect(children).toHaveLength(1);
+    expect(children[0].id).toBe("pg-task-followup");
   });
 });
