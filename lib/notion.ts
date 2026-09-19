@@ -74,6 +74,8 @@ import {
   pgListStaff,
   pgListMyTasks,
   pgListPoolTasks,
+  pgListReviewInbox,
+  pgListCompletedToday,
   pgListManuals,
   pgStudentNameMap,
   pgStaffNameMap,
@@ -5279,6 +5281,10 @@ export async function getTaskThread(taskId: string): Promise<TaskRecord[]> {
 // REVIEW/URGENT로 분류되는 것만 돌려준다 — NORMAL 완료는 원장 화면에 아예
 // 올라가지 않는다(알림 폭탄 방지, 섹션15와 동일한 원칙).
 export async function listReviewInbox(): Promise<TaskRecord[]> {
+  if (getDbProvider() === "postgres") {
+    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
+    return pgListReviewInbox(names, staffMap) as unknown as TaskRecord[];
+  }
   const records = await queryAllPages({
     data_source_id: DB.TODO,
     filter: {
@@ -5297,6 +5303,10 @@ export async function listReviewInbox(): Promise<TaskRecord[]> {
 
 // "완료" 탭(섹션7) — 오늘 내가 처리한 업무만 보여준다(전체 이력이 아님).
 export async function listCompletedToday(staffId: string, date: string): Promise<TaskRecord[]> {
+  if (getDbProvider() === "postgres") {
+    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
+    return pgListCompletedToday(staffId, date, names, staffMap) as unknown as TaskRecord[];
+  }
   const records = await queryAllPages({
     data_source_id: DB.TODO,
     filter: {

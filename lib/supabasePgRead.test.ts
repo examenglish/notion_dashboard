@@ -10,7 +10,15 @@ function parseClause(clause: string, row: Row): boolean {
   const m = clause.match(/^([a-z_]+)\.eq\.(.*)$/);
   if (!m) throw new Error(`fake-fetch: unsupported clause "${clause}"`);
   const [, col, rawVal] = m;
-  return row[col] === decodeURIComponent(rawVal);
+  const decoded = decodeURIComponent(rawVal);
+  // PostgREST의 eq.true/eq.false는 실제 컬럼이 boolean이면 boolean으로
+  // 비교돼야 한다 — 문자열 "false"와 boolean false는 다른 값이라 그냥
+  // 문자열 비교만 하면 boolean 컬럼(complete/pool/director_ack/urgent 등)
+  // 필터가 전부 실패한다.
+  if (decoded === "true" || decoded === "false") {
+    return row[col] === (decoded === "true");
+  }
+  return row[col] === decoded;
 }
 
 function makeFakeFetch(tables: Record<string, Row[]>) {
@@ -168,5 +176,78 @@ describe("pgListNlRosterStudents — nl-roster 2.7초 병목 회귀 방지 (staf
 
     const rows = await pgListNlRosterStudents();
     expect(rows[0].id).toBe("notion-s1");
+  });
+});
+
+describe("pgListMyTasks/pgListPoolTasks/pgListReviewInbox — AI 업무 유형 필터 버그 수정 (staff.md PART 10)", () => {
+  let tables: Record<string, Row[]>;
+
+  beforeEach(() => {
+    tables = {
+      tasks: [
+        // AI 업무운영 시스템이 만든 업무(13종 중 하나, 이번에 postgres-primary로
+        // 전환됨) — "내 업무"/"공용업무"/"검토함"에 반드시 보여야 한다.
+        { id: "pg-t1", notion_id: null, branch_id: "branch-sajik", type: "암기확인", complete: false, pool: false, staff_notion_ids: ["staff-1"], student_notion_ids: [], director_ack: false, outcome: null, urgent: false },
+        // 기존 "일정"류(보강) — 대시보드 "오늘의 일정"에 이미 따로 나오므로
+        // "내 업무"에는 섞이면 안 된다.
+        { id: "pg-t2", notion_id: "notion-t2", branch_id: "branch-sajik", type: "보강", complete: false, pool: false, staff_notion_ids: ["staff-1"], student_notion_ids: [], director_ack: false, outcome: null, urgent: false },
+        // 공용업무풀 — 담당자 미배정 AI 업무.
+        { id: "pg-t3", notion_id: null, branch_id: "branch-sajik", type: "출력", complete: false, pool: true, staff_notion_ids: [], student_notion_ids: [], director_ack: false, outcome: null, urgent: false },
+        // 완료됐지만 원장 미확인 + REVIEW 등급(부분통과) — 검토함에 떠야 한다.
+        { id: "pg-t4", notion_id: null, branch_id: "branch-sajik", type: "암기확인", complete: true, pool: false, staff_notion_ids: ["staff-1"], student_notion_ids: [], director_ack: false, outcome: "부분통과", urgent: false },
+      ],
+    };
+    process.env.SUPABASE_URL = "https://fake.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-key";
+    process.env.ACADEMY_BRANCH_ID = "sajik";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    delete process.env.ACADEMY_BRANCH_ID;
+  });
+
+  it("pgListMyTasks: AI 업무(암기확인)는 포함하고 일정류(보강)는 제외한다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgListMyTasks } = await import("./supabasePgRead");
+
+    const rows = await pgListMyTasks("staff-1", new Map(), new Map());
+
+    expect(rows.map((r) => r.typeLabel)).toEqual(["암기확인"]);
+  });
+
+  it("pgListMyTasks: notion_id가 아직 없는 postgres-primary 업무도 id가 null이 아니다(displayId 폴백)", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgListMyTasks } = await import("./supabasePgRead");
+
+    const rows = await pgListMyTasks("staff-1", new Map(), new Map());
+
+    expect(rows[0].id).toBe("pg-t1"); // notion_id: null -> postgres id로 폴백
+  });
+
+  it("pgListPoolTasks: 담당자 없는 AI 업무만 뜬다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgListPoolTasks } = await import("./supabasePgRead");
+
+    const rows = await pgListPoolTasks(new Map(), new Map());
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].typeLabel).toBe("출력");
+  });
+
+  it("pgListReviewInbox: 완료+원장미확인+REVIEW등급인 업무만 뜬다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgListReviewInbox } = await import("./supabasePgRead");
+
+    const rows = await pgListReviewInbox(new Map(), new Map());
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe("pg-t4");
   });
 });

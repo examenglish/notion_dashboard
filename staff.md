@@ -4,15 +4,21 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (**Phase 2(자연어 입력 최적화) 완료 처리** —
-PART 8에 실측 재측정 결과 추가: 총 응답시간 9.9초→3.96초(-60%), LLM
-호출 2회→1회(구조적으로 확인), roster 조회 2,727ms→1,804ms, 500 재발
-없음. multi-intent/암기확인/query-verify/Notion-미러-실패-격리/branch-isolation
-테스트 8+9+3건 추가(31/31 통과). Account Menu(PART 9)는 완료 처리 —
-`/director/*`, 구 디자인 4화면, `/director` 첫화면 전부 적용 완료. 다음은
-Phase 3(업무 자동배정 엔진 + 상황판) 착수. `supabase/schema/
-004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 8"
-재측정 섹션 먼저 확인)
+마지막 업데이트: 2026-09-19 (**PART 10 신규, 긴급 버그 수정** — Phase 3
+착수 전 기존 기능 점검 중 발견: `pgListMyTasks`/`pgListPoolTasks`가
+"내 업무"/"공용업무" 필터에 AI 업무운영 13종(암기확인 등) 대신 정반대로
+옛 "일정"류 8종(보강/재시 등)을 쓰고 있었다 — PART 8에서 createTasks를
+postgres-primary로 바꾼 뒤로 새로 만든 업무가 화면에서 전부 안 보이는
+실제 버그였음(원인은 이번 세션 이전부터 있던 코드, 이번에 발견/수정).
+`listReviewInbox`/`listCompletedToday`도 여전히 Notion 전용이라 같은
+문제(Notion 미러 영구실패 유형은 검토함/완료탭에 영원히 안 뜸) —
+전부 postgres-primary로 전환. 테스트 4건 추가(35/35 통과). Phase
+2(PART 8, 실측 9.9초→3.96초)/Account Menu(PART 9) 완료 처리는 유지.
+다음은 Phase 3(업무 자동배정 엔진 + 상황판) — 기존 `lib/task-routing.ts`
+(근무시간 기반 결정론적 배정)와 `/director/tasks` 보드가 이미 상당 부분
+구현돼 있음 확인, 진짜 gap 파악 중. `supabase/schema/
+004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 10"
+먼저 확인)
 
 ---
 
@@ -146,6 +152,85 @@ student-levels}/page.tsx`)는 **한 줄도 안 고쳤다** — `<TopBar active="
 ### 신규/변경 파일 (3차)
 `app/director/page.tsx`(DirectorUserMenu import + floating wrapper),
 `app/globals.css`(`.ai-account-menu-float` 추가).
+
+---
+
+## PART 10 — "내 업무"/"공용업무"/"검토함"/"완료" 탭 postgres-primary 전환 + AI 업무 유형 필터 버그 수정 (2026-09-19)
+
+### 발견 경위
+원장 지시대로 Phase 2 완료 후 Phase 3(업무 자동배정 엔진 + 상황판) 착수
+전, "이미 뭐가 있는지부터 확인"하려고 `lib/task-routing.ts`(routeTask,
+근무시간/반담당 기준 결정론적 배정 — 이미 PART 1에서 완성돼 운영 중)와
+`/director/tasks`(내 업무 보드, 이것도 PART 1에서 완성)를 읽어보다가
+`lib/supabasePgRead.ts`에서 발견:
+
+```
+const NEW_TASK_TYPE_LABELS = new Set(["보강","재시","신입생상담","레벨체크","클리닉","복습","조치사항","개인할일"]);
+...
+.filter((r) => NEW_TASK_TYPE_LABELS.has(r.type ?? ""))
+```
+
+이름과 반대로 이 8개는 "일정"류(createScheduleEntry가 만드는, 대시보드
+"오늘의 일정" 위젯이 이미 따로 보여주는 것들)고, `pgListMyTasks`/
+`pgListPoolTasks`("내 업무"/"공용업무" 보드가 쓰는 Postgres 조회 함수)가
+정작 걸러야 할 AI 업무운영 13종(`lib/tasks.ts`의 `TASK_TYPE_LABEL_LIST`
+— 암기확인/숙제확인/단어재시/재시험/출력/전달/자료수집/학부모연락/
+보충지도/시험범위확인/자료준비/업무상담/기타업무)은 필터에 아예 없었다.
+Notion 쪽 동일 함수(`listMyTasks`의 Notion 분기, `taskTypeOrFilter()`)는
+반대로 정확히 이 13종만 필터링 — 완전히 뒤바뀐 상태였다.
+
+**실제 영향**: PART 8에서 `createTasks`를 postgres-primary로 바꾼 뒤로
+(그리고 사실 그 이전에도 — dual-write가 이미 이 13종을 Postgres에도
+미러하고 있었으므로, `ACADEMY_DB_PROVIDER=postgres`가 켜진 시점부터
+계속) **AI가 만든 업무가 "내 업무"/"공용업무" 화면에 하나도 안 보였을
+가능성이 높다.** `git blame`상 이 필터는 2026-09-18 커밋
+(`63600e5`, "provider-switchable read path")에서 생겼다 — 그때부터
+지금까지 계속 이 상태였을 수 있다는 뜻. 정확히 언제부터 원장이 실제로
+이 증상을 겪었는지는 로그로 확인 못 했다(추측 아님, 그냥 확인 불가라고
+정직하게 남김).
+
+같은 파일의 `mapPgTask`도 `id: r.notion_id`를 그대로 썼다 — PART 6/8의
+`displayId()` 규약(notion_id가 아직 없으면 postgres 고유 id로 대체)이
+안 적용돼 있어서, postgres-primary로 막 생성된 업무는(미러 전이거나
+미러가 영구 실패하면 notion_id가 계속 null) 목록에 `id: null`로 나와
+클릭/완료 처리 같은 후속 동작이 깨졌을 것이다.
+
+### 수정 내용
+1. `lib/supabasePgRead.ts`: `NEW_TASK_TYPE_LABELS`(8개, 옛 일정류) →
+   `AI_TASK_TYPE_LABELS`(`TASK_TYPE_LABEL_LIST` 기반, 13개)로 교체.
+   `pgListMyTasks`/`pgListPoolTasks`에 적용. `mapPgTask`의 `id`를
+   `r.notion_id` → `displayId(r)`로 수정.
+2. `listReviewInbox`/`listCompletedToday`(lib/notion.ts)도 지금까지
+   Notion 전용이었다 — 완료됐지만 Notion 미러가 영구 실패하는 유형(예:
+   암기확인, Notion TODO db에 그 select 옵션 자체가 없음)은 검토함/완료
+   탭에 **영원히** 안 뜬다는 뜻이라 같이 postgres-primary로 전환.
+   `pgListReviewInbox`/`pgListCompletedToday`(신규, `lib/supabasePgRead.ts`)
+   추가 — 기존 `pgListMyTasks`/`pgListPoolTasks`와 동일한 `mapPgTask`/
+   `AI_TASK_TYPE_LABELS` 규약 재사용.
+3. 4개 함수(`listMyTasks`/`listPoolTasks`는 이미 PART 4~에서 전환됨,
+   이번엔 `listReviewInbox`/`listCompletedToday`) 전부
+   `getDbProvider()==="postgres"` 분기 + Notion-전용 폴백(코드는 안
+   건드림) 구조로 통일.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(35/35, 이번에 4건 추가 — 암기확인
+포함/보강 제외, notion_id null일 때 displayId 폴백, 공용업무풀 필터,
+검토함 REVIEW등급 필터)/`npm run build` 전부 통과.
+
+### ⬜ 미완료 — 다음 세션(또는 원장)이 확인할 것
+브라우저로 로그인해서 실제로 "내 업무"에 방금 만든 AI 업무(예: 암기확인)가
+뜨는지 직접 확인 — 이번 세션은 로그인 세션이 없어 코드/테스트 레벨
+검증까지만 했다. 특히 이 버그가 실제로 얼마나 오래 지속됐는지(운영에
+영향이 있었는지) 원장이 최근 "내 업무" 화면 기억과 대조해서 확인해주면
+좋음.
+
+### 신규/변경 파일
+`lib/supabasePgRead.ts`(`AI_TASK_TYPE_LABELS`, `mapPgTask` id 수정,
+`pgListReviewInbox`/`pgListCompletedToday` 신규), `lib/notion.ts`
+(`listReviewInbox`/`listCompletedToday`에 postgres 분기 추가),
+`lib/supabasePgRead.test.ts`(4건 추가 + 기존 fake-fetch의 boolean eq
+비교 버그도 같이 수정 — `eq.false`를 문자열 "false"와 비교해 boolean
+컬럼 필터가 전부 실패하던 것).
 
 ---
 

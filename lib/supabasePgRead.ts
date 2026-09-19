@@ -14,7 +14,7 @@
 // 중 "출결≠결석"이면 출석, "과제여부" 체크박스, "단어테스트결과=통과"
 // 비율 — 분모는 그 학생의 전체 일일기록 수(기간 제한 없음, "누적"이므로).
 import { branchCode } from "./supabaseRepo";
-import { taskTypeFromLabel } from "./tasks";
+import { taskTypeFromLabel, TASK_TYPE_LABEL_LIST, classifyFeedback } from "./tasks";
 import { todayKST } from "./date";
 import { stripClassSuffix } from "./format";
 
@@ -114,7 +114,8 @@ export async function pgStaffNameMap(): Promise<Map<string, string>> {
 }
 
 type PgTaskRow = {
-  notion_id: string;
+  id: string;
+  notion_id: string | null;
   staff_notion_ids: string[];
   student_notion_ids: string[];
   type: string | null;
@@ -132,14 +133,26 @@ type PgTaskRow = {
   source_payload: any;
 };
 
-const NEW_TASK_TYPE_LABELS = new Set(["보강", "재시", "신입생상담", "레벨체크", "클리닉", "복습", "조치사항", "개인할일"]);
+// "내 업무"/"공용업무"/"검토함"이 보여주는 대상은 AI 업무운영 시스템
+// (createTasks/routeTask, lib/tasks.ts TASK_TYPE_LABELS 13종)이 만든
+// 업무들이다 — 보강/재시/신입생상담/레벨체크 같은 "일정"류는 별도
+// 화면(대시보드 "오늘의 일정", getTodaySchedule)에 이미 나오므로 여기
+// 다시 섞으면 안 된다. 이전 버전은 이름과 반대로 그 "일정"류 8개를
+// 필터로 쓰고 있어서(NEW_TASK_TYPE_LABELS라는 이름과 달리 실제로는
+// "기존" 유형 목록), createTasks가 postgres-primary로 바뀐 뒤로 AI
+// 업무운영 업무가 "내 업무"에서 전부 안 보이는 버그가 있었다
+// (2026-09-19 발견, staff.md PART 10).
+const AI_TASK_TYPE_LABELS = new Set(TASK_TYPE_LABEL_LIST);
 
 function mapPgTask(r: PgTaskRow, studentNames: Map<string, string>, staffNames: Map<string, string>) {
   const studentId = r.student_notion_ids?.[0] ?? null;
   const ownerId = r.staff_notion_ids?.[0] ?? null;
   const typeLabel = r.type ?? "";
   return {
-    id: r.notion_id,
+    // notion_id가 아직 없을 수 있다(postgres-primary 생성 직후, 미러 대기/
+    // 영구실패) — 그 경우 postgres 고유 id로 대체(displayId, 이 파일 위쪽
+    // STUDENT/STAFF/CLASS에 이미 쓰던 것과 동일 규약).
+    id: displayId(r),
     type: taskTypeFromLabel(typeLabel),
     typeLabel,
     title: r.title ?? "",
@@ -164,7 +177,7 @@ export async function pgListMyTasks(staffNotionId: string, studentNames: Map<str
   const rows = (await pgFetch("tasks", "select=*&complete=eq.false")) as PgTaskRow[];
   return rows
     .filter(notArchived)
-    .filter((r) => NEW_TASK_TYPE_LABELS.has(r.type ?? ""))
+    .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
     .filter((r) => r.staff_notion_ids?.includes(staffNotionId))
     .map((r) => mapPgTask(r, studentNames, staffNames));
 }
@@ -173,7 +186,33 @@ export async function pgListPoolTasks(studentNames: Map<string, string>, staffNa
   const rows = (await pgFetch("tasks", "select=*&pool=eq.true&complete=eq.false")) as PgTaskRow[];
   return rows
     .filter(notArchived)
+    .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
     .filter((r) => !r.staff_notion_ids || r.staff_notion_ids.length === 0)
+    .map((r) => mapPgTask(r, studentNames, staffNames));
+}
+
+// listReviewInbox(lib/notion.ts)의 postgres 버전 — 완료됐지만 아직 원장이
+// 확인 안 한 업무 중 REVIEW/URGENT 등급만(classifyFeedback, 섹션11 규칙
+// 그대로). Notion 전용이던 걸 여기로 옮기지 않으면, 미러가 영구 실패하는
+// 업무유형(예: 암기확인)은 완료돼도 검토함에 영원히 안 뜬다.
+export async function pgListReviewInbox(studentNames: Map<string, string>, staffNames: Map<string, string>) {
+  const rows = (await pgFetch("tasks", "select=*&complete=eq.true&director_ack=eq.false")) as PgTaskRow[];
+  return rows
+    .filter(notArchived)
+    .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
+    .map((r) => mapPgTask(r, studentNames, staffNames))
+    .filter((t) => classifyFeedback({ outcome: t.outcome, urgentFlag: t.urgent }) !== "NORMAL");
+}
+
+// listCompletedToday(lib/notion.ts)의 postgres 버전 — "완료" 탭, 오늘 내가
+// 처리한 업무만(전체 이력 아님).
+export async function pgListCompletedToday(staffNotionId: string, date: string, studentNames: Map<string, string>, staffNames: Map<string, string>) {
+  const rows = (await pgFetch("tasks", "select=*&complete=eq.true")) as PgTaskRow[];
+  return rows
+    .filter(notArchived)
+    .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
+    .filter((r) => r.staff_notion_ids?.includes(staffNotionId))
+    .filter((r) => r.due_date === date)
     .map((r) => mapPgTask(r, studentNames, staffNames));
 }
 
