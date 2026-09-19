@@ -108,8 +108,16 @@ synced)가 순서대로 찍히는지로 정상 동작 여부를 바로 확인할
 build로 검증을 대체), `npm run build` 통과(에러/경고 없음).
 
 ### 배포 결과
-(아래는 실제 배포 실행 직후 갱신 — 이 섹션이 비어 있으면 아직 배포 전이라는
-뜻이니 다음 세션은 반드시 직접 `git log`/`vercel ls`로 배포 여부를 재확인할 것)
+commit `bd6921a` 기준으로 두 프로젝트 모두 production 배포 완료:
+- 금정(`notion-dashboard-geumjeong`): `dpl_4RAtPEySWYibe2FoRiipjJUh4AVn`,
+  `notion-dashboard-geumjeong-examenglish.vercel.app`로 정상 aliased.
+- 사직(`notion-dashboard`): `dpl_3N5rToGcTDp5NGufujm2ejq7gBNj`,
+  `staffsj.examenglishsj.co.kr`로 정상 aliased.
+- 스모크테스트: 양쪽 `/login` 200, `/api/staff`가 지점별로 다른 실제
+  직원 명단을 반환(교차 유출 없음 확인), `/api/classes`는 양쪽 다 401(로그인
+  필요 — 정상). 이번 변경은 자연어 입력 경로 내부 로직이라 로그인 세션
+  없이는 실사용 흐름(`/api/ai-input`) 자체를 직접 못 눌러봤다 — 위 "다음
+  세션에서 할 일" 1번과 동일한 이유.
 
 ### 다음 세션에서 할 일
 1. **실제 E2E 실측은 여전히 미완료.** 원장이 대시보드에서 자연어 입력을
