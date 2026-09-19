@@ -3025,7 +3025,7 @@ export async function deleteDailyRecordEntry(id: string) {
 // 시간을 운영한다. 이 섹션은 그 세션 기록(누구를, 무엇을, 다음엔 뭘 준비할지)과
 // 조교 개인의 "오늘 할 일 / 다음 준비사항" 브리핑, 담당강사의 점검 기능을 담당한다.
 
-function notionCreateClinicRecord(input: { assistantId: string; studentIds: string[]; teacherId?: string; date: string; content: string; nextPrep: string }, title: string) {
+function notionCreateClinicRecord(input: { assistantId: string; studentIds: string[]; teacherId?: string; date: string; content: string; nextPrep: string; relatedTaskId?: string }, title: string) {
   return notion.pages.create({
     parent: { data_source_id: DB.CLINIC } as any,
     properties: {
@@ -3033,6 +3033,7 @@ function notionCreateClinicRecord(input: { assistantId: string; studentIds: stri
       조교: { relation: [{ id: input.assistantId }] },
       ...(input.studentIds.length > 0 ? { 담당학생: { relation: input.studentIds.map((id) => ({ id })) } } : {}),
       ...(input.teacherId ? { 담당강사: { relation: [{ id: input.teacherId }] } } : {}),
+      ...(input.relatedTaskId ? { 관련업무: { relation: [{ id: input.relatedTaskId }] } } : {}),
       날짜: { date: { start: input.date } },
       진행내용: { rich_text: [{ text: { content: input.content } }] },
       ...(input.nextPrep ? { 다음준비사항: { rich_text: [{ text: { content: input.nextPrep } }] } } : {}),
@@ -3051,10 +3052,11 @@ export async function createClinicRecord(input: {
   relatedTaskId?: string;
 }) {
   if (getDbProvider() === "postgres") {
-    const [assistantRow, studentPgIds, teacherPgId] = await Promise.all([
+    const [assistantRow, studentPgIds, teacherPgId, taskPgId] = await Promise.all([
       pgGetByNotionId("STAFF", input.assistantId),
       Promise.all(input.studentIds.map((id) => pgResolveRelationId("STUDENT", id))),
       input.teacherId ? pgResolveRelationId("STAFF", input.teacherId) : Promise.resolve(null),
+      input.relatedTaskId ? pgResolveRelationId("TODO", input.relatedTaskId) : Promise.resolve(null),
     ]);
     const assistantName = (assistantRow?.name as string | undefined) ?? "-";
     // 담당학생 이름 표시는 studentNameMap()(Notion 재조회) 대신, 이미
@@ -3071,7 +3073,7 @@ export async function createClinicRecord(input: {
       student_notion_ids: input.studentIds,
       teacher_id: teacherPgId,
       teacher_notion_ids: input.teacherId ? [input.teacherId] : [],
-      task_id: null,
+      task_id: taskPgId,
       task_notion_ids: input.relatedTaskId ? [input.relatedTaskId] : [],
       record_date: input.date,
       content: input.content,
