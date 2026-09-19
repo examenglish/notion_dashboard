@@ -4,14 +4,13 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (PART 9 신규 — 우측 상단 Account Menu: 로그인
-사용자/역할/지점 상시 표시 + 비밀번호 변경/로그아웃. 새 컴포넌트 아님 —
-이미 있던 `DirectorUserMenu`/`DirectorTopbar`를 확장. PART 8: 실사고("암기확인"
-Notion select 옵션 누락으로 500) 원인 파악 후 구조적 수정 — createTasks
-postgres-primary 전환 + Notion best-effort 격리, 자연어 통합 입력 LLM 1회로
-병합(multi-intent), 결석확인 등 조회 intent 신설, nl-roster 2.7초 병목
-제거. `supabase/schema/004_manual_steps_title.sql`은 아직 미적용 — 계속
-blocker. 아래 "PART 9" 섹션 먼저 확인)
+마지막 업데이트: 2026-09-19 (PART 9 갱신 — Account Menu를 구 디자인 화면
+(/dashboard, /input, /exam-prep, /student-levels, `components/TopBar.tsx`)
+에도 확장. `/director/*`는 DirectorUserMenu(shadcn), 구 화면은 신규
+`components/AccountMenu.tsx`(순수 CSS) — 두 디자인 시스템이 CSS 로딩
+범위가 달라(director.css는 /director 전용) 하나를 억지로 공유하지 않고
+표시 내용/데이터 출처만 동일하게 맞췄다. `supabase/schema/004_manual_steps_title.sql`은
+아직 미적용 — 계속 blocker. 아래 "PART 9" 섹션 먼저 확인)
 
 ---
 
@@ -73,12 +72,47 @@ blocker. 아래 "PART 9" 섹션 먼저 확인)
 탭하면 전체 정보가 뜨는지 — 이번 세션은 로그인 세션이 없어 이 세 가지를
 직접 브라우저로 확인하지 못했다(코드/타입/빌드 검증까지만 완료).
 
-### 신규/변경 파일
+### 신규/변경 파일 (1차, /director/* 만)
 `components/director/DirectorUserMenu.tsx`(branchName prop, 2줄 레이아웃,
 비밀번호 변경 메뉴), `components/director/DirectorTopbar.tsx`(branchName
 전달), `app/director/{dashboard,tasks,students,exam-prep,student-levels,
 manuals,manuals/upload,manuals/[id]/review,input,reports,preview-test,
 students/preview-test}/page.tsx`(DirectorTopbar 호출에 branchName 추가).
+
+### 2차 확장 (2026-09-19, 같은 날) — 구 디자인 화면(/dashboard, /input, /exam-prep, /student-levels)에도 적용
+원장이 실제로 쓰는 화면은 `/director/*`가 아니라 `components/TopBar.tsx`를
+쓰는 구 디자인 4화면(`/dashboard`, `/input`, `/exam-prep`,
+`/student-levels`)이었다 — 1차 작업 범위가 실제 사용 화면을 놓쳤던 것.
+
+**왜 `DirectorUserMenu`를 그대로 재사용하지 않았는지**: `DirectorUserMenu`는
+shadcn 드롭다운 + Tailwind 클래스로 만들어져 있는데, Tailwind/shadcn 토큰은
+`app/director/director.css`를 통해 **`/director` 경로에만** 로드된다(그
+파일 자체 주석에 명시). 구 화면은 `app/globals.css`(순수 CSS 변수/클래스)
+체계라, `DirectorUserMenu`를 그대로 갖다 쓰면 CSS가 안 먹어서 스타일이
+깨진다. 그래서 신규 `components/AccountMenu.tsx`를 globals.css 변수
+(`--card`,`--border`,`--muted`,`--primary-tint` 등 기존 값 그대로)로
+따로 만들고, `TopBar.tsx`에서 기존 `{session?.name} ({session?.role})` +
+`LogoutButton` 자리를 이걸로 교체했다. **표시 내용/데이터 출처는
+`DirectorUserMenu`와 동일**(이름·역할·지점·비밀번호변경·로그아웃, 전부
+`getSession()`/`NEXT_PUBLIC_BRANCH_NAME`/`/change-pin`/`/api/logout`
+재사용, 새 인증/DB 없음) — UI 구현체만 CSS 시스템에 맞춰 둘로 나눴다.
+`LogoutButton.tsx`는 이제 아무 데서도 안 써서 삭제(orphan 코드 방치 안 함).
+
+`TopBar.tsx`는 이미 서버 컴포넌트에서 자체적으로 `getSession()`과
+`NEXT_PUBLIC_BRANCH_NAME`을 읽고 있어서(`/director/*`처럼 페이지마다
+prop을 넘길 필요 없이) 호출부(`app/{dashboard,input,exam-prep,
+student-levels}/page.tsx`)는 **한 줄도 안 고쳤다** — `<TopBar active="..."/>`
+그대로.
+
+**검증**: `tsc --noEmit`/`vitest run`(13/13)/`next build` 전부 통과.
+`/input`,`/dashboard`,`/director/input` 세 화면 모두 코드 레벨로 렌더 체인
+확인(각 page.tsx → TopBar/DirectorTopbar → AccountMenu/DirectorUserMenu).
+브라우저 클릭 확인은 이번에도 로그인 세션이 없어 못함(1차와 동일한 한계).
+
+### 신규/변경 파일 (2차)
+`components/AccountMenu.tsx`(신규, 순수 CSS 계정 메뉴), `components/TopBar.tsx`
+(AccountMenu로 교체), `app/globals.css`(`.account-menu-*` 스타일 추가),
+`components/LogoutButton.tsx`(삭제, 더 이상 참조 없음).
 
 ---
 
