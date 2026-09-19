@@ -4,7 +4,24 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (**PART 17 신규 — 자료제작(material_tasks)을
+마지막 업데이트: 2026-09-19 (**PART 18 신규 — Phase C(전수조사) + Phase D
+일부(학생 일일기록/시험성적/상담이력 READ, 대기생 승격 cron)를
+PostgreSQL-primary로 전환.** Phase C: `lib/notion.ts` 126개 export
+함수 전체를 스크립트로 분류(postgres 분기 있음/없음 + notion 호출 여부) —
+결과는 이 파일 "Phase C 분류 결과" 섹션에 전체 기록. 순수 Notion-only로
+남은 것: `getStudentFullHistory`(223줄, 학생 전체기록 보기 — 여러
+엔티티(일일기록/보강/조치사항/복습/클리닉/상담/행정실/Slack/시험대비)를
+한 번에 합치는 대형 함수라 이번 세션엔 손 못 댐, 다음 세션 최우선
+후보), `getClinicCompliance`/`getClinicCoverageGaps`(클리닉+TODO(+전체
+학생스캔) 혼합 분석), `getFiles`(단순 Notion property 추출 헬퍼,
+전환 대상 아님). Phase D 일부: `getStudentDailyRecords`/
+`getStudentExamScores`/`getRecentCounseling`/`promoteWaitlistedStudents`
+(대기생→재원 자동승격 cron)를 새 스키마 없이 전환. 덤:
+`findStaffIdByName`의 `row.notion_id` 버그 수정(PART 10/16/17과 동일
+종류). 테스트 7건 신규, 91/91 통과, tsc/build 통과. PART 17(자료제작+
+Storage)까지 완료 처리는 유지. 아래 "PART 18" 먼저 확인)
+
+이전 업데이트: 2026-09-19 (**PART 17 — 자료제작(material_tasks)을
 PostgreSQL-primary로 전환 + Supabase Storage 연동 코드 준비(⬜ BLOCKED:
 bucket 생성은 원장이 해야 함).** `createMaterialTask`/`listMaterialTasks`/
 `getMaterialTasksForDate`/`findStaffIdByName`(덤 버그 수정) 전환 완료.
@@ -128,6 +145,63 @@ gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
 PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
 004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
+
+---
+
+## PART 18 — Phase C 전수조사 + Phase D 일부 전환 (2026-09-19)
+
+### Phase C — lib/notion.ts 전수조사 방법/결과
+`lib/notion.ts`의 export 함수 126개를 스크립트로 훑어 각 함수 본문에
+`getDbProvider`/`getStudentReadProvider`/`getMaterialStorageProvider` 호출이
+있는지, `notion.pages/dataSources/fileUploads.*` 직접 호출이 있는지를
+자동 분류했다(휴리스틱 — 함수 경계를 다음 `export function`까지로 잡으므로
+근처의 module-level 헬퍼가 살짝 섞일 수 있음, 그래서 애매한 것들은 직접
+코드를 읽어 재확인함).
+
+**순수 Notion 전용으로 남은 것(우선순위순, 다음 세션이 이어갈 것):**
+1. `getStudentFullHistory`(lib/notion.ts, 223줄) — "학생 전체기록 보기"
+   팝업. DAILY_RECORD + TODO(보강/조치사항/복습/클리닉) + COUNSELING +
+   ADMIN_INBOX + CLINIC + SLACK_RECORDS + EXAM_PREP를 한 번에 합치는
+   대형 집계 함수. 하나씩 옮기려면 이번 세션에서 만든 여러 pg 헬퍼
+   (student_notion_ids cs. 패턴)를 재사용할 수 있지만, 엔티티가 8개라
+   시간이 걸림 — 다음 세션 최우선 후보로 남김(섣불리 절반만 건드리지
+   않음).
+2. `getClinicCompliance`/`getClinicCoverageGaps`(lib/notion.ts) — PART 14에서
+   이미 "클리닉+TODO(+STUDENT 전체스캔) 혼합이라 범위 밖"으로 명시적으로
+   미뤄뒀던 것, 여전히 미전환.
+3. `getPlannedAbsentStudentIds` — PART 13에서 이미 try/catch 안전망만
+   추가하고 전체 전환은 범위 밖으로 명시. ADMIN_INBOX 도메인.
+
+**"?:notion+pghelper-no-branch"로 분류됐지만 확인해보니 문제 없던 것:**
+`updateStaffPin`(PIN은 설계상 의도적으로 Notion에 평문 미러 안 함 — 로그인에
+쓰이는 `pin_hash`는 이미 별도 fireAndForget으로 postgres에 씀, PART 5),
+`findStudentByName`(`branchCode()` 게이트로 이미 postgres 우선, 안전 관련
+dedup 체크라 의도적으로 provider 무관하게 항상 postgres 확인),
+`findClassRecordGaps`(PART 13에서 이미 범위 밖으로 명시), `getBasicChecklist`
+(내부적으로 이미 provider-aware인 `listMyTasks`를 호출할 뿐, 직접
+Notion을 안 건드림).
+
+### Phase D 일부 — 새로 전환한 함수
+`getStudentDailyRecords`/`getStudentExamScores`(학생 상세 일일기록/시험성적,
+`student_notion_ids cs.` 패턴 재사용) / `getRecentCounseling`(상담 이력) /
+`promoteWaitlistedStudents`(대기생→재원 자동승격, `/api/cron/promote-waitlist`가
+매일 부르는 cron) — 전부 새 스키마 없이 기존 컬럼으로 전환.
+
+### 버그 수정(덤)
+`findStaffIdByName`이 `row.notion_id`를 그대로 반환해 postgres-primary로
+막 만든(notion_id 아직 없는) 직원을 이름으로 못 찾는 문제 — PART 10(tasks)/
+16(manuals)/17(material 담당자 배정)과 같은 종류. `createMaterialTask`의
+요청자/담당자 배정에 실제로 영향 줄 수 있었던 버그라 이번에 같이 잡음.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(91/91, 신규 7건 — 일일기록/시험성적
+날짜순 정렬+branch isolation, 상담이력 최신순+학생정보 채움, 대기생 승격
+날짜 조건/branch isolation/Notion 실패해도 유지)/`npm run build` 전부 통과.
+
+### 신규/변경 파일
+`lib/notion.ts`(`getStudentDailyRecords`/`getStudentExamScores`/
+`getRecentCounseling`/`promoteWaitlistedStudents`에 postgres 분기,
+`findStaffIdByName` 버그 수정), `lib/phaseD.postgres.test.ts`(신규, 7건).
 
 ---
 

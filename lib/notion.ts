@@ -856,6 +856,22 @@ export async function getStudent(id: string) {
 }
 
 export async function getStudentDailyRecords(studentId: string) {
+  if (getDbProvider() === "postgres") {
+    const rows = await pgQueryRaw("DAILY_RECORD", `student_notion_ids=cs.{${encodeURIComponent(studentId)}}`);
+    return rows
+      .filter(pgNotArchived)
+      .sort((a, b) => ((a.record_date as string) ?? "").localeCompare((b.record_date as string) ?? ""))
+      .slice(0, 100)
+      .map((r) => ({
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        date: (r.record_date as string | null) ?? null,
+        attendance: (r.attendance as string | null) ?? null,
+        homeworkDone: !!r.homework_done,
+        vocabResult: (r.vocab_result as string | null) ?? null,
+        achievement: (r.achievement as string) ?? "",
+        progress: (r.progress_content as string) ?? "",
+      }));
+  }
   const res = await notion.dataSources.query({
     data_source_id: DB.DAILY_RECORD,
     filter: {
@@ -1103,6 +1119,20 @@ export async function getStudentFullHistory(studentId: string) {
 }
 
 export async function getStudentExamScores(studentId: string) {
+  if (getDbProvider() === "postgres") {
+    const rows = await pgQueryRaw("EXAM_SCORE", `student_notion_ids=cs.{${encodeURIComponent(studentId)}}`);
+    return rows
+      .filter(pgNotArchived)
+      .sort((a, b) => ((a.exam_date as string) ?? "").localeCompare((b.exam_date as string) ?? ""))
+      .slice(0, 100)
+      .map((r) => ({
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        date: (r.exam_date as string | null) ?? null,
+        examName: (r.exam_name as string) ?? "",
+        subject: (r.subject as string | null) ?? null,
+        score: (r.score as number | null) ?? null,
+      }));
+  }
   const res = await notion.dataSources.query({
     data_source_id: DB.EXAM_SCORE,
     filter: {
@@ -2916,6 +2946,29 @@ export async function getRecentBriefings() {
 }
 
 export async function getRecentCounseling() {
+  if (getDbProvider() === "postgres") {
+    const [rows, names, briefs] = await Promise.all([pgQueryRaw("COUNSELING", "select=*"), studentNameMap(), studentSchoolGradeMap()]);
+    return rows
+      .filter(pgNotArchived)
+      .sort((a, b) => ((b.created_at as string) ?? "").localeCompare((a.created_at as string) ?? ""))
+      .map((r) => {
+        const studentId = (r.student_notion_ids as string[] | undefined)?.[0] ?? null;
+        const brief = studentId ? briefs.get(studentId) : undefined;
+        return {
+          id: (r.notion_id as string | null) ?? (r.id as string),
+          date: (r.record_date as string | null) ?? null,
+          studentId,
+          studentName: studentId ? names.get(studentId) ?? "-" : "-",
+          studentSchool: brief?.school ?? "",
+          studentGrade: brief?.grade ?? null,
+          counselor: (r.counselor as string) ?? "",
+          transcript: (r.transcript as string) ?? "",
+          content: (r.content as string) ?? "",
+          followUp: (r.follow_up as string) ?? "",
+          enteredBy: (r.entered_by as string) ?? "",
+        };
+      });
+  }
   const [results, names, briefs] = await Promise.all([
     queryAllPages({
       data_source_id: DB.COUNSELING,
@@ -3523,6 +3576,21 @@ export async function updateStudentFull(
 // StudentTable의 isNew 배지(등원일 기준 30일 이내)가 맡고 있으므로, 여기서는
 // 상태만 재원으로 바꿔주면 등원일 당일부터 그 배지가 자동으로 함께 뜬다.
 export async function promoteWaitlistedStudents(today: string): Promise<{ id: string; name: string }[]> {
+  if (getDbProvider() === "postgres") {
+    const rows = await pgQueryRaw("STUDENT", `status=eq.${encodeURIComponent("대기생")}&attendance_started_on=lte.${today}&attendance_started_on=not.is.null`);
+    const targets = rows.filter(pgNotArchived);
+    const promoted: { id: string; name: string }[] = [];
+    for (const row of targets) {
+      const id = (row.notion_id as string | null) ?? (row.id as string);
+      await pgPatchByNotionId("STUDENT", id, { status: "재원" });
+      fireAndForget("notion:promoteWaitlistedStudents", async () => {
+        const updated = await notion.pages.update({ page_id: id, properties: { 상태: { select: { name: "재원" } } } as any });
+        await dualWriteEntity("STUDENT", updated);
+      });
+      promoted.push({ id, name: (row.name as string) ?? "" });
+    }
+    return promoted;
+  }
   const results = await queryAllPages({
     data_source_id: DB.STUDENT,
     filter: {
