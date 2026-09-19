@@ -119,6 +119,49 @@ describe("runUnifiedNlInput — 암기확인 정상 처리(2026-09-19 사고 회
   });
 });
 
+describe("runUnifiedNlInput — intent.className을 기존 class_notion_ids relation으로 resolve", () => {
+  it("반 이름이 언급되면 roster에 있는 반 id로 resolve해 classIds로 전달한다", async () => {
+    vi.mocked(parseUnifiedInput).mockResolvedValue([
+      intent({ route: "task", taskType: "출력", students: ["김정우"], instruction: "출력", className: "천재조" }),
+    ]);
+    vi.mocked(createTasks).mockResolvedValue([{ id: "t-1", type: "PRINT", ownerId: null, pool: true }] as any);
+
+    await runUnifiedNlInput("김정우 천재조 출력");
+
+    const [inputs] = vi.mocked(createTasks).mock.calls[0];
+    expect(inputs[0].classIds).toEqual(["c-1"]);
+  });
+
+  it("roster(현재 branch)에 없는 반 이름은 다른 반으로 잘못 매칭하지 않고 classIds를 비워둔다(cross-branch 차단)", async () => {
+    vi.mocked(parseUnifiedInput).mockResolvedValue([
+      intent({ route: "task", taskType: "출력", students: ["김정우"], instruction: "출력", className: "다른지점반" }),
+    ]);
+    vi.mocked(createTasks).mockResolvedValue([{ id: "t-1", type: "PRINT", ownerId: null, pool: true }] as any);
+
+    await runUnifiedNlInput("김정우 다른지점반 출력");
+
+    const [inputs] = vi.mocked(createTasks).mock.calls[0];
+    expect(inputs[0].classIds).toBeUndefined();
+  });
+
+  it("여러 intent가 섞여도 각 intent의 className이 서로 섞이지 않는다", async () => {
+    vi.mocked(parseUnifiedInput).mockResolvedValue([
+      intent({ route: "task", taskType: "출력", students: ["김정우"], instruction: "출력", className: "천재조" }),
+      intent({ route: "task", taskType: "전달", students: ["신융"], instruction: "전달", className: "" }),
+    ]);
+    vi.mocked(createTasks).mockResolvedValue([
+      { id: "t-1", type: "PRINT", ownerId: null, pool: true },
+      { id: "t-2", type: "DELIVERY", ownerId: null, pool: true },
+    ] as any);
+
+    await runUnifiedNlInput("김정우 천재조 출력, 신융 전달");
+
+    const [inputs] = vi.mocked(createTasks).mock.calls[0];
+    expect(inputs[0].classIds).toEqual(["c-1"]);
+    expect(inputs[1].classIds).toBeUndefined();
+  });
+});
+
 describe("runUnifiedNlInput — 부분 실패 격리 (전체 500 방지)", () => {
   it("한 intent가 예외를 던져도 나머지 intent는 계속 처리된다", async () => {
     vi.mocked(parseUnifiedInput).mockResolvedValue([

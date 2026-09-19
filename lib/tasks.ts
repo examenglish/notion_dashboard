@@ -107,6 +107,9 @@ export type NewTaskInput = {
   // 한 건으로 묶을 때만 채운다. 있으면 studentId는 그중 대표(routeTask
   // 배정 판단용, 보통 첫 번째)이고 실제 관계 저장은 studentIds 전체를 쓴다.
   studentIds?: string[];
+  // 언급된 반(들). tasks.class_notion_ids(기존 컬럼, Notion "관련반" relation
+  // 미러)에 그대로 저장 — 새 컬럼 없이 기존 relation 필드 재사용.
+  classIds?: string[];
   content: string;
   date: string; // YYYY-MM-DD
   time: string; // "16:00" 또는 빈 문자열

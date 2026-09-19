@@ -4,7 +4,26 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (**PART 11 신규, 더 심각한 버그 수정** —
+마지막 업데이트: 2026-09-19 (**PART 12 신규 — Phase 3 마감: className 보류
+해소 + 관리자 담당자별 현황.** 원장 지시로 "intent.className이 정말 새
+스키마가 필요한지" 재검토 → `tasks.class_notion_ids`(text[])가 이미
+존재했고(Notion "관련반" relation 미러, migrate_notion_to_supabase.mjs
+T() 매핑에도 있음) `createTasks`/`TaskRecord`가 그냥 안 쓰고 있었을
+뿐이었다 — **새 컬럼/마이그레이션 없이** `NewTaskInput.classIds` →
+`pgInsertRow`/Notion mirror 관련반 relation, `TaskRecord.classId`/
+`className`(classNamePgMap/classNameMap 재사용)까지 다 연결. 자연어
+입력의 `intent.className`도 이제 같은 요청 안에서 이미 로드된 `classes`
+배열로 resolve(추가 쿼리 없음, branch_id로 자동 스코프). 두 번째로
+`/director/tasks`(원장/행정 전용, 강사/조교는 403)에 "담당자별 전체
+현황" 카드 추가 — 새 화면 대신 기존 TaskBoardClient/API 재사용, 새 함수
+`listAllOpenTasks`/`pgListAllOpenTasks`(담당자 유무 무관 미완료 AI
+업무 전체, branch_id 자동 스코프)만 추가. routeTask 순서/긴급 자동
+재배정 정책/학생부재 outcome enum은 지시대로 손대지 않음(학생부재는
+기존 memo 자유입력으로 이미 기록 가능, 확인만 하고 새 enum 안 만듦).
+테스트 6건 추가(47/47 통과), tsc/vitest/build 전부 통과. PART 11까지의
+내용은 유지. 아래 "PART 12" 먼저 확인)
+
+이전 업데이트: 2026-09-19 (**PART 11 — 더 심각한 버그 수정** —
 Phase 3 audit 중 발견: `getTask`(업무 상세 조회, `GET /api/tasks/[id]`가
 씀)가 여전히 100% Notion 전용(`notion.pages.retrieve`)이라, postgres-primary로
 생성된 업무(notion_id가 없거나 암기확인처럼 미러가 영구실패하는 유형)는
@@ -17,6 +36,116 @@ gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
 PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
 004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
+
+---
+
+## PART 12 — Phase 3 마감: className 보류 해소(새 스키마 없이) + 관리자 담당자별 현황 (2026-09-19)
+
+### 배경
+원장 지시(Phase 3 남은 gap 중 안전한 것만 마무리): (1) 자연어 입력이
+파싱해내는 `intent.className`이 지금까지 완전히 버려지고 있던 걸 "새
+스키마 필요"라고 단정하지 말고 기존 relation 필드로 되는지 재검토,
+(2) `/director/tasks`에 원장/행정 전용 "담당자별 전체 현황" 추가(새
+화면 금지, 기존 쿼리/UI 재사용), (3)(4) routeTask/긴급 재배정 정책/
+학생부재 outcome enum은 이번에 손대지 말 것, (5)(6) lifecycle
+재점검 + 테스트 + 검증 후 배포.
+
+### 1) className — 실제로는 새 스키마가 전혀 필요 없었다
+확인 결과:
+- `tasks.class_notion_ids text[]`(001_initial_schema.sql)가 이미
+  존재 — Notion TODO "관련반" relation의 미러 컬럼(`migrate_notion_to_
+  supabase.mjs`의 `TODO: {... class_notion_ids:rel(x,'관련반') ...}`
+  매핑에도 이미 있음). `ensureMakeupRequestForAbsence`(보강 자동생성)는
+  이미 이 필드를 쓰고 있었다 — AI 업무운영 13종(`createTasks`)과 자연어
+  입력(`runUnifiedNlInput`)만 안 쓰고 있었던 것.
+- `lib/anthropic.ts`의 `UNIFIED_INTENTS_TOOL`은 이미 `className`을
+  LLM에게 뽑아오고 있었는데(`UnifiedIntent.className`), `lib/nl-input.ts`
+  의 `runUnifiedNlInput` task 분기가 그 값을 아예 안 읽고 버리고
+  있었다(가장 큰 gap).
+- **새 컬럼/migration 없이** 구현:
+  - `lib/tasks.ts`: `NewTaskInput.classIds?: string[]` 추가.
+  - `lib/nl-input.ts`: 신규 `resolveClassIds(className, classes)` —
+    이미 그 요청 안에서 로드된 `getNlRoster()`의 `classes` 배열(이미
+    branch_id로 스코프됨, 추가 쿼리 없음)에서 `stripClassSuffix` 일치 →
+    실패시 부분일치로 완화. task case에서 호출해 `taskInputs`에
+    `classIds`로 전달. **각 intent가 독립적으로 for-loop 안에서 계산되므로
+    multi-intent 간 class context가 섞이지 않는다**(공유 가변 상태 없음,
+    테스트로 확인).
+  - `lib/notion.ts`의 `createTasks`(postgres-primary + legacy 양쪽)가
+    `input.classIds`를 `pgInsertRow`의 `class_notion_ids`와 Notion
+    mirror의 `관련반` relation에 반영.
+  - `TaskRecord`에 `classId`/`className` 필드 신규 추가.
+    `mapTaskPage`(Notion)/`mapPgTask`(Postgres) 둘 다 `classNameMap()`/
+    `classNamePgMap()`(기존에 학생 화면용으로 있던 걸 export만 추가)을
+    받아 채움. `listMyTasks`/`listPoolTasks`/`getTask`/`getTaskThread`/
+    `listReviewInbox`/`listCompletedToday` 전부(Notion+Postgres 양쪽
+    분기) 이 맵을 같이 조회하도록 스레딩.
+  - UI: `TaskDetailModal`/`TaskBoardClient`의 `TaskRow`에 className이
+    있으면 학생 이름 옆에 `(반이름)`으로 표시(기존 뱃지/텍스트 패턴
+    그대로, 새 컴포넌트 없음).
+- **dual-id/branch 안전성**: `class_notion_ids`에 저장하는 값은
+  `listClasses()`가 주는 `c.id`(displayId 규약 — notion_id 있으면
+  그것, 없으면 postgres 고유 id) 그대로라 기존 student_notion_ids/
+  staff_notion_ids 배열과 동일한 dual-id 패턴. resolve 자체가
+  `classes`(branch_id로 이미 스코프된 목록) 안에서만 이뤄지므로 다른
+  지점 반과 절대 안 섞인다(새 격리 로직 불필요 — 원래 구조가 이미
+  그렇게 되어 있었음).
+
+### 2) 관리자용 담당자별 전체 현황
+새 화면 대신 `/director/tasks`(`TaskBoardClient`)에 카드 추가, 원장/행정만
+보임(`isManager`, 기존 "확인할 피드백" 카드와 동일한 노출 조건 재사용).
+- `lib/supabasePgRead.ts`: `pgListAllOpenTasks`(신규) — `pgListMyTasks`/
+  `pgListPoolTasks`와 같은 `AI_TASK_TYPE_LABELS` 필터, 담당자 유무
+  조건만 없앰(branch 안의 미완료 AI 업무 전체). `lib/notion.ts`:
+  `listAllOpenTasks`(신규, postgres+legacy 양쪽 분기, 기존 함수들과
+  완전히 같은 패턴).
+- `app/api/tasks/route.ts`: `scope=byStaff` 추가, `scope=review`와
+  동일하게 서버에서 role 재검증(원장/행정 아니면 403) — 클라이언트
+  `isManager`는 UI 노출용일 뿐 실제 권한 경계는 API가 담당.
+  branch_id는 `pgFetch`가 이미 자동으로 붙이므로(기존 인프라) 여기서
+  새로 처리할 게 없었다.
+  강사/조교 계정으로 이 화면을 열어봐야 카드 자체가 안 보이고, URL을
+  직접 두드려도 403이 나는지는 브라우저 로그인 세션이 없어 코드 레벨
+  확인까지만 했다(아래 "미완료" 참고).
+- `TaskBoardClient`: "완료" 탭과 동일한 지연 로딩 패턴(버튼 클릭 시에만
+  fetch) — 담당자별로 미완료/긴급/지연 건수를 그룹핑해 테이블로 표시.
+  기존 `sortable-table`/`table-scroll` CSS 클래스 재사용(새 클래스 안
+  만듦).
+
+### 3)(4) 이번에 안 건드린 것 (지시대로)
+- `lib/task-routing.ts`(routeTask, 근무중→담당관계→workload→pool
+  결정론적 순서)와 긴급 업무 자동 재배정 정책: 전혀 손대지 않음.
+  긴급은 여전히 상황판 강조/정렬 우선/관리자 확인/Slack 알림 용도로만
+  쓰인다(기존 그대로).
+- "학생 부재" outcome: 확인만 함 — `TaskDetailModal`의 결과보고 버튼은
+  `outcomeOptionsFor(type)`(고정 select)만 쓰지만, 그 아래 `메모`
+  textarea(`tasks.memo`, 자유 텍스트)는 이미 있어서 "학생 부재"를
+  지금도 메모로 기록할 수 있다. 새 outcome enum 값은 추가하지 않았다
+  — 운영 규칙이 정해지면 별도 작업으로.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(47/47, 이번에 6건 추가 — className
+resolve/cross-branch 미매칭/multi-intent 독립성 3건, mapPgTask
+className 노출 2건, pgListAllOpenTasks branch isolation 1건)/
+`npm run build` 전부 통과.
+
+### ⬜ 미완료 — 다음 세션(또는 원장)이 확인할 것
+브라우저로 로그인해서 (1) 자연어 입력에 반 이름을 포함해 업무를 만들고
+상세/상황판에 `(반이름)`이 뜨는지, (2) 원장/행정 계정으로 "담당자별
+전체 현황" 버튼을 눌러 표가 정상적으로 뜨는지, (3) 강사/조교 계정으로는
+그 카드 자체가 안 보이는지 — 로그인 세션이 없어 이번 세션은 코드/타입/
+테스트/빌드 레벨 검증까지만 했다(PART 9~11과 동일한 한계).
+
+### 신규/변경 파일
+`lib/tasks.ts`(`NewTaskInput.classIds`), `lib/nl-input.ts`
+(`resolveClassIds`, task case에서 사용), `lib/notion.ts`(`createTasks`
+classIds 반영 양쪽 분기, `TaskRecord.classId/className`, `mapTaskPage`/
+6개 read 함수 classNames 스레딩, `listAllOpenTasks` 신규),
+`lib/supabasePgRead.ts`(`classNamePgMap` export, `mapPgTask`/6개 함수
+classNames 파라미터, `pgListAllOpenTasks` 신규), `app/api/tasks/route.ts`
+(`scope=byStaff`), `components/TaskDetailModal.tsx`/`components/director/
+TaskBoardClient.tsx`(className 표시, 담당자별 현황 카드),
+`lib/nl-input.unified.test.ts`/`lib/supabasePgRead.test.ts`(테스트 6건).
 
 ---
 

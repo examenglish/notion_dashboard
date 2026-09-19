@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readStaffId, readStaffRole } from "@/lib/session";
-import { listMyTasks, listPoolTasks, listReviewInbox, getBasicChecklist, listCompletedToday } from "@/lib/notion";
+import { listMyTasks, listPoolTasks, listReviewInbox, listAllOpenTasks, getBasicChecklist, listCompletedToday } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +27,13 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "권한이 없습니다." }, { status: 403 });
       }
       return NextResponse.json({ tasks: await listReviewInbox() });
+    }
+    if (scope === "byStaff") {
+      const role = readStaffRole(req);
+      if (role !== "원장" && role !== "행정") {
+        return NextResponse.json({ error: "권한이 없습니다." }, { status: 403 });
+      }
+      return NextResponse.json({ tasks: await listAllOpenTasks() });
     }
     if (scope === "checklist") {
       return NextResponse.json({ items: await getBasicChecklist(staffId, todayKST()) });

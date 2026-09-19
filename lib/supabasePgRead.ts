@@ -118,6 +118,7 @@ type PgTaskRow = {
   notion_id: string | null;
   staff_notion_ids: string[];
   student_notion_ids: string[];
+  class_notion_ids: string[];
   type: string | null;
   title: string | null;
   due_date: string | null;
@@ -144,9 +145,15 @@ type PgTaskRow = {
 // (2026-09-19 발견, staff.md PART 10).
 const AI_TASK_TYPE_LABELS = new Set(TASK_TYPE_LABEL_LIST);
 
-function mapPgTask(r: PgTaskRow, studentNames: Map<string, string>, staffNames: Map<string, string>) {
+function mapPgTask(
+  r: PgTaskRow,
+  studentNames: Map<string, string>,
+  staffNames: Map<string, string>,
+  classNames?: Map<string, string>
+) {
   const studentId = r.student_notion_ids?.[0] ?? null;
   const ownerId = r.staff_notion_ids?.[0] ?? null;
+  const classId = r.class_notion_ids?.[0] ?? null;
   const typeLabel = r.type ?? "";
   return {
     // notion_id가 아직 없을 수 있다(postgres-primary 생성 직후, 미러 대기/
@@ -170,50 +177,88 @@ function mapPgTask(r: PgTaskRow, studentNames: Map<string, string>, staffNames: 
     directorAck: !!r.director_ack,
     pool: !!r.pool,
     parentTaskId: r.parent_task_notion_ids?.[0] ?? null,
+    classId,
+    className: classId ? classNames?.get(classId) ?? "" : "",
   };
 }
 
-export async function pgListMyTasks(staffNotionId: string, studentNames: Map<string, string>, staffNames: Map<string, string>) {
+export async function pgListMyTasks(
+  staffNotionId: string,
+  studentNames: Map<string, string>,
+  staffNames: Map<string, string>,
+  classNames?: Map<string, string>
+) {
   const rows = (await pgFetch("tasks", "select=*&complete=eq.false")) as PgTaskRow[];
   return rows
     .filter(notArchived)
     .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
     .filter((r) => r.staff_notion_ids?.includes(staffNotionId))
-    .map((r) => mapPgTask(r, studentNames, staffNames));
+    .map((r) => mapPgTask(r, studentNames, staffNames, classNames));
 }
 
-export async function pgListPoolTasks(studentNames: Map<string, string>, staffNames: Map<string, string>) {
+// 관리자용 "담당자별 전체 현황"(원장/행정 전용) — pgListMyTasks(특정
+// staffId)/pgListPoolTasks(담당자 없음)와 달리 담당자 유무와 무관하게
+// branch 안의 미완료 AI 업무 전체를 돌려준다. 집계(누가 몇 건, 긴급/지연
+// 몇 건)는 호출부(컴포넌트)가 ownerId로 그룹핑해서 한다 — 여기서는 새
+// 쿼리/필터 조합만 추가한다.
+export async function pgListAllOpenTasks(
+  studentNames: Map<string, string>,
+  staffNames: Map<string, string>,
+  classNames?: Map<string, string>
+) {
+  const rows = (await pgFetch("tasks", "select=*&complete=eq.false")) as PgTaskRow[];
+  return rows
+    .filter(notArchived)
+    .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
+    .map((r) => mapPgTask(r, studentNames, staffNames, classNames));
+}
+
+export async function pgListPoolTasks(
+  studentNames: Map<string, string>,
+  staffNames: Map<string, string>,
+  classNames?: Map<string, string>
+) {
   const rows = (await pgFetch("tasks", "select=*&pool=eq.true&complete=eq.false")) as PgTaskRow[];
   return rows
     .filter(notArchived)
     .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
     .filter((r) => !r.staff_notion_ids || r.staff_notion_ids.length === 0)
-    .map((r) => mapPgTask(r, studentNames, staffNames));
+    .map((r) => mapPgTask(r, studentNames, staffNames, classNames));
 }
 
 // listReviewInbox(lib/notion.ts)의 postgres 버전 — 완료됐지만 아직 원장이
 // 확인 안 한 업무 중 REVIEW/URGENT 등급만(classifyFeedback, 섹션11 규칙
 // 그대로). Notion 전용이던 걸 여기로 옮기지 않으면, 미러가 영구 실패하는
 // 업무유형(예: 암기확인)은 완료돼도 검토함에 영원히 안 뜬다.
-export async function pgListReviewInbox(studentNames: Map<string, string>, staffNames: Map<string, string>) {
+export async function pgListReviewInbox(
+  studentNames: Map<string, string>,
+  staffNames: Map<string, string>,
+  classNames?: Map<string, string>
+) {
   const rows = (await pgFetch("tasks", "select=*&complete=eq.true&director_ack=eq.false")) as PgTaskRow[];
   return rows
     .filter(notArchived)
     .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
-    .map((r) => mapPgTask(r, studentNames, staffNames))
+    .map((r) => mapPgTask(r, studentNames, staffNames, classNames))
     .filter((t) => classifyFeedback({ outcome: t.outcome, urgentFlag: t.urgent }) !== "NORMAL");
 }
 
 // listCompletedToday(lib/notion.ts)의 postgres 버전 — "완료" 탭, 오늘 내가
 // 처리한 업무만(전체 이력 아님).
-export async function pgListCompletedToday(staffNotionId: string, date: string, studentNames: Map<string, string>, staffNames: Map<string, string>) {
+export async function pgListCompletedToday(
+  staffNotionId: string,
+  date: string,
+  studentNames: Map<string, string>,
+  staffNames: Map<string, string>,
+  classNames?: Map<string, string>
+) {
   const rows = (await pgFetch("tasks", "select=*&complete=eq.true")) as PgTaskRow[];
   return rows
     .filter(notArchived)
     .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
     .filter((r) => r.staff_notion_ids?.includes(staffNotionId))
     .filter((r) => r.due_date === date)
-    .map((r) => mapPgTask(r, studentNames, staffNames));
+    .map((r) => mapPgTask(r, studentNames, staffNames, classNames));
 }
 
 // getTask(lib/notion.ts)의 postgres 버전 — 업무 상세(TaskDetailModal)와
@@ -222,11 +267,16 @@ export async function pgListCompletedToday(staffNotionId: string, date: string, 
 // 뒤 Notion 미러가 아직 없거나(암기확인처럼 영구 실패) 완료 처리 자체가
 // "업무를 찾을 수 없습니다" 404로 막히는 버그가 있었다(2026-09-19 발견,
 // staff.md PART 11) — pgGetStudent와 동일한 dual-id(or notion_id/id) 조회로 수정.
-export async function pgGetTask(taskId: string, studentNames: Map<string, string>, staffNames: Map<string, string>) {
+export async function pgGetTask(
+  taskId: string,
+  studentNames: Map<string, string>,
+  staffNames: Map<string, string>,
+  classNames?: Map<string, string>
+) {
   const enc = encodeURIComponent(taskId);
   const rows = (await pgFetch("tasks", `or=(notion_id.eq.${enc},id.eq.${enc})&select=*`)) as PgTaskRow[];
   const row = rows.filter(notArchived)[0];
-  return row ? mapPgTask(row, studentNames, staffNames) : null;
+  return row ? mapPgTask(row, studentNames, staffNames, classNames) : null;
 }
 
 // hasPriorFailure(lib/notion.ts)의 postgres 버전 — 같은 학생·같은 업무유형의
@@ -243,9 +293,14 @@ export async function pgHasPriorFailure(studentId: string, typeLabel: string, ex
 
 // getTaskThread(lib/notion.ts)의 postgres 버전 — 상위업무(parent_task_id,
 // 네이티브 FK) 기준 후속업무 목록.
-export async function pgGetTaskChildren(parentPgId: string, studentNames: Map<string, string>, staffNames: Map<string, string>) {
+export async function pgGetTaskChildren(
+  parentPgId: string,
+  studentNames: Map<string, string>,
+  staffNames: Map<string, string>,
+  classNames?: Map<string, string>
+) {
   const rows = (await pgFetch("tasks", `select=*&parent_task_id=eq.${encodeURIComponent(parentPgId)}`)) as PgTaskRow[];
-  return rows.filter(notArchived).map((r) => mapPgTask(r, studentNames, staffNames));
+  return rows.filter(notArchived).map((r) => mapPgTask(r, studentNames, staffNames, classNames));
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -294,7 +349,7 @@ async function studentLatestExamMap(): Promise<Map<string, LatestExam>> {
   return map;
 }
 
-async function classNamePgMap(): Promise<Map<string, string>> {
+export async function classNamePgMap(): Promise<Map<string, string>> {
   const rows = await pgFetch("classes", "select=id,notion_id,name,source_payload");
   return new Map(
     rows.filter(notArchived).map((r) => [displayId(r), stripClassSuffix((r.name as string) ?? "")])

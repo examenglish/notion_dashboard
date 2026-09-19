@@ -106,6 +106,23 @@ function narrowCandidates(text: string, candidates: StudentInfo[], classNameById
   return pool;
 }
 
+// intent.className(LLM이 뽑은 반 이름 문자열)을 실제 반 id로 resolve한다.
+// classes는 이미 branch_id로 스코프된 getNlRoster() 결과이므로 이 매칭도
+// 자동으로 그 지점 반으로만 좁혀진다(다른 지점 반은 애초에 목록에 없음).
+// 정확히 일치하는 반이 없으면 부분 일치(접두/포함)로 완화해 찾는다 —
+// LLM이 접미사(반/조 등)를 붙이거나 뗀 형태로 돌려줄 수 있어서다.
+function resolveClassIds(className: string | undefined, classes: { id: string; name: string }[]): string[] {
+  const trimmed = className?.trim();
+  if (!trimmed) return [];
+  const exact = classes.filter((c) => stripClassSuffix(c.name) === trimmed);
+  if (exact.length > 0) return exact.map((c) => c.id);
+  const partial = classes.filter((c) => {
+    const cn = stripClassSuffix(c.name);
+    return cn.includes(trimmed) || trimmed.includes(cn);
+  });
+  return partial.map((c) => c.id);
+}
+
 type StudentResolution =
   | { kind: "resolved"; studentId: string }
   | { kind: "not_found"; name: string }
@@ -589,6 +606,7 @@ export async function runUnifiedNlInput(
           }
           const studentIds = resolved.map((s) => s.id);
           const forcePool = (intent.students?.length ?? 0) > 0 && studentIds.length === 0;
+          const classIds = resolveClassIds(intent.className, classes);
           const contentParts = [
             intent.instruction,
             intent.material ? `자료: ${intent.material}` : "",
@@ -599,6 +617,7 @@ export async function runUnifiedNlInput(
               type,
               studentId: studentIds[0] ?? null,
               studentIds: studentIds.length > 1 ? studentIds : undefined,
+              classIds: classIds.length > 0 ? classIds : undefined,
               content: contentParts.join(" / "),
               date: intent.date || today,
               time: intent.time || "",

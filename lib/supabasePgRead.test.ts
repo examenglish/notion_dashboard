@@ -344,3 +344,109 @@ describe("pgGetTask/pgHasPriorFailure/pgGetTaskChildren — dual-id + branch iso
     expect(children[0].id).toBe("pg-task-followup");
   });
 });
+
+describe("className: 기존 class_notion_ids relation을 TaskRecord.className으로 노출 (Phase 3 gap)", () => {
+  let tables: Record<string, Row[]>;
+
+  beforeEach(() => {
+    tables = {
+      tasks: [
+        {
+          id: "pg-task-class",
+          notion_id: null,
+          branch_id: "branch-sajik",
+          type: "출력",
+          complete: false,
+          pool: false,
+          staff_notion_ids: ["staff-1"],
+          student_notion_ids: ["student-1"],
+          class_notion_ids: ["class-1"],
+          director_ack: false,
+          outcome: null,
+          urgent: false,
+        },
+        {
+          id: "pg-task-noclass",
+          notion_id: null,
+          branch_id: "branch-sajik",
+          type: "전달",
+          complete: false,
+          pool: false,
+          staff_notion_ids: [],
+          student_notion_ids: [],
+          class_notion_ids: [],
+          director_ack: false,
+          outcome: null,
+          urgent: false,
+        },
+      ],
+    };
+    process.env.SUPABASE_URL = "https://fake.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-key";
+    process.env.ACADEMY_BRANCH_ID = "sajik";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    delete process.env.ACADEMY_BRANCH_ID;
+  });
+
+  it("class_notion_ids가 있으면 classNames map으로 className을 채운다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgGetTask } = await import("./supabasePgRead");
+
+    const task = await pgGetTask("pg-task-class", new Map(), new Map(), new Map([["class-1", "천재조"]]));
+    expect(task?.classId).toBe("class-1");
+    expect(task?.className).toBe("천재조");
+  });
+
+  it("반 relation이 없으면 className은 빈 문자열이다(추측 채움 금지)", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgGetTask } = await import("./supabasePgRead");
+
+    const task = await pgGetTask("pg-task-noclass", new Map(), new Map(), new Map([["class-1", "천재조"]]));
+    expect(task?.classId).toBeNull();
+    expect(task?.className).toBe("");
+  });
+});
+
+describe("pgListAllOpenTasks — 관리자 담당자별 현황용 전체 미완료 업무 (branch isolation)", () => {
+  let tables: Record<string, Row[]>;
+
+  beforeEach(() => {
+    tables = {
+      tasks: [
+        { id: "t-sajik-owned", notion_id: null, branch_id: "branch-sajik", type: "출력", complete: false, pool: false, staff_notion_ids: ["staff-1"], student_notion_ids: [] },
+        { id: "t-sajik-pool", notion_id: null, branch_id: "branch-sajik", type: "전달", complete: false, pool: true, staff_notion_ids: [], student_notion_ids: [] },
+        { id: "t-sajik-done", notion_id: null, branch_id: "branch-sajik", type: "출력", complete: true, pool: false, staff_notion_ids: ["staff-1"], student_notion_ids: [] },
+        { id: "t-geumjeong-owned", notion_id: null, branch_id: "branch-geumjeong", type: "출력", complete: false, pool: false, staff_notion_ids: ["staff-geumjeong"], student_notion_ids: [] },
+      ],
+    };
+    process.env.SUPABASE_URL = "https://fake.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-key";
+    process.env.ACADEMY_BRANCH_ID = "sajik";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    delete process.env.ACADEMY_BRANCH_ID;
+  });
+
+  it("담당자 배정 여부와 무관하게 자기 지점의 미완료 AI 업무만 전부 돌려준다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgListAllOpenTasks } = await import("./supabasePgRead");
+
+    const tasks = await pgListAllOpenTasks(new Map(), new Map());
+    const ids = tasks.map((t) => t.id).sort();
+    expect(ids).toEqual(["t-sajik-owned", "t-sajik-pool"]);
+    expect(ids).not.toContain("t-geumjeong-owned");
+    expect(ids).not.toContain("t-sajik-done");
+  });
+});

@@ -12,6 +12,7 @@ type TaskRecord = {
   typeLabel: string;
   title: string;
   studentName: string;
+  ownerId: string | null;
   ownerName: string;
   date: string | null;
   time: string;
@@ -23,6 +24,7 @@ type TaskRecord = {
   directorAck: boolean;
   pool: boolean;
   parentTaskId: string | null;
+  className?: string;
 };
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
@@ -33,6 +35,7 @@ function TaskRow({ task, onClick, badge }: { task: TaskRecord; onClick: () => vo
       <div>
         <span className="badge">{task.typeLabel}</span>{" "}
         {task.studentName && task.studentName !== "-" && <strong>{task.studentName}</strong>}
+        {task.className && <span className="muted"> ({task.className})</span>}
         {task.urgent && <span className="badge badge-urgent">긴급</span>}
         {badge && <span className="badge">{badge}</span>}
         <br />
@@ -73,6 +76,8 @@ export default function TaskBoardClient({
   const [reviewInbox, setReviewInbox] = useState(initialReviewInbox);
   const [completed, setCompleted] = useState<TaskRecord[] | null>(null);
   const [showCompleted, setShowCompleted] = useState(false);
+  const [byStaffTasks, setByStaffTasks] = useState<TaskRecord[] | null>(null);
+  const [showByStaff, setShowByStaff] = useState(false);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [claiming, setClaiming] = useState<string | null>(null);
 
@@ -87,6 +92,7 @@ export default function TaskBoardClient({
       fetch("/api/tasks?scope=review")
         .then((r) => r.json())
         .then((d) => setReviewInbox(d.tasks ?? []));
+      if (showByStaff) loadByStaff();
     }
     if (showCompleted) loadCompleted();
   }
@@ -96,6 +102,29 @@ export default function TaskBoardClient({
       .then((r) => r.json())
       .then((d) => setCompleted(d.tasks ?? []));
   }
+
+  function loadByStaff() {
+    fetch("/api/tasks?scope=byStaff")
+      .then((r) => r.json())
+      .then((d) => setByStaffTasks(d.tasks ?? []));
+  }
+
+  // 담당자별 집계(원장/행정 전용, 섹션6/7/11과 같은 데이터를 재사용해
+  // ownerId 기준으로 묶기만 한다 — 새 쿼리/화면일 뿐 새 필드는 없음).
+  const byStaffSummary = useMemo(() => {
+    if (!byStaffTasks) return [];
+    const map = new Map<string, { key: string; name: string; total: number; urgent: number; overdue: number }>();
+    for (const t of byStaffTasks) {
+      const key = t.ownerId ?? "__pool__";
+      const name = t.ownerId ? t.ownerName || "-" : "공용업무풀(미배정)";
+      const cur = map.get(key) ?? { key, name, total: 0, urgent: 0, overdue: 0 };
+      cur.total += 1;
+      if (t.urgent) cur.urgent += 1;
+      if (t.date && t.date < today) cur.overdue += 1;
+      map.set(key, cur);
+    }
+    return Array.from(map.values()).sort((a, b) => b.total - a.total);
+  }, [byStaffTasks, today]);
 
   async function claim(taskId: string) {
     setClaiming(taskId);
@@ -249,6 +278,52 @@ export default function TaskBoardClient({
           </ul>
         )}
       </div>
+
+      {isManager && (
+        <div className="card">
+          <h2>담당자별 전체 현황</h2>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              setShowByStaff((v) => !v);
+              if (!showByStaff) loadByStaff();
+            }}
+          >
+            {showByStaff ? "접기" : "전체 담당자 현황 보기"}
+          </button>
+          {showByStaff && (
+            <div className="table-scroll" style={{ marginTop: 10 }}>
+              {byStaffTasks === null ? (
+                <p className="muted">불러오는 중...</p>
+              ) : byStaffSummary.length === 0 ? (
+                <p className="muted">미완료 업무가 없습니다.</p>
+              ) : (
+                <table className="sortable-table">
+                  <thead>
+                    <tr>
+                      <th>담당자</th>
+                      <th>미완료</th>
+                      <th>긴급</th>
+                      <th>지연</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {byStaffSummary.map((s) => (
+                      <tr key={s.key}>
+                        <td>{s.name}</td>
+                        <td>{s.total}</td>
+                        <td>{s.urgent > 0 ? <span className="badge badge-urgent">{s.urgent}</span> : 0}</td>
+                        <td>{s.overdue > 0 ? <span className="badge badge-urgent">{s.overdue}</span> : 0}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="card">
         <h2>완료</h2>

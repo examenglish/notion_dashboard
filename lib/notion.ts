@@ -73,6 +73,7 @@ import {
   pgListClassesRaw,
   pgListStaff,
   pgListMyTasks,
+  pgListAllOpenTasks,
   pgListPoolTasks,
   pgListReviewInbox,
   pgListCompletedToday,
@@ -85,6 +86,7 @@ import {
   pgSearchStudents,
   pgGetStudent,
   pgListNlRosterStudents,
+  classNamePgMap,
   type NlRosterStudent,
 } from "./supabasePgRead";
 import { mark } from "./timing";
@@ -4887,11 +4889,19 @@ export type TaskRecord = {
   directorAck: boolean;
   pool: boolean;
   parentTaskId: string | null;
+  classId: string | null;
+  className: string;
 };
 
-function mapTaskPage(p: any, studentNames: Map<string, string>, staffNames: Map<string, string>): TaskRecord {
+function mapTaskPage(
+  p: any,
+  studentNames: Map<string, string>,
+  staffNames: Map<string, string>,
+  classNames?: Map<string, string>
+): TaskRecord {
   const studentId = getRelationIds(p, "관련학생")[0] ?? null;
   const ownerId = getRelationIds(p, "담당자")[0] ?? null;
+  const classId = getRelationIds(p, "관련반")[0] ?? null;
   const typeLabel = getSelect(p, "유형") ?? "";
   return {
     id: p.id,
@@ -4912,6 +4922,8 @@ function mapTaskPage(p: any, studentNames: Map<string, string>, staffNames: Map<
     directorAck: getCheckbox(p, "원장확인"),
     pool: getCheckbox(p, "업무풀"),
     parentTaskId: getRelationIds(p, "상위업무")[0] ?? null,
+    classId,
+    className: classId ? classNames?.get(classId) ?? "" : "",
   };
 }
 
@@ -5004,6 +5016,7 @@ export async function createTasks(
           staff_id: ownerId,
           staff_notion_ids: ownerId ? [ownerId] : [],
           student_notion_ids: studentIds,
+          class_notion_ids: input.classIds ?? [],
           due_date: input.date,
           time_text: input.time,
           memo: input.content || null,
@@ -5021,6 +5034,7 @@ export async function createTasks(
               제목: { title: [{ text: { content: `${label}${studentName ? " - " + studentName : ""}` } }] },
               유형: { select: { name: label } },
               ...(studentIds[0] ? { 관련학생: { relation: [{ id: studentIds[0] }] } } : {}),
+              ...(input.classIds?.[0] ? { 관련반: { relation: [{ id: input.classIds[0] }] } } : {}),
               ...(ownerId ? { 담당자: { relation: [{ id: ownerId }] } } : {}),
               예정일: { date: { start: input.date } },
               시간: { rich_text: [{ text: { content: input.time } }] },
@@ -5103,6 +5117,7 @@ export async function createTasks(
           제목: { title: [{ text: { content: `${label}${studentName ? " - " + studentName : ""}` } }] },
           유형: { select: { name: label } },
           ...(input.studentId ? { 관련학생: { relation: [{ id: input.studentId }] } } : {}),
+          ...(input.classIds?.[0] ? { 관련반: { relation: [{ id: input.classIds[0] }] } } : {}),
           ...(ownerId ? { 담당자: { relation: [{ id: ownerId }] } } : {}),
           예정일: { date: { start: input.date } },
           시간: { rich_text: [{ text: { content: input.time } }] },
@@ -5140,8 +5155,8 @@ export async function getAttendanceOnDate(
 
 export async function listMyTasks(staffId: string): Promise<TaskRecord[]> {
   if (getDbProvider() === "postgres") {
-    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
-    return pgListMyTasks(staffId, names, staffMap) as unknown as TaskRecord[];
+    const [names, staffMap, classMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap(), classNamePgMap()]);
+    return pgListMyTasks(staffId, names, staffMap, classMap) as unknown as TaskRecord[];
   }
   const records = await queryAllPages({
     data_source_id: DB.TODO,
@@ -5153,14 +5168,32 @@ export async function listMyTasks(staffId: string): Promise<TaskRecord[]> {
       ],
     },
   });
-  const [names, staffMap] = await Promise.all([studentNameMap(), staffNameMap()]);
-  return (records as any[]).map((p) => mapTaskPage(p, names, staffMap));
+  const [names, staffMap, classMap] = await Promise.all([studentNameMap(), staffNameMap(), classNameMap()]);
+  return (records as any[]).map((p) => mapTaskPage(p, names, staffMap, classMap));
+}
+
+// 관리자용 "담당자별 전체 현황"(원장/행정 전용, /director/tasks) — 담당자
+// 유무와 무관하게 branch 안의 미완료 AI 업무 13종 전체를 돌려준다. 호출부
+// (TaskBoardClient)가 ownerId로 그룹핑해 담당자별 미완료/긴급/지연 건수를
+// 계산한다. listMyTasks/listPoolTasks와 동일한 AI_TASK_TYPE_LABELS 필터,
+// 새 쿼리/화면일 뿐 새 스키마는 없다.
+export async function listAllOpenTasks(): Promise<TaskRecord[]> {
+  if (getDbProvider() === "postgres") {
+    const [names, staffMap, classMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap(), classNamePgMap()]);
+    return pgListAllOpenTasks(names, staffMap, classMap) as unknown as TaskRecord[];
+  }
+  const records = await queryAllPages({
+    data_source_id: DB.TODO,
+    filter: { and: [{ property: "완료여부", checkbox: { equals: false } }, { or: taskTypeOrFilter() }] },
+  });
+  const [names, staffMap, classMap] = await Promise.all([studentNameMap(), staffNameMap(), classNameMap()]);
+  return (records as any[]).map((p) => mapTaskPage(p, names, staffMap, classMap));
 }
 
 export async function listPoolTasks(): Promise<TaskRecord[]> {
   if (getDbProvider() === "postgres") {
-    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
-    return pgListPoolTasks(names, staffMap) as unknown as TaskRecord[];
+    const [names, staffMap, classMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap(), classNamePgMap()]);
+    return pgListPoolTasks(names, staffMap, classMap) as unknown as TaskRecord[];
   }
   const records = await queryAllPages({
     data_source_id: DB.TODO,
@@ -5172,8 +5205,8 @@ export async function listPoolTasks(): Promise<TaskRecord[]> {
     },
   });
   const open = (records as any[]).filter((p) => getRelationIds(p, "담당자").length === 0);
-  const [names, staffMap] = await Promise.all([studentNameMap(), staffNameMap()]);
-  return open.map((p) => mapTaskPage(p, names, staffMap));
+  const [names, staffMap, classMap] = await Promise.all([studentNameMap(), staffNameMap(), classNameMap()]);
+  return open.map((p) => mapTaskPage(p, names, staffMap, classMap));
 }
 
 // 동시에 두 직원이 같은 공용업무를 가져가지 못하게 막는다(섹션6). Notion API에는
@@ -5265,13 +5298,13 @@ export async function acknowledgeTask(taskId: string): Promise<void> {
 
 export async function getTask(taskId: string): Promise<TaskRecord | null> {
   if (getDbProvider() === "postgres") {
-    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
-    return (await pgGetTask(taskId, names, staffMap)) as unknown as TaskRecord | null;
+    const [names, staffMap, classMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap(), classNamePgMap()]);
+    return (await pgGetTask(taskId, names, staffMap, classMap)) as unknown as TaskRecord | null;
   }
   const page: any = await notion.pages.retrieve({ page_id: taskId }).catch(() => null);
   if (!page) return null;
-  const [names, staffMap] = await Promise.all([studentNameMap(), staffNameMap()]);
-  return mapTaskPage(page, names, staffMap);
+  const [names, staffMap, classMap] = await Promise.all([studentNameMap(), staffNameMap(), classNameMap()]);
+  return mapTaskPage(page, names, staffMap, classMap);
 }
 
 // 지시→처리→결과→재지시 히스토리(섹션13) — 같은 줄기의 업무를 상위업무
@@ -5282,16 +5315,16 @@ export async function getTaskThread(taskId: string): Promise<TaskRecord[]> {
   if (getDbProvider() === "postgres") {
     const rootPgId = await pgResolveRelationId("TODO", taskId);
     if (!rootPgId) return [root];
-    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
-    const children = await pgGetTaskChildren(rootPgId, names, staffMap);
+    const [names, staffMap, classMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap(), classNamePgMap()]);
+    const children = await pgGetTaskChildren(rootPgId, names, staffMap, classMap);
     return [root, ...(children as unknown as TaskRecord[])];
   }
   const children = await queryAllPages({
     data_source_id: DB.TODO,
     filter: { property: "상위업무", relation: { contains: taskId } },
   });
-  const [names, staffMap] = await Promise.all([studentNameMap(), staffNameMap()]);
-  return [root, ...(children as any[]).map((p) => mapTaskPage(p, names, staffMap))];
+  const [names, staffMap, classMap] = await Promise.all([studentNameMap(), staffNameMap(), classNameMap()]);
+  return [root, ...(children as any[]).map((p) => mapTaskPage(p, names, staffMap, classMap))];
 }
 
 // 원장 확인함(섹션11/12): 완료됐지만 원장이 아직 확인 안 한 업무 중
@@ -5299,8 +5332,8 @@ export async function getTaskThread(taskId: string): Promise<TaskRecord[]> {
 // 올라가지 않는다(알림 폭탄 방지, 섹션15와 동일한 원칙).
 export async function listReviewInbox(): Promise<TaskRecord[]> {
   if (getDbProvider() === "postgres") {
-    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
-    return pgListReviewInbox(names, staffMap) as unknown as TaskRecord[];
+    const [names, staffMap, classMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap(), classNamePgMap()]);
+    return pgListReviewInbox(names, staffMap, classMap) as unknown as TaskRecord[];
   }
   const records = await queryAllPages({
     data_source_id: DB.TODO,
@@ -5312,17 +5345,17 @@ export async function listReviewInbox(): Promise<TaskRecord[]> {
       ],
     },
   });
-  const [names, staffMap] = await Promise.all([studentNameMap(), staffNameMap()]);
+  const [names, staffMap, classMap] = await Promise.all([studentNameMap(), staffNameMap(), classNameMap()]);
   return (records as any[])
-    .map((p) => mapTaskPage(p, names, staffMap))
+    .map((p) => mapTaskPage(p, names, staffMap, classMap))
     .filter((t) => classifyFeedback({ outcome: t.outcome, urgentFlag: t.urgent }) !== "NORMAL");
 }
 
 // "완료" 탭(섹션7) — 오늘 내가 처리한 업무만 보여준다(전체 이력이 아님).
 export async function listCompletedToday(staffId: string, date: string): Promise<TaskRecord[]> {
   if (getDbProvider() === "postgres") {
-    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
-    return pgListCompletedToday(staffId, date, names, staffMap) as unknown as TaskRecord[];
+    const [names, staffMap, classMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap(), classNamePgMap()]);
+    return pgListCompletedToday(staffId, date, names, staffMap, classMap) as unknown as TaskRecord[];
   }
   const records = await queryAllPages({
     data_source_id: DB.TODO,
@@ -5335,8 +5368,8 @@ export async function listCompletedToday(staffId: string, date: string): Promise
       ],
     },
   });
-  const [names, staffMap] = await Promise.all([studentNameMap(), staffNameMap()]);
-  return (records as any[]).map((p) => mapTaskPage(p, names, staffMap));
+  const [names, staffMap, classMap] = await Promise.all([studentNameMap(), staffNameMap(), classNameMap()]);
+  return (records as any[]).map((p) => mapTaskPage(p, names, staffMap, classMap));
 }
 
 // 기본업무(섹션9): 새 레코드를 대량 생성하지 않고, 오늘/지연된 미완료 업무를

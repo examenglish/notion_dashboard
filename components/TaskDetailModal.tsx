@@ -21,6 +21,7 @@ type TaskRecord = {
   directorAck: boolean;
   pool: boolean;
   parentTaskId: string | null;
+  className?: string;
 };
 
 // 업무 상세 — 결과보고(섹션10) + 지시→처리→결과→재지시 히스토리(섹션13).
@@ -143,6 +144,7 @@ export default function TaskDetailModal({
             <p>
               <span className="badge">{task.typeLabel}</span>{" "}
               {task.studentName && task.studentName !== "-" && <strong>{task.studentName}</strong>}{" "}
+              {task.className && <span className="muted">({task.className})</span>}{" "}
               {task.urgent && <span className="badge badge-urgent">긴급</span>}
               {task.pool && !task.ownerName && <span className="badge">공용업무풀</span>}
             </p>
