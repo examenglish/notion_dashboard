@@ -423,7 +423,12 @@ export async function runCreateTasksCommand(
 
   try {
     mark("ct:before_createTasks_write");
-    const created = await createTasks(inputs);
+    // allStudents는 getNlRoster() 안에서 studentNameMap()과 똑같이
+    // searchStudents("")로 채워진 것이라, 이 Map은 createTasks가 내부에서
+    // studentNameMap()을 다시 불렀을 때와 결과가 동일하다 — 그래서
+    // 중복 조회 없이 그대로 재사용해도 동작이 안 바뀐다.
+    const studentNames = new Map(allStudents.map((s) => [s.id, s.name]));
+    const created = await createTasks(inputs, { staff, classes, studentNames });
     mark("ct:after_createTasks_write");
     const staffNameById = new Map(staff.map((s) => [s.id, s.name]));
     const nameById = new Map(activeStudents.map((s) => [s.id, s.name]));

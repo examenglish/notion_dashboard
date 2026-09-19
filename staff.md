@@ -4,10 +4,130 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (PART 6 신규 — PART 5의 PIN 전환 실제 production
-배포+검증 완료(원장 확인) + pgResolveRelationId 등 dual-id 지원으로 확장 +
-학생/직원/반 생성 postgres-primary 전환 + manual_steps.title migration SQL
-작성(미적용) + vitest 테스트 인프라 추가. 아래 "PART 6" 섹션 먼저 확인)
+마지막 업데이트: 2026-09-19 (PART 7 신규 — 자연어 입력 속도 Phase 2:
+코드 경로 기반 안전한 최적화 2건 적용 + postgres-primary 생성 경로 로그
+보강. **실제 E2E ms 실측은 여전히 확보 못함(이유는 PART 7 참고, 추측 수치
+없음)**. `supabase/schema/004_manual_steps_title.sql`은 아직 미적용 —
+계속 blocker. 아래 "PART 7" 섹션 먼저 확인)
+
+---
+
+## PART 7 — 자연어 입력 속도 Phase 2: 코드 경로 기반 안전한 최적화 (2026-09-19)
+
+### 상태: 🟡 안전한 최적화 코드는 완료+검증+배포. **실제 요청 1건의 E2E ms
+실측은 이번에도 확보 못함 — 아래 "왜 실측을 못했는지" 참고, 숫자를
+지어내지 않았다(원장 지시).**
+
+### 왜 실측을 못했는지 (시도한 것과 그 결과, 전부 기록)
+1. **`vercel logs`는 히스토리 조회가 안 되고 `--follow`로 실시간 스트리밍만
+   된다** — 이번 세션에서 처음 확인한 사실(중요, 다음 세션도 알아야 함).
+   그래서 사직/금정 프로덕션 배포 양쪽에 `vercel logs <url> --json`을
+   백그라운드로 약 4~5분 띄워놓고 실제 스태프가 자연어 입력창을 쓰는
+   순간을 기다렸다 — 그 창 동안 `/login` GET 몇 건만 찍혔고
+   `[nl-timing]` 로그는 한 줄도 안 나왔다(그 시간대에 아무도 AI 입력창을
+   안 씀). 로그 자체가 히스토리로 안 남으므로, 다음에 실측하려면
+   **원장이 입력하는 바로 그 순간에 `vercel logs --follow`를 동시에 보고
+   있어야 한다** — 미리 켜놓고 기다리거나, 입력 후에 조회하는 방식은 둘 다
+   안 됨.
+2. **로컬에서 안전하게(운영 데이터 생성 없이) Notion 읽기 왕복시간만이라도
+   재보려고 했으나 실패** — 저장소에 이미 존재하던 `.env.local`(과거
+   세션에서 vercel 빌드 과정 중 생성된 것으로 보임, 이번 세션이 새로
+   추출한 게 아님)의 `NOTION_TOKEN`으로 읽기 전용 쿼리(`dataSources.query`)
+   를 시도했더니 `API token is invalid` 오류 — 이 토큰이 무효/구버전이라
+   판단, 대체 토큰을 찾거나 다시 받으려는 시도는 하지 않고 그대로 중단했다
+   (`MIGRATION_ADMIN_SECRET`류와 마찬가지로 시크릿 관련 시도를 확대하지
+   말라는 지시 범위로 판단). 측정 스크립트와 프로젝트에 임시로 복사했던
+   `.env.local` 참조 파일은 실행 직후 전부 삭제함(`git status`로 확인:
+   커밋 대상에 안 남음).
+3. 로그인 세션이 없어 프로덕션 `/api/ai-input`을 직접 호출할 수 없고,
+   "신규 테스트용 학생/직원/반(및 그에 준하는 업무/상담 등 운영 데이터)을
+   임의로 만들지 말 것"이라는 지시에 따라 실제 자연어 입력을 스스로
+   흉내내 운영 DB에 쓰는 방식도 쓰지 않았다.
+
+**결론: 이번 세션도 ms 단위 실측치는 0건.** 아래 최적화는 "실측 후
+최적화"가 아니라 **코드 경로 분석만으로도 명백한 비효율**(캐시/DB 접근
+방식과 무관하게 항상 낭비인 패턴)만 골라 고쳤다 — 근거 없는 속도 개선폭
+주장은 하지 않는다.
+
+### 코드 분석으로 확인한 비효율 2가지 (측정 없이도 확실함)
+1. **`createTasks`(lib/notion.ts) 내부에서 `listStaff()`/`listClasses()`/
+   `studentNameMap()`을 매번 다시 조회** — 그런데 이 함수의 유일한 호출부인
+   `runCreateTasksCommand`(lib/nl-input.ts)가 같은 요청 안에서 몇 줄 전
+   `getNlRoster()`로 이미 staff/classes/전교생을 불러온 뒤다. 완전히 같은
+   데이터를 요청 하나에서 두 번 왕복 조회하는 구조 — PART 4/5에서 이
+   경로들이 이미 Postgres로 전환됐어도(Notion이 아니라) 여전히 불필요한
+   네트워크 왕복이다.
+2. **`createTasks`의 업무별 Notion 쓰기(`notion.pages.create` +
+   `dualWriteEntity`)가 for-loop 안에서 순차 실행** — 한 문장으로 업무를
+   여러 개 만들면(예: "OO, XX 둘 다 보강 잡아줘") 개수만큼 왕복시간이
+   선형으로 늘어난다. 각 업무는 서로 독립적인 Notion 페이지라 병렬 실행해도
+   안전하다.
+
+### 적용한 안전한 최적화 (동작은 그대로, 조회/왕복 횟수만 감소)
+1. `createTasks`에 `preloaded?: { staff, classes, studentNames }` 선택
+   인자를 추가 — 넘겨받으면 그걸 쓰고, 없으면(다른 호출부/테스트) 기존처럼
+   자체 조회한다. `runCreateTasksCommand`가 이미 가진 `staff`/`classes`와,
+   `allStudents`(= `getNlRoster()`가 내부적으로 `searchStudents("")`로
+   채운 것 — 기존 `studentNameMap()`도 정확히 같은 `searchStudents("")`를
+   부르므로 결과가 100% 동일하다, 별도 근사 아님)로 만든 Map을 넘기도록
+   수정. `existingOpen`(완료 안 된 업무 전체 조회)은 요청마다 최신 상태가
+   필요해 캐시 재사용 대상이 아니므로 그대로 둠.
+2. `createTasks` 내부 로직을 2단계로 분리: (1) 담당자 자동배정(routeTask)만
+   순서대로 결정하는 순수 메모리 루프(같은 배치 내 몰림 방지를 위해 순서
+   보장 필요, I/O 없음) → (2) 실제 Notion 페이지 생성 + dual-write를
+   `Promise.all`로 동시 실행. `dualWriteEntity`는 페이지별로 완전히
+   독립적(공유 상태 없음, 실패 시 자체 재시도)이라 병렬 실행이 안전함을
+   코드로 확인.
+3. 두 변경 모두 함수의 입출력 계약(반환 타입, 담당자 배정 결과, 에러
+   처리)은 그대로 — 조회 횟수를 줄이고 쓰기를 병렬화했을 뿐 판단 로직은
+   손대지 않았다.
+
+### postgres-primary 생성 경로에 로그 보강 (원장 지시)
+"다음 실제 사용 시 확인할 수 있도록 로그/오류 처리를 충분히 남길 것" 지시에
+따라 PART 6에서 postgres-primary로 바꾼 `createStaff`/`createClass`/
+`resolveOrCreateClass`/`createStudent`/`createMinimalStudent` 5개 함수 전부에:
+- postgres insert 성공 시 `[postgres-primary] <함수명>: postgres write ok`
+  (행 id, 이름 등 식별정보 포함) 로그 추가.
+- 백그라운드 Notion 미러(`fireAndForget`)가 성공하면
+  `[postgres-primary] <함수명>: notion mirror synced`(postgres id ↔ notion id
+  매핑) 로그 추가 — 실패 시 로그는 기존 `fireAndForget` 자체에 이미 있었음
+  (`postgres-primary: background Notion mirror failed`, label 포함).
+- `createStaff`만 추가로: `pin_hash` 즉시 patch가 실패하는 경우(이미
+  postgres 행은 생겼는데 pin_hash가 없어 로그인이 안 되는 상태로 남는 극단
+  케이스) 어떤 행인지 콕 집어 `console.error`로 남기고 그대로 throw하도록
+  변경 — 호출부 동작(실패 처리)은 그대로, 원인 추적만 쉬워짐.
+
+다음에 원장/조교가 실제로 신규 직원·반·학생을 하나만 만들어보면, Vercel
+런타임 로그에서 `[postgres-primary]` 라인 2개(write ok → notion mirror
+synced)가 순서대로 찍히는지로 정상 동작 여부를 바로 확인할 수 있다.
+
+### 검증
+`npx tsc --noEmit` 통과, `npx vitest run` 13/13 통과(기존 테스트 그대로,
+이번 변경은 새 테스트 추가 없음 — nl-input/createTasks는 Notion+Anthropic
+호출을 동시에 mocking해야 해서 범위가 커, 이번엔 typecheck+기존 테스트+
+build로 검증을 대체), `npm run build` 통과(에러/경고 없음).
+
+### 배포 결과
+(아래는 실제 배포 실행 직후 갱신 — 이 섹션이 비어 있으면 아직 배포 전이라는
+뜻이니 다음 세션은 반드시 직접 `git log`/`vercel ls`로 배포 여부를 재확인할 것)
+
+### 다음 세션에서 할 일
+1. **실제 E2E 실측은 여전히 미완료.** 원장이 대시보드에서 자연어 입력을
+   아무거나 하나 넣는 "바로 그 순간"에 세션(또는 원장 본인)이
+   `vercel logs <배포url> --follow`를 동시에 켜고 있어야 `[nl-timing]`
+   로그를 잡을 수 있다(사후 조회 불가 — 위 "왜 실측을 못했는지" 1번).
+2. 실측 확보되면 stage별 delta 계산 → LLM/Notion-write/중복조회(이번에
+   제거함)/기타로 분류해서 남은 병목이 무엇인지 근거 기반으로 판단.
+3. 그 다음에야 판단 가능한 더 공격적인 최적화 후보(미적용, 실측 근거 없이
+   손대지 않음): legacy fallback 시 LLM 2번째 호출을 아예 없애도록 프롬프트
+   통합, `existingOpen` 조회를 Postgres 쪽 TODO read가 생기면 그쪽으로 이전.
+4. `supabase/schema/004_manual_steps_title.sql` 미적용 상태 계속 유지 —
+   원장이 Supabase에서 직접 실행 필요(PART 6 "미완료" 1번과 동일 항목).
+
+### 신규/변경 파일
+`lib/notion.ts`(`createTasks` preloaded 인자+쓰기 병렬화, 5개 postgres-primary
+생성 함수 로그 보강), `lib/nl-input.ts`(`runCreateTasksCommand`가
+`createTasks`에 이미 불러온 roster 데이터 전달).
 
 ---
 

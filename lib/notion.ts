@@ -404,7 +404,20 @@ export async function createStaff(name: string, role: "강사" | "조교" | "행
     // pin_hash는 여기서 바로 채운다 — 방금 입력받은 평문이므로 추측이 아니고,
     // Notion 미러(아래 fireAndForget)가 늦거나 실패해도 로그인이 즉시 된다.
     const hash = await hashPin(pin);
-    await pgPatchById("STAFF", row.id, { pin_hash: hash });
+    try {
+      await pgPatchById("STAFF", row.id, { pin_hash: hash });
+    } catch (err) {
+      // 이 시점에 실패하면 postgres에는 이미 STAFF 행이 생겼는데 pin_hash가
+      // 없어 로그인이 안 되는 상태로 남는다 — 다음 실사용 시 원인 추적이
+      // 가능하도록 어떤 행인지 남기고 그대로 던진다(호출부가 실패로 처리).
+      console.error("[postgres-primary] createStaff: pin_hash patch failed, row left without pin_hash", {
+        id: row.id,
+        name,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+    console.log("[postgres-primary] createStaff: postgres write ok", { id: row.id, name, role });
     revalidateTag(STAFF_CACHE_TAG);
     fireAndForget("notion:createStaff", async () => {
       const created = await notion.pages.create({
@@ -417,6 +430,7 @@ export async function createStaff(name: string, role: "강사" | "조교" | "행
         } as any,
       });
       await pgSetNotionId("STAFF", row.id, created.id);
+      console.log("[postgres-primary] createStaff: notion mirror synced", { id: row.id, notionId: created.id });
     });
     // 반환값은 postgres 고유 id일 수 있다(Notion 미러가 아직 안 끝난 경우) —
     // lib/supabasePgRead.ts의 displayId() 폴백 덕분에 목록/상세 조회, 이후
@@ -523,6 +537,7 @@ export async function createClass(input: {
       student_notion_ids: [],
       assistant_notion_ids: [],
     });
+    console.log("[postgres-primary] createClass: postgres write ok", { id: row.id, name: input.name });
     fireAndForget("notion:createClass", async () => {
       const page = await notion.pages.create({
         parent: { data_source_id: DB.CLASS } as any,
@@ -541,6 +556,7 @@ export async function createClass(input: {
         } as any,
       });
       await pgSetNotionId("CLASS", row.id, page.id);
+      console.log("[postgres-primary] createClass: notion mirror synced", { id: row.id, notionId: page.id });
     });
     return row.id;
   }
@@ -646,12 +662,14 @@ export async function resolveOrCreateClass(name: string): Promise<string> {
 
   if (getDbProvider() === "postgres") {
     const row = await pgInsertRow("CLASS", { name: trimmed, days: [], student_notion_ids: [], assistant_notion_ids: [] });
+    console.log("[postgres-primary] resolveOrCreateClass: postgres write ok", { id: row.id, name: trimmed });
     fireAndForget("notion:resolveOrCreateClass", async () => {
       const page = await notion.pages.create({
         parent: { data_source_id: DB.CLASS } as any,
         properties: { 반이름: { title: [{ text: { content: trimmed } }] } } as any,
       });
       await pgSetNotionId("CLASS", row.id, page.id);
+      console.log("[postgres-primary] resolveOrCreateClass: notion mirror synced", { id: row.id, notionId: page.id });
     });
     return row.id;
   }
@@ -2698,6 +2716,7 @@ export async function createMinimalStudent(name: string, school?: string): Promi
       school: school ?? null,
       class_notion_ids: [],
     });
+    console.log("[postgres-primary] createMinimalStudent: postgres write ok", { id: row.id, name });
     fireAndForget("notion:createMinimalStudent", async () => {
       const page = await notion.pages.create({
         parent: { data_source_id: DB.STUDENT } as any,
@@ -2709,6 +2728,7 @@ export async function createMinimalStudent(name: string, school?: string): Promi
         } as any,
       });
       await pgSetNotionId("STUDENT", row.id, page.id);
+      console.log("[postgres-primary] createMinimalStudent: notion mirror synced", { id: row.id, notionId: page.id });
     });
     return row.id;
   }
@@ -2764,6 +2784,7 @@ export async function createStudent(input: {
       class_notion_ids: input.classIds ?? [],
       memo: input.memo ?? null,
     });
+    console.log("[postgres-primary] createStudent: postgres write ok", { id: row.id, name: input.name });
     fireAndForget("notion:createStudent", async () => {
       const page = await notion.pages.create({
         parent: { data_source_id: DB.STUDENT } as any,
@@ -2785,6 +2806,7 @@ export async function createStudent(input: {
         } as any,
       });
       await pgSetNotionId("STUDENT", row.id, page.id);
+      console.log("[postgres-primary] createStudent: notion mirror synced", { id: row.id, notionId: page.id });
     });
     return row.id;
   }
@@ -4880,20 +4902,33 @@ function taskTypeOrFilter() {
 // 자연어 복수 업무 생성(섹션3)의 저장 담당. 담당자는 AI가 아니라 routeTask()
 // (근무시간/반담당 기준 결정론적 규칙)가 정한다 — AI는 문장을 업무 목록으로
 // 나누는 해석만 담당한다(섹션3 요구사항).
+//
+// preloaded: 유일한 호출부인 runCreateTasksCommand(lib/nl-input.ts)가 같은
+// 요청 안에서 이미 getNlRoster()로 staff/classes/전교생을 불러온 뒤라서,
+// 여기서 listStaff/listClasses/studentNameMap을 또 부르면 완전히 같은
+// 데이터를 왕복 조회만 한 번 더 하는 것([nl-timing] 계측으로 확인된 중복
+// 조회, staff.md PART 3). 넘겨받은 게 있으면 그걸 쓰고, 없으면(다른 호출부가
+// 생기거나 테스트에서 직접 부를 때) 기존처럼 자체 조회한다 — 동작은
+// 그대로, 조회 횟수만 줄인다.
 export async function createTasks(
-  inputs: NewTaskInput[]
+  inputs: NewTaskInput[],
+  preloaded?: {
+    staff: Awaited<ReturnType<typeof listStaff>>;
+    classes: Awaited<ReturnType<typeof listClasses>>;
+    studentNames: Map<string, string>;
+  }
 ): Promise<{ id: string; type: TaskType; ownerId: string | null; pool: boolean }[]> {
   if (inputs.length === 0) return [];
 
   mark("createTasks:before_deps");
   const [staffList, classes, existingOpen, names] = await Promise.all([
-    listStaff(),
-    listClasses(),
+    preloaded ? Promise.resolve(preloaded.staff) : listStaff(),
+    preloaded ? Promise.resolve(preloaded.classes) : listClasses(),
     queryAllPages({
       data_source_id: DB.TODO,
       filter: { and: [{ property: "완료여부", checkbox: { equals: false } }, { or: taskTypeOrFilter() }] },
     }),
-    studentNameMap(),
+    preloaded ? Promise.resolve(preloaded.studentNames) : studentNameMap(),
   ]);
   mark("createTasks:after_deps");
 
@@ -4911,10 +4946,11 @@ export async function createTasks(
   }));
   const classInfos: ClassInfo[] = classes.map((c) => ({ id: c.id, studentIds: c.studentIds, assistantIds: c.assistantIds }));
 
-  const results: { id: string; type: TaskType; ownerId: string | null; pool: boolean }[] = [];
-  for (const input of inputs) {
-    // 어느 학생을 위한 업무인지 특정 못 했으면 누구에게 자동배정할지도
-    // 판단할 근거가 없다 — routeTask 자체를 건너뛰고 공용업무풀로.
+  // 1단계: 담당자 배정(routeTask)만 순서대로 결정한다 — 같은 배치 안에서
+  // 여러 업무가 한 사람에게 몰리지 않도록 candidates[].openTaskCount를
+  // 누적해야 하므로 이 부분은 I/O 없이 순서 보장이 필요하다(입력 순서와
+  // 배정 결과가 바뀌면 안 됨).
+  const planned = inputs.map((input) => {
     const route = input.forcePool
       ? ({ assigned: false, pool: true } as const)
       : routeTask(
@@ -4923,36 +4959,44 @@ export async function createTasks(
         );
     const ownerId = route.assigned ? route.staffId : null;
     if (ownerId) {
-      // 같은 배치 안에서 여러 업무가 한 사람에게 몰리지 않도록 즉시 반영.
       const c = candidates.find((c) => c.id === ownerId);
       if (c) c.openTaskCount += 1;
     }
     const poolFlag = !route.assigned && route.pool;
     const studentName = input.studentId ? names.get(input.studentId) ?? "" : "";
     const label = TASK_TYPE_LABELS[input.type];
+    return { input, ownerId, poolFlag, studentName, label };
+  });
 
-    mark("createTasks:before_notion_create");
-    const page = await notion.pages.create({
-      parent: { data_source_id: DB.TODO } as any,
-      properties: {
-        제목: { title: [{ text: { content: `${label}${studentName ? " - " + studentName : ""}` } }] },
-        유형: { select: { name: label } },
-        ...(input.studentId ? { 관련학생: { relation: [{ id: input.studentId }] } } : {}),
-        ...(ownerId ? { 담당자: { relation: [{ id: ownerId }] } } : {}),
-        예정일: { date: { start: input.date } },
-        시간: { rich_text: [{ text: { content: input.time } }] },
-        ...(input.content ? { 메모: { rich_text: chunkRichText(input.content) } } : {}),
-        완료여부: { checkbox: false },
-        우선순위: { select: { name: input.priority ?? "보통" } },
-        업무풀: { checkbox: poolFlag },
-        ...(input.parentTaskId ? { 상위업무: { relation: [{ id: input.parentTaskId }] } } : {}),
-      } as any,
-    });
-    mark("createTasks:after_notion_create/before_dualwrite");
-    await dualWriteEntity("TODO", page);
-    mark("createTasks:after_dualwrite");
-    results.push({ id: page.id, type: input.type, ownerId, pool: poolFlag });
-  }
+  // 2단계: 실제 Notion 쓰기(생성 + dual-write)는 서로 독립적이므로(각자
+  // 다른 TODO 페이지) 병렬로 실행한다 — 이전에는 for-loop 안에서 한 건씩
+  // 순차 실행돼 업무 개수만큼 왕복시간이 선형으로 늘었다(staff.md PART 3).
+  // dualWriteEntity는 페이지별로 독립이라 동시 실행해도 안전하다(공유
+  // 상태 없음, 실패 시 자체 재시도/기록).
+  mark("createTasks:before_notion_create");
+  const results = await Promise.all(
+    planned.map(async ({ input, ownerId, poolFlag, studentName, label }) => {
+      const page = await notion.pages.create({
+        parent: { data_source_id: DB.TODO } as any,
+        properties: {
+          제목: { title: [{ text: { content: `${label}${studentName ? " - " + studentName : ""}` } }] },
+          유형: { select: { name: label } },
+          ...(input.studentId ? { 관련학생: { relation: [{ id: input.studentId }] } } : {}),
+          ...(ownerId ? { 담당자: { relation: [{ id: ownerId }] } } : {}),
+          예정일: { date: { start: input.date } },
+          시간: { rich_text: [{ text: { content: input.time } }] },
+          ...(input.content ? { 메모: { rich_text: chunkRichText(input.content) } } : {}),
+          완료여부: { checkbox: false },
+          우선순위: { select: { name: input.priority ?? "보통" } },
+          업무풀: { checkbox: poolFlag },
+          ...(input.parentTaskId ? { 상위업무: { relation: [{ id: input.parentTaskId }] } } : {}),
+        } as any,
+      });
+      await dualWriteEntity("TODO", page);
+      return { id: page.id, type: input.type, ownerId, pool: poolFlag };
+    })
+  );
+  mark("createTasks:after_dualwrite");
   return results;
 }
 
