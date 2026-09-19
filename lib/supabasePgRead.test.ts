@@ -106,3 +106,67 @@ describe("pgGetStudent dual-id lookup", () => {
     expect(row).toBeNull();
   });
 });
+
+describe("pgListNlRosterStudents — nl-roster 2.7초 병목 회귀 방지 (staff.md PART 8)", () => {
+  let tables: Record<string, Row[]>;
+
+  beforeEach(() => {
+    tables = {
+      students: [
+        { id: "pg-s1", notion_id: "notion-s1", branch_id: "branch-sajik", name: "김정우", school: "천재중", grade: null, status: "재원", class_notion_ids: ["c-1"] },
+        { id: "pg-s2", notion_id: "notion-s2", branch_id: "branch-geumjeong", name: "금정학생", school: "금정중", grade: null, status: "재원", class_notion_ids: [] },
+      ],
+      // 존재는 하지만(실측으로 확인된 실제 원인 테이블) 절대 조회되면 안 된다 —
+      // pgSearchStudents(화면용, 출석률/최근성적 계산)와 달리 nl-roster는
+      // 이름/학교/학년/상태/반만 있으면 되므로 이 두 테이블 전체스캔이 필요 없다.
+      daily_records: [{ id: "dr-1", notion_id: null, branch_id: "branch-sajik" }],
+      exam_scores: [{ id: "es-1", notion_id: null, branch_id: "branch-sajik" }],
+      classes: [{ id: "c-1", branch_id: "branch-sajik", notion_id: "c-1", name: "영어2" }],
+    };
+    process.env.SUPABASE_URL = "https://fake.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-key";
+    process.env.ACADEMY_BRANCH_ID = "sajik";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    delete process.env.ACADEMY_BRANCH_ID;
+  });
+
+  it("daily_records/exam_scores를 전혀 조회하지 않는다(2.7초 병목의 실제 원인)", async () => {
+    const fetchMock = makeFakeFetch(tables);
+    vi.stubGlobal("fetch", fetchMock);
+    vi.resetModules();
+    const { pgListNlRosterStudents } = await import("./supabasePgRead");
+
+    await pgListNlRosterStudents();
+
+    const heavyCalls = fetchMock.mock.calls.filter(([u]) => {
+      const path = new URL(u as string).pathname;
+      return path.includes("daily_records") || path.includes("exam_scores");
+    });
+    expect(heavyCalls).toHaveLength(0);
+  });
+
+  it("branch로 스코프돼 다른 지점 학생이 섞이지 않는다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgListNlRosterStudents } = await import("./supabasePgRead");
+
+    const rows = await pgListNlRosterStudents();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe("김정우");
+  });
+
+  it("legacy notion_id를 표시 id로 우선 사용한다(displayId와 동일 규약)", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgListNlRosterStudents } = await import("./supabasePgRead");
+
+    const rows = await pgListNlRosterStudents();
+    expect(rows[0].id).toBe("notion-s1");
+  });
+});
