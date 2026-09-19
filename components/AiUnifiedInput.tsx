@@ -8,16 +8,18 @@ import { SLASH_COMMAND_LIST } from "@/lib/slash-commands";
 
 type Candidate = { id: string; label: string };
 type CreatedTask = { id: string; typeLabel: string; studentName: string; ownerName: string | null; pool: boolean };
+type Outcome = { route: string; label: string; status: "완료" | "확인필요" | "실패"; message: string };
 
 type AiResponse = {
   ok: boolean;
-  mode?: "tasks" | "legacy";
+  mode?: "tasks" | "legacy" | "multi";
   message?: string;
   needsConfirm?: boolean;
   needsSelection?: boolean;
   candidates?: Candidate[];
   tasks?: CreatedTask[];
   warnings?: string[];
+  outcomes?: Outcome[];
 };
 
 const ROLE_PLACEHOLDER: Record<string, string> = {
@@ -47,6 +49,7 @@ export default function AiUnifiedInput({
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [createdTasks, setCreatedTasks] = useState<CreatedTask[] | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [outcomes, setOutcomes] = useState<Outcome[] | null>(null);
   const [pendingText, setPendingText] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -74,6 +77,7 @@ export default function AiUnifiedInput({
   function finish(data: AiResponse) {
     if (data.mode === "tasks" && data.ok) {
       setCreatedTasks(data.tasks ?? []);
+      setOutcomes(null);
       setWarnings(data.warnings ?? []);
       setMessage(null);
       setText("");
@@ -82,7 +86,21 @@ export default function AiUnifiedInput({
       onSaved?.();
       return;
     }
+    if (data.mode === "multi") {
+      // intent별로 완료/확인필요/실패가 섞여 나올 수 있어(2026-09-19 통합
+      // 자연어 입력 — staff.md PART 8), 문장 하나가 실패해도 전체를 에러로
+      // 뭉개지 않고 outcomes 목록을 그대로 보여준다.
+      setCreatedTasks(null);
+      setOutcomes(data.outcomes ?? []);
+      setMessage(null);
+      setText("");
+      setPendingText(null);
+      setCandidates(null);
+      onSaved?.();
+      return;
+    }
     setCreatedTasks(null);
+    setOutcomes(null);
     setMessage({ ok: !!data.ok, text: data.message ?? "처리 중 오류가 발생했습니다." });
     if (data.ok) {
       setText("");
@@ -99,6 +117,7 @@ export default function AiUnifiedInput({
     setSaving(true);
     setMessage(null);
     setCreatedTasks(null);
+    setOutcomes(null);
     setCandidates(null);
     try {
       let data = await submit(currentText);
@@ -217,6 +236,19 @@ export default function AiUnifiedInput({
             <button type="button" className="secondary" disabled={saving} onClick={registerAsNew}>
               새로운 학생으로 등록
             </button>
+          </div>
+        )}
+
+        {outcomes && (
+          <div className={outcomes.every((o) => o.status === "완료") ? "success-box" : "error-text"} style={{ marginTop: 10, textAlign: "left", maxWidth: 480, marginLeft: "auto", marginRight: "auto" }}>
+            요청 {outcomes.length}건 처리 결과
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+              {outcomes.map((o, i) => (
+                <li key={i}>
+                  {o.status === "완료" ? "✅" : o.status === "확인필요" ? "❓" : "⚠️"} {o.message}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 

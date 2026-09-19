@@ -103,6 +103,10 @@ export function isReviewOutcome(outcome: string): boolean {
 export type NewTaskInput = {
   type: TaskType;
   studentId: string | null;
+  // 여러 학생이 함께 얽힌 업무(예: "OO,XX,ZZ 셋 다 3과 예상문제 출력")를
+  // 한 건으로 묶을 때만 채운다. 있으면 studentId는 그중 대표(routeTask
+  // 배정 판단용, 보통 첫 번째)이고 실제 관계 저장은 studentIds 전체를 쓴다.
+  studentIds?: string[];
   content: string;
   date: string; // YYYY-MM-DD
   time: string; // "16:00" 또는 빈 문자열

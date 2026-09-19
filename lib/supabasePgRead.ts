@@ -284,6 +284,33 @@ export async function pgSearchStudents(query: string, classId?: string, includeI
   return mapped;
 }
 
+export type NlRosterStudent = {
+  id: string;
+  name: string;
+  school: string;
+  grade: string | null;
+  status: string | null;
+  classIds: string[];
+};
+
+// 자연어 입력 roster 전용 — pgSearchStudents는 daily_records/exam_scores
+// 테이블 전체를 스캔해 출석률/최근성적을 붙이는데(mapPgStudent), 자연어
+// 입력은 이름/학교/학년/상태/반 매칭에만 쓰고 그 두 집계는 전혀 안 쓴다.
+// 실측 결과 그 두 전체조회가 nl-roster 조회 시간(2.7초)의 대부분을
+// 차지해서(2026-09-19, staff.md PART 8) 그 부분을 아예 빼고 students
+// 테이블만 읽는 가벼운 버전을 따로 둔다.
+export async function pgListNlRosterStudents(): Promise<NlRosterStudent[]> {
+  const rows = await pgFetch("students", "select=id,notion_id,name,school,grade,status,class_notion_ids,source_payload");
+  return rows.filter(notArchived).map((r) => ({
+    id: displayId(r),
+    name: r.name as string,
+    school: (r.school as string) ?? "",
+    grade: (r.grade as string | null) ?? null,
+    status: (r.status as string | null) ?? null,
+    classIds: (r.class_notion_ids as string[]) ?? [],
+  }));
+}
+
 export async function pgGetStudent(id: string): Promise<PgStudentRecord | null> {
   // id는 notion_id(legacy)일 수도, postgres-primary가 방금 만든 자체 uuid일
   // 수도 있다 — displayId()가 만드는 값과 대칭을 맞춰 둘 다 매칭한다.

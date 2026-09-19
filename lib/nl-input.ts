@@ -1,4 +1,4 @@
-import { parseNaturalLanguageInput, parseCreateTasksInput, resolveRelativeDate } from "@/lib/anthropic";
+import { parseNaturalLanguageInput, parseCreateTasksInput, parseUnifiedInput, resolveRelativeDate, type UnifiedIntent } from "@/lib/anthropic";
 import {
   createAdminInboxEntry,
   createScheduleEntry,
@@ -7,6 +7,7 @@ import {
   createMinimalStudent,
   createTasks,
   getNlRoster,
+  getAttendanceOnDate,
 } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
@@ -446,4 +447,286 @@ export async function runCreateTasksCommand(
   } catch {
     return { kind: "save_error", message: "저장 중 오류가 발생했습니다." };
   }
+}
+
+// ---------------------------------------------------------------------------
+// 통합 자연어 입력 오케스트레이터(2026-09-19, staff.md PART 8) —
+// app/api/ai-input의 자유 텍스트 경로 전용. 기존 waterfall(runCreateTasksCommand
+// 시도 → clarify면 runNaturalLanguageCommand로 재시도, LLM 2회)을 대체한다.
+// parseUnifiedInput 한 번으로 문장을 여러 intent로 나눈 뒤, intent별로
+// 기존 저장 함수(createAdminInboxEntry 등, 안 건드림)나 postgres-primary
+// createTasks, 신규 조회 전용 getAttendanceOnDate로 개별 라우팅한다.
+// intent 하나가 실패해도 catch로 격리해 나머지는 계속 처리하고, 전체
+// 요청이 500으로 죽지 않게 한다(2026-09-19 "암기확인" 500 사고 재발 방지).
+//
+// 알려진 단순화(의도적, 위험 낮음): schedule/counseling/student_action은
+// 학생 1명 매칭만 지원(원래도 단일학생 기록), 이름이 명단에 없어도 여기서는
+// (신입생 확인/동명이인 후보선택 같은) 대화형 라운드트립 없이 바로 실패로
+// 표시한다 — 그런 경우는 기존 단일 카테고리 입력(슬래시 명령)을 쓰도록
+// 안내한다. resolveRelativeDate 기반 전역 날짜 보정도 이 경로에는 적용
+// 안 함(intent별 date 필드를 그대로 신뢰) — 여러 intent가 서로 다른 날짜를
+// 언급할 수 있어 문장 전체에 획일 적용하면 오히려 틀릴 수 있어서다.
+// ---------------------------------------------------------------------------
+
+export type UnifiedOutcome = {
+  route: string;
+  label: string;
+  status: "완료" | "확인필요" | "실패";
+  message: string;
+};
+
+function resolveNamesForIntent(
+  names: string[],
+  students: StudentInfo[],
+  classNameById: Map<string, string>,
+  contextText: string
+): { resolved: { id: string; name: string }[]; unresolved: string[] } {
+  const resolved: { id: string; name: string }[] = [];
+  const unresolved: string[] = [];
+  for (const raw of names ?? []) {
+    const name = raw?.trim();
+    if (!name) continue;
+    const exact = students.filter((s) => s.name === name);
+    let candidates = exact.length > 0 ? exact : students.filter((s) => s.name.includes(name) || name.includes(s.name));
+    if (candidates.length > 1) candidates = narrowCandidates(contextText, candidates, classNameById);
+    if (candidates.length >= 1) resolved.push({ id: candidates[0].id, name: candidates[0].name });
+    else unresolved.push(name);
+  }
+  return { resolved, unresolved };
+}
+
+export async function runUnifiedNlInput(
+  text: string,
+  opts: { staffName?: string } = {}
+): Promise<{
+  ok: boolean;
+  outcomes: UnifiedOutcome[];
+  tasks: { typeLabel: string; studentName: string; ownerName: string | null; pool: boolean }[];
+}> {
+  mark("unified:start");
+  const today = todayKST();
+  mark("unified:before_getNlRoster");
+  const { students: allStudents, classes, staff } = await getNlRoster();
+  mark("unified:after_getNlRoster");
+  const activeStudents = allStudents.filter((s) => s.status === "재원" || !s.status);
+  const classNameById = new Map(classes.map((c) => [c.id, stripClassSuffix(c.name)]));
+  const weekday = WEEKDAYS[new Date(`${today}T00:00:00Z`).getUTCDay()];
+  const studentNames = new Map(allStudents.map((s) => [s.id, s.name]));
+
+  let intents: UnifiedIntent[];
+  mark("unified:before_llm");
+  try {
+    intents = await parseUnifiedInput(
+      text,
+      {
+        today,
+        weekday,
+        students: activeStudents.map((s) => `${s.name}(${s.school || "학교미상"})`),
+        classes: classes.map((c) => stripClassSuffix(c.name)),
+        staff: staff.map((s) => s.name),
+      },
+      TASK_TYPE_LABEL_LIST
+    );
+    mark("unified:after_llm");
+  } catch {
+    mark("unified:after_llm_error");
+    return { ok: false, outcomes: [{ route: "error", label: text, status: "실패", message: "AI 처리 중 오류가 발생했습니다." }], tasks: [] };
+  }
+
+  if (intents.length === 0) {
+    return { ok: false, outcomes: [{ route: "clarify", label: text, status: "확인필요", message: "요청을 이해하지 못했습니다. 다시 입력해 주세요." }], tasks: [] };
+  }
+
+  const outcomes: UnifiedOutcome[] = [];
+  const taskInputs: { input: NewTaskInput; label: string }[] = [];
+
+  for (const intent of intents) {
+    const label = intent.instruction || intent.taskType || intent.route;
+    try {
+      const { resolved, unresolved } = resolveNamesForIntent(intent.students ?? [], activeStudents, classNameById, text);
+      const unresolvedNote = unresolved.length > 0 ? ` (찾지 못한 이름: ${unresolved.join(", ")})` : "";
+
+      switch (intent.route) {
+        case "clarify": {
+          outcomes.push({ route: "clarify", label, status: "확인필요", message: intent.message || "무엇을 해야 할지 명확하지 않습니다." });
+          break;
+        }
+        case "attendance_check": {
+          if (resolved.length === 0) {
+            outcomes.push({ route: "attendance_check", label, status: "실패", message: `학생을 찾지 못해 확인할 수 없습니다${unresolvedNote}.` });
+            break;
+          }
+          const date = intent.date || today;
+          for (const s of resolved) {
+            const check = await getAttendanceOnDate(s.id, date);
+            if (!check) {
+              outcomes.push({ route: "attendance_check", label: s.name, status: "실패", message: `${s.name}: 출결 조회 기능을 사용할 수 없습니다.` });
+            } else if (!check.hasRecord) {
+              outcomes.push({
+                route: "attendance_check",
+                label: s.name,
+                status: "확인필요",
+                message: `${s.name}: ${date} 학생기록이 아직 없습니다 — 결석 처리가 입력 안 됐을 수 있습니다.`,
+              });
+            } else if (check.attendance === "결석") {
+              outcomes.push({ route: "attendance_check", label: s.name, status: "완료", message: `${s.name}: ${date} 결석으로 정상 기록되어 있습니다.` });
+            } else {
+              outcomes.push({
+                route: "attendance_check",
+                label: s.name,
+                status: "확인필요",
+                message: `${s.name}: ${date} 기록은 있으나 출결이 "${check.attendance ?? "미입력"}"입니다(결석 아님).`,
+              });
+            }
+          }
+          break;
+        }
+        case "task": {
+          const type = intent.taskType ? taskTypeFromLabel(intent.taskType) : null;
+          if (!type) {
+            outcomes.push({ route: "task", label, status: "실패", message: `"${intent.taskType ?? ""}"은(는) 알 수 없는 업무 유형입니다.` });
+            break;
+          }
+          const studentIds = resolved.map((s) => s.id);
+          const forcePool = (intent.students?.length ?? 0) > 0 && studentIds.length === 0;
+          const contentParts = [
+            intent.instruction,
+            intent.material ? `자료: ${intent.material}` : "",
+            intent.quantity ? `수량: ${intent.quantity}` : "",
+          ].filter(Boolean);
+          taskInputs.push({
+            input: {
+              type,
+              studentId: studentIds[0] ?? null,
+              studentIds: studentIds.length > 1 ? studentIds : undefined,
+              content: contentParts.join(" / "),
+              date: intent.date || today,
+              time: intent.time || "",
+              priority: intent.priority,
+              forcePool,
+            },
+            label: `${intent.taskType}${resolved.length ? " · " + resolved.map((s) => s.name).join(",") : ""}${unresolvedNote}`,
+          });
+          break;
+        }
+        case "admin_inbox": {
+          await createAdminInboxEntry({
+            type: intent.inboxType || "기타",
+            studentId: resolved[0]?.id ?? null,
+            content: intent.instruction,
+            startDate: intent.date || today,
+            endDate: intent.endDate || undefined,
+            enteredBy: opts.staffName,
+          });
+          outcomes.push({
+            route: "admin_inbox",
+            label: `${intent.inboxType || "기타"}${unresolvedNote}`,
+            status: "완료",
+            message: `행정실에 저장했습니다: ${intent.inboxType || "기타"}`,
+          });
+          break;
+        }
+        case "schedule": {
+          if (resolved.length === 0) {
+            outcomes.push({ route: "schedule", label, status: "실패", message: `학생을 찾지 못해 일정을 저장하지 못했습니다${unresolvedNote}.` });
+            break;
+          }
+          const date = intent.date || today;
+          await createScheduleEntry({
+            type: intent.scheduleType || "보강",
+            studentId: resolved[0].id,
+            date,
+            time: intent.time || "",
+            note: intent.instruction || "",
+            ownerName: intent.ownerName || undefined,
+          });
+          outcomes.push({
+            route: "schedule",
+            label: `${intent.scheduleType || "보강"} · ${resolved[0].name}`,
+            status: "완료",
+            message: `${intent.scheduleType || "보강"} 일정으로 저장했습니다: ${resolved[0].name} (${date})`,
+          });
+          break;
+        }
+        case "counseling": {
+          if (resolved.length === 0) {
+            outcomes.push({ route: "counseling", label, status: "실패", message: `학생을 찾지 못해 상담일지를 저장하지 못했습니다${unresolvedNote}.` });
+            break;
+          }
+          const date = intent.date || today;
+          await createCounselingEntry({
+            studentId: resolved[0].id,
+            counselor: intent.counselor || "",
+            date,
+            transcript: "",
+            summary: intent.instruction,
+            followUp: "",
+            enteredBy: opts.staffName,
+          });
+          outcomes.push({
+            route: "counseling",
+            label: `상담 · ${resolved[0].name}`,
+            status: "완료",
+            message: `상담일지에 저장했습니다: ${resolved[0].name} (${date})`,
+          });
+          break;
+        }
+        case "student_action": {
+          if (resolved.length === 0) {
+            outcomes.push({ route: "student_action", label, status: "실패", message: `학생을 찾지 못해 조치사항을 저장하지 못했습니다${unresolvedNote}.` });
+            break;
+          }
+          await updateStudentInfo({
+            studentId: resolved[0].id,
+            action: intent.instruction,
+            actionOwner: intent.ownerName || undefined,
+            actionAlarmDate: intent.date || today,
+          });
+          outcomes.push({
+            route: "student_action",
+            label: `조치 · ${resolved[0].name}`,
+            status: "완료",
+            message: `학생 조치사항을 저장했습니다: ${resolved[0].name}`,
+          });
+          break;
+        }
+        default: {
+          outcomes.push({ route: intent.route, label, status: "실패", message: "처리할 수 없는 요청 유형입니다." });
+        }
+      }
+    } catch (err) {
+      outcomes.push({ route: intent.route, label, status: "실패", message: err instanceof Error ? err.message : "처리 중 오류가 발생했습니다." });
+    }
+  }
+
+  const slackTasks: { typeLabel: string; studentName: string; ownerName: string | null; pool: boolean }[] = [];
+  if (taskInputs.length > 0) {
+    mark("unified:before_createTasks_write");
+    try {
+      const created = await createTasks(taskInputs.map((t) => t.input), { staff, classes, studentNames });
+      mark("unified:after_createTasks_write");
+      const staffNameById = new Map(staff.map((s) => [s.id, s.name]));
+      created.forEach((c, i) => {
+        outcomes.push({
+          route: "task",
+          label: taskInputs[i].label,
+          status: "완료",
+          message: `업무 등록: ${TASK_TYPE_LABELS[c.type]}${c.pool ? " (공용업무풀)" : ""}`,
+        });
+        const rawStudentId = taskInputs[i].input.studentId;
+        slackTasks.push({
+          typeLabel: TASK_TYPE_LABELS[c.type],
+          studentName: rawStudentId ? studentNames.get(rawStudentId) ?? "" : "",
+          ownerName: c.ownerId ? staffNameById.get(c.ownerId) ?? null : null,
+          pool: c.pool,
+        });
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "업무 저장 중 오류가 발생했습니다.";
+      taskInputs.forEach((t) => outcomes.push({ route: "task", label: t.label, status: "실패", message }));
+    }
+  }
+
+  const ok = outcomes.length > 0 && outcomes.every((o) => o.status !== "실패");
+  return { ok, outcomes, tasks: slackTasks };
 }

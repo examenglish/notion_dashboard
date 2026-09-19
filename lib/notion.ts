@@ -79,6 +79,8 @@ import {
   pgStaffNameMap,
   pgSearchStudents,
   pgGetStudent,
+  pgListNlRosterStudents,
+  type NlRosterStudent,
 } from "./supabasePgRead";
 import { mark } from "./timing";
 
@@ -786,16 +788,31 @@ export async function searchStudents(query: string, classId?: string, includeIna
   return mapped;
 }
 
-// 자연어 입력(lib/nl-input.ts)의 두 경로(create_tasks/기존 4-tool)가 매 요청마다
-// 각각 전교생/반/직원 목록을 따로 불러오면서, 한 문장이 업무 생성 실패로
-// legacy로 넘어갈 때는 같은 목록을 두 번 조회하고 있었다 — 실제로 Notion
-// 429(rate_limited)가 프로덕션에서 관측되어(운영 로그 확인), 20초 캐시로
-// 완화한다. listStaff는 이미 자체 캐시가 있으니 그대로 감싸기만 해도 된다.
+// 자연어 입력 roster는 이름/학교/학년/상태/반만 있으면 되는데, searchStudents("")는
+// mapPgStudent를 거치며 daily_records/exam_scores 테이블 전체를 스캔해
+// 출석률/최근성적까지 계산한다(화면 학생목록용 기능, 여기선 안 씀). 실측
+// 결과(2026-09-19, staff.md PART 8) 이 두 전체조회가 roster 조회 2.7초 중
+// 대부분을 차지해서, Postgres일 때는 그 두 집계를 아예 안 하는 가벼운
+// 쿼리(pgListNlRosterStudents)로 대체한다. Notion 경로는 손대지 않는다
+// (건드릴 계획 자체가 이미 없는 레거시 경로).
+async function nlRosterStudents(): Promise<NlRosterStudent[]> {
+  if (getStudentReadProvider() === "postgres") {
+    return pgListNlRosterStudents();
+  }
+  const all = await searchStudents("");
+  return all.map((s) => ({ id: s.id, name: s.name, school: s.school, grade: s.grade, status: s.status, classIds: s.classIds }));
+}
+
+// 자연어 입력(lib/nl-input.ts)의 여러 경로가 매 요청마다 각각 전교생/반/직원
+// 목록을 따로 불러오면서 같은 목록을 두 번 조회하는 경우가 있었다 — 실제로
+// Notion 429(rate_limited)가 프로덕션에서 관측되어(운영 로그 확인), 20초
+// 캐시로 완화한다. listStaff는 이미 자체 캐시가 있으니 그대로 감싸기만
+// 해도 된다.
 const NL_ROSTER_CACHE_TAG = "nl-roster";
 const getCachedNlRoster = unstable_cache(
   async () => {
     mark("nlRoster:cache_miss:before_fetch");
-    const [students, classes, staff] = await Promise.all([searchStudents(""), listClasses(), listStaff()]);
+    const [students, classes, staff] = await Promise.all([nlRosterStudents(), listClasses(), listStaff()]);
     mark("nlRoster:cache_miss:after_fetch");
     return { students, classes, staff };
   },
@@ -803,7 +820,7 @@ const getCachedNlRoster = unstable_cache(
   { revalidate: 20, tags: [NL_ROSTER_CACHE_TAG] }
 );
 export async function getNlRoster(): Promise<{
-  students: Awaited<ReturnType<typeof searchStudents>>;
+  students: NlRosterStudent[];
   classes: Awaited<ReturnType<typeof listClasses>>;
   staff: Awaited<ReturnType<typeof listStaff>>;
 }> {
@@ -4920,6 +4937,105 @@ export async function createTasks(
 ): Promise<{ id: string; type: TaskType; ownerId: string | null; pool: boolean }[]> {
   if (inputs.length === 0) return [];
 
+  if (getDbProvider() === "postgres") {
+    mark("createTasks:before_deps");
+    // "완료 안 된 업무 개수로 담당자 배정 fairness를 판단" — 예전엔 Notion
+    // TODO db를 매번 다시 조회했다. 2026-09-19 실사고("암기확인" select
+    // 옵션이 Notion TODO db에 없어 write가 그대로 500으로 터짐, staff.md
+    // PART 8)로 "새 업무 유형은 Notion select에 옵션이 있어야만 저장된다"는
+    // 전제 자체가 깨져 있다는 게 드러났다 — Postgres tasks.type은 제약 없는
+    // text 컬럼이라 이 문제 자체가 없다. existingOpen도 Postgres에서 읽어
+    // Notion 의존을 없앤다.
+    const [staffList, classes, existingOpen, names] = await Promise.all([
+      preloaded ? Promise.resolve(preloaded.staff) : listStaff(),
+      preloaded ? Promise.resolve(preloaded.classes) : listClasses(),
+      pgQueryRaw("TODO", "complete=eq.false"),
+      preloaded ? Promise.resolve(preloaded.studentNames) : studentNameMap(),
+    ]);
+    mark("createTasks:after_deps");
+
+    const openCounts = new Map<string, number>();
+    for (const row of existingOpen) {
+      if (!TASK_TYPE_LABEL_LIST.includes(row.type as string)) continue;
+      const ownerId = row.staff_id as string | null;
+      if (ownerId) openCounts.set(ownerId, (openCounts.get(ownerId) ?? 0) + 1);
+    }
+    const candidates: StaffCandidate[] = staffList.map((s) => ({
+      id: s.id,
+      name: s.name,
+      role: s.role,
+      workHours: s.workHours,
+      openTaskCount: openCounts.get(s.id) ?? 0,
+    }));
+    const classInfos: ClassInfo[] = classes.map((c) => ({ id: c.id, studentIds: c.studentIds, assistantIds: c.assistantIds }));
+
+    const planned = inputs.map((input) => {
+      const route = input.forcePool
+        ? ({ assigned: false, pool: true } as const)
+        : routeTask(
+            { type: input.type, studentId: input.studentId, date: input.date, time: input.time },
+            { staff: candidates, classes: classInfos }
+          );
+      const ownerId = route.assigned ? route.staffId : null;
+      if (ownerId) {
+        const c = candidates.find((c) => c.id === ownerId);
+        if (c) c.openTaskCount += 1;
+      }
+      const poolFlag = !route.assigned && route.pool;
+      const studentIds = input.studentIds && input.studentIds.length > 0 ? input.studentIds : input.studentId ? [input.studentId] : [];
+      const studentName = input.studentId ? names.get(input.studentId) ?? "" : "";
+      const studentNamesJoined = studentIds.map((id) => names.get(id) ?? "").filter(Boolean).join(",");
+      const label = TASK_TYPE_LABELS[input.type];
+      return { input, ownerId, poolFlag, studentIds, studentName: studentName || studentNamesJoined, label };
+    });
+
+    mark("createTasks:before_notion_create");
+    const results = await Promise.all(
+      planned.map(async ({ input, ownerId, poolFlag, studentIds, studentName, label }) => {
+        const parentTaskId = input.parentTaskId ? await pgResolveRelationId("TODO", input.parentTaskId) : null;
+        const row = await pgInsertRow("TODO", {
+          title: `${label}${studentName ? " - " + studentName : ""}`,
+          type: label,
+          staff_id: ownerId,
+          staff_notion_ids: ownerId ? [ownerId] : [],
+          student_notion_ids: studentIds,
+          due_date: input.date,
+          time_text: input.time,
+          memo: input.content || null,
+          complete: false,
+          priority: input.priority ?? "보통",
+          pool: poolFlag,
+          parent_task_id: parentTaskId,
+          parent_task_notion_ids: input.parentTaskId ? [input.parentTaskId] : [],
+        });
+        console.log("[postgres-primary] createTasks: postgres write ok", { id: row.id, type: label });
+        fireAndForget("notion:createTasks", async () => {
+          const page = await notion.pages.create({
+            parent: { data_source_id: DB.TODO } as any,
+            properties: {
+              제목: { title: [{ text: { content: `${label}${studentName ? " - " + studentName : ""}` } }] },
+              유형: { select: { name: label } },
+              ...(studentIds[0] ? { 관련학생: { relation: [{ id: studentIds[0] }] } } : {}),
+              ...(ownerId ? { 담당자: { relation: [{ id: ownerId }] } } : {}),
+              예정일: { date: { start: input.date } },
+              시간: { rich_text: [{ text: { content: input.time } }] },
+              ...(input.content ? { 메모: { rich_text: chunkRichText(input.content) } } : {}),
+              완료여부: { checkbox: false },
+              우선순위: { select: { name: input.priority ?? "보통" } },
+              업무풀: { checkbox: poolFlag },
+              ...(input.parentTaskId ? { 상위업무: { relation: [{ id: input.parentTaskId }] } } : {}),
+            } as any,
+          });
+          await pgSetNotionId("TODO", row.id, page.id);
+          console.log("[postgres-primary] createTasks: notion mirror synced", { id: row.id, notionId: page.id });
+        });
+        return { id: row.id, type: input.type, ownerId, pool: poolFlag };
+      })
+    );
+    mark("createTasks:after_dualwrite");
+    return results;
+  }
+
   mark("createTasks:before_deps");
   const [staffList, classes, existingOpen, names] = await Promise.all([
     preloaded ? Promise.resolve(preloaded.staff) : listStaff(),
@@ -4998,6 +5114,23 @@ export async function createTasks(
   );
   mark("createTasks:after_dualwrite");
   return results;
+}
+
+// 자연어 입력의 "확인해줘" 계열 질의(예: "OO 결석 입력했음 확인해줘")를 위한
+// 순수 조회 — 새 기록을 만들지 않고 특정 학생의 특정 날짜 출결만 읽어온다.
+// daily_records 읽기 전체(getStudentDailyRecords 등)는 아직 Notion 경로가
+// 남아있지만(staff.md PART 6/7 "남은 READ" 목록), 이 조회는 그 무거운
+// 경로 전체를 옮기지 않고 필요한 딱 한 컬럼만 최소 범위로 새로 만든 것 —
+// Postgres에서만 지원한다(운영은 항상 postgres provider).
+export async function getAttendanceOnDate(
+  studentId: string,
+  date: string
+): Promise<{ hasRecord: boolean; attendance: string | null } | null> {
+  if (getDbProvider() !== "postgres") return null;
+  const enc = encodeURIComponent(studentId);
+  const rows = await pgQueryRaw("DAILY_RECORD", `record_date=eq.${date}&student_notion_ids=cs.{${enc}}`);
+  if (rows.length === 0) return { hasRecord: false, attendance: null };
+  return { hasRecord: true, attendance: (rows[0].attendance as string | null) ?? null };
 }
 
 export async function listMyTasks(staffId: string): Promise<TaskRecord[]> {

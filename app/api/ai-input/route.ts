@@ -3,7 +3,7 @@ import { resolveRelativeDate } from "@/lib/anthropic";
 import { createPersonalTodo } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
 import { readStaffName, readStaffId } from "@/lib/session";
-import { runNaturalLanguageCommand, runCreateTasksCommand, parseSlashCommand, matchToDoListShortcut } from "@/lib/nl-input";
+import { runNaturalLanguageCommand, runUnifiedNlInput, parseSlashCommand, matchToDoListShortcut } from "@/lib/nl-input";
 import { notifyTaskAssignments } from "@/lib/slack";
 import { mark } from "@/lib/timing";
 
@@ -11,13 +11,16 @@ export const dynamic = "force-dynamic";
 
 // 대시보드 최상단 통합 AI 입력창의 엔드포인트 — 기존 /api/nl-input과
 // /api/tasks/from-text를 대체하는 게 아니라 그 둘의 로직(runNaturalLanguageCommand,
-// runCreateTasksCommand)을 그대로 재사용해 "한 입력창"으로 이어붙인다.
+// 자유 텍스트는 runUnifiedNlInput)을 재사용해 "한 입력창"으로 이어붙인다.
 // 두 엔드포인트 자체는 남겨두므로 Slack 슬래시태그 등 기존 호출부는 안 건드린다.
 //
 // 순서: /to do list(결정론적) → 슬래시 명령(/보강 등, 기존 그대로 legacy로) →
-// 그 외 텍스트는 먼저 업무 생성(create_tasks)을 시도하고, AI가 "실행 가능한
-// 업무를 못 찾겠다"(clarify)고 답하면 그제서야 기존 학생기록 파이프라인
-// (행정실/일정/상담/조치)으로 넘긴다 — 두 체계 모두 그대로 쓸 수 있다.
+// 그 외 자유 텍스트는 runUnifiedNlInput 한 번으로 처리한다. 2026-09-19 이전엔
+// 여기서 먼저 업무 생성(create_tasks)을 시도하고 clarify면 기존 4-tool
+// 파이프라인으로 다시 LLM을 불렀는데(요청당 LLM 2회, 실측 총 9.9초 중
+// 7.1초가 LLM), 그 waterfall을 없애고 LLM 1회로 문장을 여러 intent로 나눠
+// 한 번에 처리한다(staff.md PART 8). runNaturalLanguageCommand 자체는
+// 슬래시 명령/Slack이 계속 쓰므로 그대로 둔다.
 export async function POST(req: NextRequest) {
   mark("route:start");
   const body = await req.json().catch(() => null);
@@ -98,25 +101,16 @@ export async function POST(req: NextRequest) {
       return await runLegacy(slashRest, forceTool, forcedScheduleType, forcedInboxType);
     }
 
-    mark("route:before_create_tasks_command");
-    const taskResult = await runCreateTasksCommand(text, { staffName });
-    mark("route:after_create_tasks_command");
-    if (taskResult.kind === "created") {
-      notifyTaskAssignments(taskResult.tasks);
-      mark("route:before_response");
-      return NextResponse.json({ ok: true, mode: "tasks", tasks: taskResult.tasks, warnings: taskResult.warnings });
-    }
-    if (taskResult.kind === "clarify") {
-      // 업무로 해석되지 않으면(예: 상담 기록, 행정실 문의성 문장) 기존
-      // 학생기록 파이프라인이 이어받는다.
-      mark("route:before_legacy_fallback");
-      const res = await runLegacy(text);
-      mark("route:before_response");
-      return res;
-    }
-    // ai_error/save_error — 업무 생성 시도 자체가 실패한 경우는 그대로 반환.
-    const status = taskResult.kind === "ai_error" ? 502 : 500;
-    return NextResponse.json({ ok: false, mode: "tasks", message: taskResult.message }, { status });
+    mark("route:before_unified");
+    const result = await runUnifiedNlInput(text, { staffName });
+    mark("route:after_unified");
+    if (result.tasks.length > 0) notifyTaskAssignments(result.tasks);
+    const summary =
+      result.outcomes.length === 1
+        ? result.outcomes[0].message
+        : result.outcomes.map((o) => `${o.status === "완료" ? "✅" : o.status === "확인필요" ? "❓" : "⚠️"} ${o.message}`).join("\n");
+    mark("route:before_response");
+    return NextResponse.json({ ok: result.ok, mode: "multi", message: summary, outcomes: result.outcomes });
   } catch (err) {
     console.error("/api/ai-input failed", err);
     const message = err instanceof Error ? err.message : "처리 중 오류가 발생했습니다.";

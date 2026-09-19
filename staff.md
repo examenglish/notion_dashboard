@@ -4,11 +4,129 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (PART 7 신규 — 자연어 입력 속도 Phase 2:
-코드 경로 기반 안전한 최적화 2건 적용 + postgres-primary 생성 경로 로그
-보강. **실제 E2E ms 실측은 여전히 확보 못함(이유는 PART 7 참고, 추측 수치
-없음)**. `supabase/schema/004_manual_steps_title.sql`은 아직 미적용 —
-계속 blocker. 아래 "PART 7" 섹션 먼저 확인)
+마지막 업데이트: 2026-09-19 (PART 8 신규 — 실사고("암기확인" Notion select
+옵션 누락으로 500) 원인 파악 후 구조적 수정: createTasks postgres-primary
+전환 + Notion best-effort 격리, 자연어 통합 입력 LLM 1회로 병합(multi-intent),
+결석확인 등 조회 intent 신설, nl-roster 2.7초 병목(daily_records/exam_scores
+전체스캔) 제거. `supabase/schema/004_manual_steps_title.sql`은 아직 미적용 —
+계속 blocker. 아래 "PART 8" 섹션 먼저 확인)
+
+---
+
+## PART 8 — "암기확인" 500 사고의 구조적 수정: createTasks postgres-primary + 통합 자연어 입력(LLM 1회, multi-intent) (2026-09-19)
+
+### 계기
+원장이 실제로 "김정우, 신융, 허준혁 영어2 천재조 3과 예상문제, 부교재
+변형문제 출처 찾아서 출력 3부 오류 생김, 김정우 결석 입력했음 확인해줘"를
+입력했다가 500을 받음. `vercel logs`로 실시간 캡처(사직, 3건의 실제 요청)한
+결과 정확한 원인을 코드로 확인:
+```
+select option "암기확인" not found for property "유형".
+Available options: "수업준비","행정","상담","기타","보강","재시",
+"신입생상담","레벨체크","조치사항","클리닉","복습","개인할일".
+```
+`lib/tasks.ts`의 `TASK_TYPE_LABELS`(13종: 암기확인/숙제확인/단어재시/재시험/
+출력/전달/자료수집/학부모연락/보충지도/시험범위확인/자료준비/업무상담/
+기타업무) 중 **단 하나도** Notion TODO db "유형" select의 실제 옵션에 없다
+— PART 1이 "완료, 운영 배포됨"이라고 적어둔 AI 업무운영 시스템 13종 전체가
+Notion write 단계에서 이 방식(select 옵션 자동생성 가정, 최신 Notion
+data_source API에서는 성립 안 함)으로는 전부 이 사고와 같은 500을 낼 수
+있었던 상태였다. 원장 지시: Notion select에 옵션을 추가하는 봉합도, 기능
+삭제도 하지 말고 구조적으로 고칠 것 — Postgres write 성공을 기준으로 삼고
+Notion은 best-effort로 격리.
+
+### 실측 (같은 사고 요청, 사직 production, 2026-09-19)
+| 구간 | 소요시간 | 비중 |
+|---|---|---|
+| Notion/DB 명단 재조회(캐시 미스) | 2,727ms | 27.5% |
+| LLM 호출 #1(create_tasks 분류) | 4,635ms | 46.8% |
+| LLM 호출 #2(legacy fallback 분류) | 2,458ms | 24.8% |
+| 나머지 | ~80ms | 0.8% |
+| 총합 | 9,900ms | |
+
+### 적용한 구조적 수정
+1. **`createTasks`(lib/notion.ts) postgres-primary 전환.** `tasks.type`은
+   Postgres에 제약 없는 `text` 컬럼이라 "암기확인"이든 뭐든 그대로
+   저장된다 — Postgres 저장 성공이 곧 성공 기준. Notion 미러는
+   `fireAndForget`(다른 postgres-primary 함수들과 동일 패턴)으로 완전히
+   격리해 실패해도 사용자 요청에 영향 없음(로그로만 남음,
+   `[postgres-primary] createTasks: ...`). `existingOpen`(담당자 배정
+   fairness용 미완료 업무 조회)도 Notion 대신 `pgQueryRaw("TODO",
+   "complete=eq.false")`로 전환 — Notion 의존 자체를 없앴다.
+   `NewTaskInput`에 `studentIds?: string[]`를 추가해 여러 학생이 함께
+   얽힌 업무(예: 3명이 같은 자료를 공유) 한 건으로 저장 가능하게 함.
+2. **자연어 통합 입력(신규 `runUnifiedNlInput`, `app/api/ai-input`의 자유
+   텍스트 전용).** 기존엔 `runCreateTasksCommand` 시도 → clarify면
+   `runNaturalLanguageCommand`로 재시도(LLM 2회, 실측 7.1초/9.9초).
+   이제 `parseUnifiedInput`(신규, `lib/anthropic.ts`) 한 번으로 문장을
+   여러 독립 intent로 분리해 한 번에 처리한다:
+   - route: `task`(업무 13종) / `admin_inbox`,`schedule`,`counseling`,
+     `student_action`(기존 4-tool과 동일 카테고리, 기존 저장 함수
+     `createAdminInboxEntry` 등을 그대로 재사용, 안 건드림) / 신규
+     `attendance_check`(조회 전용 — 아래 3번) / `clarify`.
+   - intent 하나가 예외를 던져도 개별 try/catch로 격리해 나머지 intent는
+     계속 처리 — 문장 전체가 500이 되지 않는다("암기확인" 사고 재발 방지
+     원칙을 이 경로 전체에 일반화).
+   - 응답은 `{ok, mode:"multi", outcomes:[{route,label,status,message}]}`
+     — status는 완료/확인필요/실패 3종. `components/AiUnifiedInput.tsx`에
+     렌더링 추가(기존 `mode:"tasks"`/`legacy` 응답 처리는 그대로 남겨둠 —
+     슬래시 명령/`/to do list`는 이 경로를 안 타므로 영향 없음).
+   - **알려진 단순화(의도적)**: schedule/counseling/student_action은
+     학생 1명 매칭만 지원(원래도 단일학생 기록이라 기존과 동일), 명단에
+     없는 이름이 나와도 신입생 등록 대화형 라운드트립은 이 경로에서
+     생략하고 바로 실패로 표시(그런 경우는 슬래시 명령으로 안내) —
+     동명이인/신규생 확인 UI를 여러 intent에 일반화하는 건 이번 범위 밖.
+     문장 전체에 대한 `resolveRelativeDate` 전역 날짜 보정도 생략(intent별
+     `date` 필드를 그대로 신뢰 — 여러 intent가 서로 다른 날짜를 언급할 수
+     있어 획일 적용이 오히려 틀릴 수 있음).
+3. **신규 조회 intent `attendance_check`.** "OO 결석 입력했음 확인해줘"
+   같은 요청을 업무 생성으로 오분류하지 않고 실제 기록을 읽어 답한다.
+   `lib/notion.ts`에 최소 범위 신규 read `getAttendanceOnDate(studentId,
+   date)` 추가 — `daily_records`에서 해당 학생·날짜 행의 `attendance`
+   컬럼만 조회(Postgres 전용, `daily_records` 전체 READ 이전은 이번
+   범위 밖). 결과에 따라 완료(결석으로 정상 기록)/확인필요(기록 없음 또는
+   결석이 아닌 다른 출결)/실패(학생 특정 못함)로 분류해 반환.
+4. **nl-roster 2.7초 병목 제거.** 실측으로 원인을 코드까지 추적: 기존
+   `getNlRoster()`가 쓰던 `searchStudents("")`(→`pgSearchStudents`)가
+   `daily_records`/`exam_scores` 테이블 **전체**를 스캔해 출석률/최근성적을
+   계산하는데(`mapPgStudent`), 자연어 입력은 이름/학교/학년/상태/반
+   매칭에만 쓰고 그 두 계산은 전혀 안 쓴다. `pgListNlRosterStudents`(신규,
+   `lib/supabasePgRead.ts`)로 그 두 집계 없이 students 테이블만 가볍게
+   읽도록 대체(`lib/notion.ts`의 `nlRosterStudents()`가 provider별로
+   분기). Notion 경로(`getStudentReadProvider()!=="postgres"`)는 안 건드림.
+
+### 검증
+`npx tsc --noEmit` 통과, `npx vitest run` 13/13 통과(기존 테스트 그대로 —
+신규 오케스트레이터/LLM 호출/Postgres 쓰기 전체를 함께 mocking하는 테스트는
+이번 범위 밖으로 미룸, 아래 "다음 세션" 참고), `npm run build` 통과(에러
+없음).
+
+### ⚠️ 실측 재측정 — 아직 못 함(이번에도 라이브 트리거가 필요)
+`vercel logs`가 히스토리 조회가 안 되고 실시간 스트리밍만 가능하다는 제약은
+그대로다(PART 7에서 확인). 이번 수정 이후의 실제 latency(목표: LLM 1회,
+Notion 명단조회 0회)는 원장이 비슷한 복합 문장을 다시 입력하는 순간
+`vercel logs --follow`를 동시에 보고 있어야 잡을 수 있다 — 이번 세션은
+그 순간을 노려 첫 실측을 확보했지만, 수정 이후 재측정은 다음 세션(또는
+원장이 입력하는 시점)의 몫으로 남는다.
+
+### 다음 세션에서 할 일
+1. 위 재측정을 진행해 목표(LLM 1회, Notion 명단조회 0회, 총 응답시간)
+   달성 여부 확인.
+2. multi-intent 분류 품질은 실제 사용 전까지 검증 불가 — 특히 "출력 3부"
+   같은 quantity/material 슬롯 추출, 여러 학생이 섞인 문장의 route 분리
+   정확도를 실사용 로그로 확인.
+3. 신입생/동명이인 대화형 라운드트립을 통합 경로에도 붙일지 결정(현재는
+   단순화로 생략, 실패로만 표시).
+4. `supabase/schema/004_manual_steps_title.sql` 미적용 상태 계속 유지.
+
+### 신규/변경 파일
+`lib/tasks.ts`(`NewTaskInput.studentIds` 추가), `lib/supabasePgRead.ts`
+(`pgListNlRosterStudents`), `lib/notion.ts`(`createTasks` postgres-primary
+재작성, `nlRosterStudents()`, `getAttendanceOnDate`), `lib/anthropic.ts`
+(`parseUnifiedInput`, `UNIFIED_INTENTS_TOOL`), `lib/nl-input.ts`
+(`runUnifiedNlInput`), `app/api/ai-input/route.ts`(자유 텍스트 경로를
+`runUnifiedNlInput` 호출로 교체), `components/AiUnifiedInput.tsx`
+(`mode:"multi"` outcomes 렌더링 추가).
 
 ---
 
