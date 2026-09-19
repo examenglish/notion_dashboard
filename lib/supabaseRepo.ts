@@ -45,6 +45,20 @@ export function getStudentReadProvider(): "notion" | "postgres" {
   return process.env.ACADEMY_STUDENT_READ_PROVIDER === "postgres" ? "postgres" : "notion";
 }
 
+/**
+ * 자료제작 원본파일의 실제 바이트를 어디에 올릴지만 별도로 게이팅한다 —
+ * material_tasks 메타데이터(제목/담당자/작업률 등)는 이미 postgres-primary로
+ * 안전하게 쓰고 있지만(getDbProvider), 파일 바이트를 Supabase Storage로
+ * 보내려면 그 bucket이 실제로 production에 만들어져 있어야 한다(staff.md
+ * PART 17 "BLOCKED" 참고 — bucket 생성 SQL은 준비됐지만 원장이 아직
+ * 실행 전). bucket이 없는데 이 값이 "supabase"면 업로드가 전부 실패하므로,
+ * 원장이 bucket을 만들고 이 값을 "supabase"로 올리기 전까지는 기존
+ * Notion File Upload 경로를 그대로 쓴다(현재 운영 동작 무변경, 안전).
+ */
+export function getMaterialStorageProvider(): "notion" | "supabase" {
+  return process.env.ACADEMY_MATERIAL_STORAGE_PROVIDER === "supabase" ? "supabase" : "notion";
+}
+
 function authHeaders(key: string) {
   return { apikey: key, Authorization: `Bearer ${key}` };
 }

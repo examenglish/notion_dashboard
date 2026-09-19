@@ -4,7 +4,27 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (**PART 16 신규 — 매뉴얼(MANUAL/MANUAL_STEP)
+마지막 업데이트: 2026-09-19 (**PART 17 신규 — 자료제작(material_tasks)을
+PostgreSQL-primary로 전환 + Supabase Storage 연동 코드 준비(⬜ BLOCKED:
+bucket 생성은 원장이 해야 함).** `createMaterialTask`/`listMaterialTasks`/
+`getMaterialTasksForDate`/`findStaffIdByName`(덤 버그 수정) 전환 완료.
+`createFileUploadDraft`/`uploadMaterialFile`은 새 env var
+`ACADEMY_MATERIAL_STORAGE_PROVIDER`로 게이팅 — 기본값(미설정)은 지금까지와
+똑같이 Notion File Upload API를 쓰고(운영 동작 무변경), `"supabase"`로
+켜면 새 `lib/supabaseStorage.ts`(REST 기반, private bucket, branch
+prefix 강제)로 바이트가 간다. **BLOCKED**: bucket이 아직 production에
+없다 — SQL은 `supabase/schema/005_material_storage_bucket.sql`에 준비됨
+(`insert into storage.buckets ...`), 원장이 Supabase SQL Editor에서
+실행 후 Vercel 두 프로젝트(사직/금정) env에
+`ACADEMY_MATERIAL_STORAGE_PROVIDER=supabase` 추가+재배포해야 실제로
+전환된다. 코드/테스트는 이미 완료·배포됐고 켜기 전까지는 완전히
+잠들어 있어 안전(bucket 없어도 기존 Notion 업로드 경로가 그대로 동작).
+테스트 7건 신규, 84/84 통과, tsc/build 통과. **이 시점부터 원장 지시로
+Phase C(전수조사)~G(운영 안정성)를 자율로 계속 진행 중** — 결과는 이
+파일 상단에 계속 누적. PART 16(매뉴얼)까지 완료 처리는 유지. 아래
+"PART 17" 먼저 확인)
+
+이전 업데이트: 2026-09-19 (**PART 16 — 매뉴얼(MANUAL/MANUAL_STEP)
 WRITE를 Notion-only → PostgreSQL-primary로 전환.** 원장이 `manual_steps.
 title` 컬럼을 production Supabase에 직접 적용(`alter table manual_steps
 add column if not exists title text;`, 사직/금정 공용 DB라 1회만) —
@@ -108,6 +128,95 @@ gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
 PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
 004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
+
+---
+
+## PART 17 — 자료제작 PostgreSQL-primary + Supabase Storage 연동(코드 준비, bucket BLOCKED) (2026-09-19)
+
+### 배경
+원장이 잠든 동안 Phase B(원장 지시) — `createFileUploadDraft`/
+`createMaterialTask`가 Notion File Upload API에 의존하던 것을 조사하고
+Supabase Storage로 옮긴다. 확정된 방향(원장 지시): private bucket, 신규
+업로드부터 Storage, 기존 Notion 첨부는 이번에 마이그레이션 안 함, signed
+URL 열람, branch별 경로 분리(`sajik/materials/...`,
+`geumjeong/materials/...`), 다른 지점 접근 금지.
+
+### 조사 결과 — 재사용 가능한 기존 구조
+- `material_tasks.original_files jsonb`(001_initial_schema.sql)가 이미
+  있어서 새 DB 컬럼이 필요 없었다.
+- Supabase Storage 관련 코드/bucket은 이 저장소에 전혀 없었다(매뉴얼의
+  영상/스크린샷은 별도로 Vercel Blob을 쓰고 있음 — `app/api/manuals/
+  upload-url/route.ts`, 이번 범위와 무관, 안 건드림).
+- 업로드는 이미 `lib/upload.ts`(`MAX_UPLOAD_BYTES` 4MB, Vercel 서버리스
+  요청 바디 제한)로 게이팅돼 있다 — Storage로 바꿔도 이 흐름/제한은
+  그대로 유지(불필요한 재설계 금지 지시에 따라 안 건드림).
+- `updateMaterialTask`는 이미 이전 세션에 postgres-primary로 전환돼
+  있었다(이번엔 안 건드림) — `createMaterialTask`/`listMaterialTasks`/
+  `getMaterialTasksForDate`/파일 업로드 2개 함수만 100% Notion으로 남아있었다.
+
+### 왜 안전 게이트가 필요했는지
+파일 바이트를 Storage로 보내려면 bucket이 실제 production에 있어야
+한다. bucket 없이 코드부터 무조건 전환해버리면, 지금 당장 정상 동작
+중인 "자료 업로드" 기능이 배포 즉시 전부 실패하는 회귀가 생긴다 — 이건
+"안전하게 진행 가능한 작업만 계속"이라는 원칙에 어긋난다. 그래서 이
+저장소에 이미 있던 것과 동일한 패턴(`ACADEMY_STUDENT_READ_PROVIDER`,
+학생 READ를 검증 전까지 따로 게이팅했던 전례)을 그대로 재사용해 새
+`getMaterialStorageProvider()`(`lib/supabaseRepo.ts`)를 만들었다 —
+`ACADEMY_MATERIAL_STORAGE_PROVIDER` env var가 없으면(현재 상태) 지금까지와
+100% 동일하게 Notion File Upload API를 쓴다. bucket을 만들고 이 값을
+`"supabase"`로 올리는 순간부터만 실제로 전환된다. 즉 이번 배포는 완전히
+안전하다(아무 동작도 안 바뀜, 코드만 대기 상태로 들어감).
+
+### 전환한 함수
+- `findStaffIdByName`(덤으로 발견한 버그): `row.notion_id`를 그대로
+  반환해서 postgres-primary로 막 만들어진(아직 notion_id 없는) 직원은
+  이름으로 못 찾았다 — PART 10/16과 같은 종류. `displayId` 규약대로 수정.
+- `createMaterialTask`/`listMaterialTasks`/`getMaterialTasksForDate` —
+  postgres-primary 분기 추가(`updateMaterialTask`와 동일한 기존 패턴).
+- `createFileUploadDraft`/`uploadMaterialFile` — `getMaterialStorageProvider()`
+  분기. `"supabase"`일 때만 `lib/supabaseStorage.ts`로 실제 업로드,
+  아니면 기존 Notion 코드 그대로.
+- 목록 조회 시 `original_files` 항목 중 `source:"supabase"`인 것만
+  `createSignedMaterialFileUrl`로 그때그때 새 서명 URL을 발급한다(private
+  bucket이라 영구 URL을 저장해두지 않음 — 만료되는 값이므로 저장 자체가
+  의미 없음). `source:"notion"`(또는 그런 필드가 아예 없는 legacy
+  마이그레이션 데이터)은 저장된 url을 그대로 쓴다.
+
+### 정직하게 남겨둔 한계
+Notion-storage 경로(`ACADEMY_MATERIAL_STORAGE_PROVIDER`가 꺼져있는
+지금)로 새로 업로드된 파일은, dual-write가 쓰는
+`migrate_notion_to_supabase.mjs`의 `files()` 추출기가 Notion
+"file_upload" 타입 파일의 url을 못 읽는 기존 한계(코드로 확인: `type`이
+`'file'`인 것만 `file.url`을 읽고 그 외엔 `external.url`을 보는데,
+`'file_upload'`는 둘 다 아님) 때문에 postgres-primary 목록 조회에서
+파일 링크가 비어 보일 수 있다. Storage로 전환되면 이 문제 자체가
+없어진다(그래서 굳이 이 추출기 버그를 이번에 고치지 않음 — 여러 엔티티가
+같이 쓰는 공용 매핑 파일이라 범위를 넓히지 않았다).
+
+### ⬜ BLOCKED — 원장이 해야 할 일
+1. Supabase SQL Editor에서 `supabase/schema/005_material_storage_bucket.sql`
+   실행(`insert into storage.buckets (id, name, public, file_size_limit)
+   values ('materials', 'materials', false, 10485760) on conflict (id) do
+   nothing;`) — 사직/금정 공용 DB라 한 번만.
+2. Vercel 프로젝트 둘 다(`notion-dashboard`=사직, `notion-dashboard-geumjeong`=금정)
+   env에 `ACADEMY_MATERIAL_STORAGE_PROVIDER=supabase` 추가 후 재배포.
+3. 그 이후 브라우저로 실제 자료제작 화면에서 파일 업로드/열람이 되는지 확인.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(84/84, 신규 7건 —
+기본값(notion storage) 동작 무변경 확인, supabase 전환 시 실제 업로드
+경로/branch prefix 확인, 목록 조회 시 서명 URL 채워짐, branch isolation
+(다른 지점 경로 서명 거부), Notion mirror 실패해도 생성 유지, native
+UUID/legacy notion_id 공통 lifecycle)/`npm run build` 전부 통과.
+
+### 신규/변경 파일
+`lib/supabaseStorage.ts`(신규), `lib/supabaseRepo.ts`
+(`getMaterialStorageProvider` 신규), `lib/notion.ts`(`findStaffIdByName`
+버그 수정, `createMaterialTask`/`listMaterialTasks`/
+`getMaterialTasksForDate`/`createFileUploadDraft`/`uploadMaterialFile`에
+분기 추가, `mapPgMaterialTask`/`mapPgMaterialFiles`/`buildMaterialFileEntry`
+신규), `supabase/schema/005_material_storage_bucket.sql`(신규, 미적용),
+`lib/materialStorage.postgres.test.ts`(신규, 7건).
 
 ---
 

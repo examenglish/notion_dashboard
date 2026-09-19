@@ -2,6 +2,7 @@ import { Client } from "@notionhq/client";
 import { unstable_cache, revalidateTag } from "next/cache";
 import { todayKST, daysUntilKST } from "./date";
 import { formatBriefingText } from "./briefingFormat";
+import { uploadMaterialFileToStorage, createSignedMaterialFileUrl } from "./supabaseStorage";
 import {
   stripClassSuffix,
   parseWorkHours,
@@ -64,6 +65,7 @@ import {
   pgSetNotionId,
   pgResolveRelationId,
   pgResolveRelationIds,
+  getMaterialStorageProvider,
   pgGetByNotionId,
   pgFindByExactColumn,
   pgArchiveByNotionId,
@@ -3570,7 +3572,11 @@ export async function findStaffIdByName(name: string): Promise<string | null> {
   if (branchCode()) {
     try {
       const row = await pgFindByExactColumn("STAFF", "name", name);
-      if (row) return row.notion_id as string;
+      // notion_id가 아직 없는(postgres-primary로 막 만들어진, 미러 대기 중인)
+      // 직원도 이름으로 찾아져야 한다 — 다른 모든 postgres read와 동일한
+      // displayId 규약(staff.md PART 10/16에서 tasks/manuals가 겪은 것과
+      // 같은 종류의 버그, 여기서 선제적으로 수정, PART 17).
+      if (row) return (row.notion_id as string | null) ?? (row.id as string);
       return null;
     } catch (err) {
       console.error("findStaffIdByName: postgres lookup failed, falling back to Notion", err instanceof Error ? err.message : String(err));
@@ -4317,8 +4323,73 @@ function toMaterialTask(p: any, staffMap: Map<string, string>): MaterialTask {
   };
 }
 
+// original_files(jsonb) 항목 → 실제로 열람 가능한 {name,url}로 바꾼다.
+// source:"supabase"면 private bucket이라 매번 새 서명 URL을 발급해야
+// 하고(저장해둔 URL이 없음 — 애초에 만료되는 값이라 안 만든다), 그 외
+// (source:"notion" 또는 옛 마이그레이션 데이터로 source 자체가 없는 legacy
+// 레코드)는 Notion mirror가 채워준 url을 그대로 쓴다 — 이 값은
+// migrate_notion_to_supabase.mjs의 files() 추출기가 Notion "file_upload"
+// 타입 파일의 url을 못 읽는 기존 한계 때문에 비어있을 수 있다(추측 아님,
+// 코드로 확인: files()는 type이 'file'인 것만 file.url을 읽고 그 외엔
+// external.url을 본다 — 'file_upload' 타입은 둘 다 아니라 빈 문자열이
+// 된다). Supabase Storage로 전환되면 이 한계는 자연히 없어진다.
+async function mapPgMaterialFiles(originalFiles: unknown): Promise<{ name: string; url: string }[]> {
+  if (!Array.isArray(originalFiles)) return [];
+  const out: { name: string; url: string }[] = [];
+  for (const f of originalFiles) {
+    if (!f || typeof f !== "object") continue;
+    const name = (f as any).name ?? "파일";
+    if ((f as any).source === "supabase" && typeof (f as any).path === "string") {
+      const url = await createSignedMaterialFileUrl((f as any).path);
+      if (url) out.push({ name, url });
+      continue;
+    }
+    if (typeof (f as any).url === "string" && (f as any).url) {
+      out.push({ name, url: (f as any).url });
+    }
+  }
+  return out;
+}
+
+type PgMaterialRow = {
+  id: string;
+  notion_id: string | null;
+  title: string | null;
+  requester_notion_ids: string[];
+  owner_notion_ids: string[];
+  content: string | null;
+  progress: number | null;
+  status: string | null;
+  due_date: string | null;
+  file_location: string | null;
+  original_files: unknown;
+  source_payload: any;
+};
+
+async function mapPgMaterialTask(r: PgMaterialRow, staffMap: Map<string, string>): Promise<MaterialTask> {
+  const requesterId = r.requester_notion_ids?.[0];
+  const ownerId = r.owner_notion_ids?.[0];
+  return {
+    id: (r.notion_id as string | null) ?? r.id,
+    title: r.title ?? "",
+    requesterName: requesterId ? staffMap.get(requesterId) ?? "-" : "-",
+    ownerName: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
+    content: r.content ?? "",
+    progress: r.progress ?? 0,
+    status: r.status ?? "요청됨",
+    dueDate: r.due_date ?? null,
+    fileLocation: r.file_location ?? null,
+    files: await mapPgMaterialFiles(r.original_files),
+  };
+}
+
 // 전체보기(행정실과 동일한 RecentListCard 재사용)용 — 마감일이 가까운 순.
 export async function listMaterialTasks(): Promise<MaterialTask[]> {
+  if (getDbProvider() === "postgres") {
+    const [rows, staffMap] = await Promise.all([pgQueryRaw("MATERIAL", "select=*"), pgStaffNameMap()]);
+    const tasks = await Promise.all(rows.filter(pgNotArchived).map((r) => mapPgMaterialTask(r as unknown as PgMaterialRow, staffMap)));
+    return tasks.sort((a, b) => (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99"));
+  }
   const [results, staffMap] = await Promise.all([
     queryAllPages({ data_source_id: DB.MATERIAL }),
     staffNameMap(),
@@ -4330,6 +4401,10 @@ export async function listMaterialTasks(): Promise<MaterialTask[]> {
 
 // 오늘의 일정 섹션용 — 마감일이 정확히 그 날짜인 항목만.
 export async function getMaterialTasksForDate(date: string): Promise<MaterialTask[]> {
+  if (getDbProvider() === "postgres") {
+    const [rows, staffMap] = await Promise.all([pgQueryRaw("MATERIAL", `due_date=eq.${date}`), pgStaffNameMap()]);
+    return Promise.all(rows.filter(pgNotArchived).map((r) => mapPgMaterialTask(r as unknown as PgMaterialRow, staffMap)));
+  }
   const [results, staffMap] = await Promise.all([
     queryAllPages({
       data_source_id: DB.MATERIAL,
@@ -4355,6 +4430,51 @@ export async function createMaterialTask(input: {
     input.requesterName ? findStaffIdByName(input.requesterName) : null,
     input.ownerName ? findStaffIdByName(input.ownerName) : null,
   ]);
+
+  if (getDbProvider() === "postgres") {
+    const originalFiles = input.fileUploadId ? [buildMaterialFileEntry(input.fileUploadId, input.fileName ?? "원본파일")] : [];
+    const [requesterPgId, ownerPgId] = await Promise.all([
+      requesterId ? pgResolveRelationId("STAFF", requesterId) : Promise.resolve(null),
+      ownerId ? pgResolveRelationId("STAFF", ownerId) : Promise.resolve(null),
+    ]);
+    const row = await pgInsertRow("MATERIAL", {
+      title: input.title,
+      requester_id: requesterPgId,
+      requester_notion_ids: requesterId ? [requesterId] : [],
+      owner_id: ownerPgId,
+      owner_notion_ids: ownerId ? [ownerId] : [],
+      content: input.content,
+      progress: 0,
+      status: "요청됨",
+      due_date: input.dueDate,
+      file_location: input.fileLocation ?? null,
+      original_files: originalFiles,
+    });
+    fireAndForget("notion:createMaterialTask", async () => {
+      const page = await notion.pages.create({
+        parent: { data_source_id: DB.MATERIAL } as any,
+        properties: {
+          제목: { title: [{ text: { content: input.title } }] },
+          ...(requesterId ? { 요청자: { relation: [{ id: requesterId }] } } : {}),
+          ...(ownerId ? { 담당자: { relation: [{ id: ownerId }] } } : {}),
+          작업내용: { rich_text: [{ text: { content: input.content } }] },
+          작업률: { number: 0 },
+          상태: { select: { name: "요청됨" } },
+          마감일: { date: { start: input.dueDate } },
+          ...(input.fileLocation ? { 파일저장위치: { url: input.fileLocation } } : {}),
+          // Supabase Storage 업로드는 Notion에 미러할 방법이 없다(원본
+          // 바이트가 Notion에 없음) — notion-storage 업로드일 때만 원본파일
+          // relation도 같이 보낸다.
+          ...(input.fileUploadId && originalFiles[0]?.source === "notion"
+            ? { 원본파일: { files: [{ type: "file_upload", file_upload: { id: input.fileUploadId }, name: input.fileName } as any] } }
+            : {}),
+        } as any,
+      });
+      await pgSetNotionId("MATERIAL", row.id, page.id);
+    });
+    return;
+  }
+
   const created = await notion.pages.create({
     parent: { data_source_id: DB.MATERIAL } as any,
     properties: {
@@ -4425,14 +4545,25 @@ export async function updateMaterialTask(
 }
 
 // 원본파일 업로드 — 이 작업의 최신 원본으로 교체한다(누적 첨부는 지원하지
-// 않음: Notion API가 돌려주는 기존 파일은 "file"(만료 URL) 타입이라
-// file_upload로 재첨부할 수 없어, 여러 개를 유지하려는 시도 자체가 신뢰할
-// 수 없다).
-// Notion에 바이트를 올려두기만 하고(create + send), 아직 어느 페이지에도
-// 붙이지 않은 file_upload id를 돌려준다. 새 작업요청은 페이지가 생기기
-// 전에 파일부터 선택하는 경우가 많아서, 업로드 자체는 미리 해두고 그
-// id를 createMaterialTask에 실어 페이지 생성과 동시에 붙인다.
-export async function createFileUploadDraft(filename: string, contentType: string, data: Blob) {
+// 않음).
+//
+// staff.md PART 17: 원장 지시로 신규 업로드는 Supabase Storage(private
+// bucket)로 옮긴다 — bucket이 실제로 production에 만들어지고
+// ACADEMY_MATERIAL_STORAGE_PROVIDER=supabase가 켜지기 전까지는(getMaterialStorageProvider)
+// 기존 Notion File Upload API 경로를 그대로 쓴다(운영 동작 무변경, 안전).
+// 반환값 fileUploadId는 어느 쪽이든 호출부(createMaterialTask/uploadMaterialFile)가
+// "이 업로드를 가리키는 불투명한 문자열"로만 다루면 되게 형태를 통일했다
+// (Supabase면 storage 경로, Notion이면 file_upload id) — 클라이언트/API
+// 라우트는 이 차이를 몰라도 된다.
+export async function createFileUploadDraft(
+  filename: string,
+  contentType: string,
+  data: Blob
+): Promise<{ fileUploadId: string; filename: string }> {
+  if (getMaterialStorageProvider() === "supabase") {
+    const stored = await uploadMaterialFileToStorage(filename, contentType, data);
+    return { fileUploadId: stored.path, filename };
+  }
   const created = await notion.fileUploads.create({
     mode: "single_part",
     filename,
@@ -4442,20 +4573,44 @@ export async function createFileUploadDraft(filename: string, contentType: strin
   return { fileUploadId: created.id, filename };
 }
 
+// material_tasks.original_files(jsonb)에 저장할 항목 하나를 만든다.
+// source로 나중에(목록 조회 시) signed URL을 새로 발급할지(supabase),
+// 저장된 값을 그대로 쓸지(notion, 최선 노력) 구분한다.
+function buildMaterialFileEntry(fileUploadId: string, filename: string): Record<string, unknown> {
+  if (getMaterialStorageProvider() === "supabase") {
+    return { name: filename, path: fileUploadId, source: "supabase" };
+  }
+  return { name: filename, notionFileUploadId: fileUploadId, source: "notion" };
+}
+
 // 기존 작업의 원본파일을 새로 올린 것으로 교체한다.
-export async function uploadMaterialFile(
-  pageId: string,
-  filename: string,
-  contentType: string,
-  data: Blob
-) {
+export async function uploadMaterialFile(pageId: string, filename: string, contentType: string, data: Blob) {
   const { fileUploadId } = await createFileUploadDraft(filename, contentType, data);
-  await notion.pages.update({
+  const entry = buildMaterialFileEntry(fileUploadId, filename);
+
+  if (getDbProvider() === "postgres") {
+    await pgPatchByNotionId("MATERIAL", pageId, { original_files: [entry] });
+    // Supabase Storage로 올라간 바이트는 Notion에 미러할 방법이 없다(원본이
+    // Notion에 없음) — notion-storage 업로드일 때만 Notion 원본파일
+    // relation도 best-effort로 채운다.
+    if (entry.source === "notion") {
+      fireAndForget("notion:uploadMaterialFile", () =>
+        notion.pages.update({
+          page_id: pageId,
+          properties: { 원본파일: { files: [{ type: "file_upload", file_upload: { id: fileUploadId }, name: filename } as any] } } as any,
+        })
+      );
+    }
+    return;
+  }
+
+  const updated = await notion.pages.update({
     page_id: pageId,
     properties: {
       원본파일: { files: [{ type: "file_upload", file_upload: { id: fileUploadId }, name: filename } as any] },
     } as any,
   });
+  await dualWriteEntity("MATERIAL", updated);
 }
 
 // ---- 학생별 시험대비 (DB⑨) ----
