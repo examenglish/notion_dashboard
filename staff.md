@@ -4,7 +4,21 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (**PART 20 신규 — `getStudentFullHistory`
+마지막 업데이트: 2026-09-19 (**PART 21 신규 — `getClinicCompliance`/
+`getClinicCoverageGaps` 전환으로 Phase C가 찾은 "순수 Notion 전용" 함수
+목록이 사실상 소진됨.** 클리닉 지시 이행 확인(TODO 유형=클리닉 +
+`clinic_report_notion_ids`로 보고 연결)과 클리닉 케어 공백 학생 찾기
+(재원생 전체 - 최근 케어기록 학생) 둘 다 새 스키마 없이 전환. 이제
+`lib/notion.ts`에 남은 의도적 Notion 의존은 **딱 2개**: (1)
+`getPlannedAbsentStudentIds` — PART 13에서 이미 try/catch 안전망만
+추가하고 전환은 범위 밖으로 명시(ADMIN_INBOX 도메인), (2)
+`findStaffByNameAndPin`의 PIN 평문 폴백 — PART 19에서 BLOCKED로 기록
+(운영 계정 `pin_hash` backfill 확인 전까지 못 뺌). 나머지는 전부
+postgres-primary(+best-effort Notion mirror) 아니면 아예 Notion을 안
+쓴다. 테스트 2건 신규, 101/101 통과, tsc/build 통과. PART 20까지
+완료 처리는 유지. 아래 "PART 21" 먼저 확인)
+
+이전 업데이트: 2026-09-19 (**PART 20 — `getStudentFullHistory`
 ("학생 전체기록 보기") Notion-only → PostgreSQL-primary 전환, Phase D의
 마지막 남은 대형 함수.** 일일기록(+반별진도 과제내용 병합, dual-id OR
 조회)/보강·조치사항·복습·클리닉 TODO 4종/상담/행정실/클리닉기록/Slack
@@ -175,6 +189,41 @@ gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
 PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
 004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
+
+---
+
+## PART 21 — getClinicCompliance/getClinicCoverageGaps 전환, Phase C 사실상 완료 (2026-09-19)
+
+### 배경
+PART 18/20에서 우선순위 낮게 미뤄뒀던 마지막 두 함수. 시간이 남아 같은
+세션에서 이어서 처리 — 이걸로 Phase C(전수조사)가 찾아낸 "순수 Notion
+전용" 목록이 사실상 다 없어졌다.
+
+### 전환 내용
+- `getClinicCompliance` — TODO(유형=클리닉)에 이미 있던
+  `clinic_report_notion_ids`(dual-id 배열, Notion "클리닉보고" relation
+  미러)로 CLINIC 기록을 연결. 새 조회 방식 필요 없이 PART 20에서 쓴
+  "dual-id 배열 모아서 or= 배치 조회 + notion_id/id 양쪽 키로 맵 구성"
+  패턴 그대로 재사용.
+- `getClinicCoverageGaps` — 재원생 전체(`students.status=eq.재원`) -
+  최근 N일 케어기록(CLINIC + 완료된 TODO 클리닉) 학생 = 공백 학생.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(101/101, 신규 2건 — 클리닉 지시+보고
+연결 및 overdue 판정, 케어 공백 학생 필터링(재원 아닌 학생/이미 케어된
+학생 제외))/`npm run build` 전부 통과.
+
+### 남은 Notion 의존성 (의도적으로 유지, staff.md 최상단 요약 참고)
+1. `getPlannedAbsentStudentIds` — PART 13에서 안전망(try/catch)만
+   추가하고 전환은 범위 밖으로 명시.
+2. `findStaffByNameAndPin`의 PIN 평문 폴백 — PART 19 BLOCKED, 운영
+   계정 `pin_hash` backfill 상태 확인 전까지 유지.
+이 둘을 빼면 `lib/notion.ts`의 모든 함수가 postgres-primary(+Notion
+best-effort 미러)이거나 애초에 Notion을 안 쓴다.
+
+### 신규/변경 파일
+`lib/notion.ts`(`getClinicCompliance`/`getClinicCoverageGaps`에 postgres
+분기), `lib/clinicCompliance.postgres.test.ts`(신규, 2건).
 
 ---
 

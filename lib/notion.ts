@@ -4391,6 +4391,44 @@ export async function getRecentClinicRecords() {
 // DUAL relation의 역방향 프로퍼티("클리닉보고")로 같은 페이지에서 바로 읽힌다.
 export async function getClinicCompliance(sinceDays = 14) {
   const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  if (getDbProvider() === "postgres") {
+    const rows = await pgQueryRaw("TODO", `type=eq.${encodeURIComponent("클리닉")}&due_date=gte.${since}`);
+    const tasks = rows.filter(pgNotArchived).sort((a, b) => ((b.due_date as string) ?? "").localeCompare((a.due_date as string) ?? ""));
+    const reportIds = Array.from(
+      new Set(tasks.map((r) => (r.clinic_report_notion_ids as string[] | undefined)?.[0]).filter((v): v is string => !!v))
+    );
+    const [names, staffMap, reportRows] = await Promise.all([
+      studentNameMap(),
+      pgStaffNameMap(),
+      reportIds.length > 0
+        ? pgQueryRaw("CLINIC", `or=(${reportIds.map((id) => `notion_id.eq.${encodeURIComponent(id)},id.eq.${encodeURIComponent(id)}`).join(",")})`)
+        : Promise.resolve([]),
+    ]);
+    const reportById = new Map<string, { content: string; nextPrep: string }>();
+    for (const r of reportRows) {
+      const val = { content: (r.content as string) ?? "", nextPrep: (r.next_preparation as string) ?? "" };
+      if (r.notion_id) reportById.set(r.notion_id as string, val);
+      if (r.id) reportById.set(r.id as string, val);
+    }
+    const today = todayKST();
+    return tasks.map((r) => {
+      const studentId = (r.student_notion_ids as string[] | undefined)?.[0];
+      const ownerId = (r.staff_notion_ids as string[] | undefined)?.[0];
+      const reportId = (r.clinic_report_notion_ids as string[] | undefined)?.[0];
+      const date = (r.due_date as string | null) ?? null;
+      const done = !!r.complete;
+      return {
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        date,
+        studentName: studentId ? names.get(studentId) ?? "-" : "-",
+        assistant: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
+        instruction: (r.memo as string) ?? "",
+        done,
+        report: reportId ? reportById.get(reportId) ?? null : null,
+        overdue: !done && !!date && date < today,
+      };
+    });
+  }
   const tasks = await queryAllPages({
     data_source_id: DB.TODO,
     filter: {
@@ -4442,6 +4480,32 @@ export async function getClinicCompliance(sinceDays = 14) {
 // 출결/과제/상담 등 클리닉 이외의 케어는 범위 밖 — 필요하면 추후 확장.
 export async function getClinicCoverageGaps(sinceDays = 14) {
   const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  if (getDbProvider() === "postgres") {
+    const [studentRows, recentClinicRows, recentTaskRows, classById] = await Promise.all([
+      pgQueryRaw("STUDENT", `status=eq.${encodeURIComponent("재원")}`),
+      pgQueryRaw("CLINIC", `record_date=gte.${since}`),
+      pgQueryRaw("TODO", `type=eq.${encodeURIComponent("클리닉")}&complete=eq.true&due_date=gte.${since}`),
+      classNamePgMap(),
+    ]);
+    const coveredIds = new Set<string>();
+    for (const r of recentClinicRows.filter(pgNotArchived)) {
+      for (const id of (r.student_notion_ids as string[] | undefined) ?? []) coveredIds.add(id);
+    }
+    for (const r of recentTaskRows.filter(pgNotArchived)) {
+      for (const id of (r.student_notion_ids as string[] | undefined) ?? []) coveredIds.add(id);
+    }
+    return studentRows
+      .filter(pgNotArchived)
+      .map((r) => ({
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        name: (r.name as string) ?? "",
+        school: (r.school as string) ?? "",
+        grade: (r.grade as string | null) ?? null,
+        classNames: ((r.class_notion_ids as string[] | undefined) ?? []).map((id) => classById.get(id) ?? "알수없음"),
+      }))
+      .filter((s) => !coveredIds.has(s.id))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
   const [activeStudents, recentRecords, recentTasks, classById] = await Promise.all([
     queryAllPages({
       data_source_id: DB.STUDENT,
