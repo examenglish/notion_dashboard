@@ -4,7 +4,25 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (**PART 18 신규 — Phase C(전수조사) + Phase D
+마지막 업데이트: 2026-09-19 (**PART 19 신규 — Phase E/F/G(성능·PIN
+fallback·운영 안정성) 점검, 로그인 관련 dual-id 버그 2건 수정(보안
+중요도 높음).** Phase E(hot path): 이미 이번 세션에서 tasks/class-record/
+clinic/exam-prep/manuals/materials가 전부 postgres-primary로 전환됐고,
+`lib/notion.ts` 밖(app/api·components)에서 Notion을 직접 호출하는 곳이
+없음을 확인(Phase C 2부) — 실측 로그 없이 숫자를 지어내지 않기 위해
+"추가로 손댈 hot path 없음"까지만 확인, 성능 수치는 보고 안 함. Phase F
+(PIN fallback): `findStaffByNameAndPin`이 `pin_hash` 없는 계정을 위해
+Notion 평문 PIN 폴백 경로를 여전히 갖고 있음을 확인 — **BLOCKED**(운영
+계정 전체의 `pin_hash` backfill 여부를 DB 조회로 확인해야 안전하게 뺄 수
+있음, 아래 참고). Phase G(운영 안정성) 점검 중 실제 버그 2건 발견/수정:
+`findStaffByNameAndPin`/`findStudentByName`이 `row.notion_id`를 그대로
+반환해서 **postgres-primary로 막 만든 신규 직원/학생은 notion_id가 아직
+없으면 로그인·중복확인 로직에서 id가 null이 되는** 문제(PART 10부터
+반복 발견된 것과 동일 종류지만 이번엔 **로그인 자체**에 영향 — 우선순위
+높게 잡고 즉시 수정+배포). 테스트 3건 신규, 94/94 통과, tsc/build 통과.
+PART 18까지 완료 처리는 유지. 아래 "PART 19" 먼저 확인)
+
+이전 업데이트: 2026-09-19 (**PART 18 — Phase C(전수조사) + Phase D
 일부(학생 일일기록/시험성적/상담이력 READ, 대기생 승격 cron)를
 PostgreSQL-primary로 전환.** Phase C: `lib/notion.ts` 126개 export
 함수 전체를 스크립트로 분류(postgres 분기 있음/없음 + notion 호출 여부) —
@@ -145,6 +163,76 @@ gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
 PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
 004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
+
+---
+
+## PART 19 — Phase E/F/G 점검 + 로그인 dual-id 버그 수정 (2026-09-19)
+
+### Phase E — Notion hot path 제거
+이미 이번 세션(PART 12~18)에서 업무/수업진도·출결/클리닉READ/시험대비/
+매뉴얼/자료제작이 전부 postgres-primary로 전환됐고, Phase C 2부에서
+`app/api/**`/`components/**` 전체를 grep해 `@notionhq/client`를 직접
+import하는 파일이 `lib/notion.ts`(와 이번 세션에 만든 테스트 파일들)
+말고 없다는 것도 확인했다 — 즉 이 코드베이스에서 Notion을 호출하는
+경로는 전부 `lib/notion.ts`를 거치고, 그 안에서 이미 대부분
+`getDbProvider()` 분기가 돼 있다(Phase C 분류 결과, PART 18 참고).
+**실측 로그 없이 "몇 ms 빨라졌다"를 보고하지 않는다는 원칙**에 따라,
+이번엔 "추가로 전환할 hot path 코드가 남아있는지"만 확인하고 그렇다는
+결론(없음)까지만 보고한다 — 실제 체감 속도는 원장이 직접 써보고
+판단할 문제.
+
+### Phase F — PIN 로그인 Notion fallback
+`findStaffByNameAndPin`(lib/notion.ts)이 여전히 두 단계 구조다: ①
+`pin_hash`가 있는 계정은 Postgres만으로 확인 ② `pin_hash`가 없는(아직
+backfill 안 된) 계정은 Notion 평문 PIN(`getCachedStaffList()`)으로
+확인 후 그 자리에서 `pin_hash`를 채워 넣는다(PART 5에서 만든 lazy
+backfill). **이 폴백을 지금 제거하면 안 되는 이유**: 운영 중인 모든
+직원 계정의 `pin_hash`가 실제로 다 채워졌는지 이 세션에서 직접 DB
+조회로 확인할 수 없다(SUPABASE_SERVICE_ROLE_KEY 접근 불가, secret 요구
+금지 지시와도 일치) — 단 한 계정이라도 아직 `pin_hash`가 null인데
+폴백을 지워버리면 그 직원은 로그인이 아예 막힌다(실제 운영 계정 잠금
+위험, 명시적 금지 사항).
+
+**⬜ BLOCKED — 원장이 확인해야 할 것**: Supabase SQL Editor에서
+```sql
+select count(*) from staff where pin_hash is null and resigned = false;
+```
+사직/금정(branch_id로 조건 추가 필요하면 `and branch_id = (select id
+from branches where code='sajik')`처럼) 양쪽 다 0이 나오면, 다음
+세션에서 Notion 폴백 분기를 안전하게 제거할 수 있다.
+
+### Phase G — 운영 안정성 점검 (실제 버그 2건 발견/수정)
+"새로 생성된 postgres-native 데이터가 옛 notion_id를 전제로 한 코드
+때문에 안 되는 곳"을 다시 전수검사 — `lib/notion.ts` 전체에서
+`.notion_id as string`(fallback 없이 그대로 반환하는 패턴)을 grep해
+남은 인스턴스를 확인했다. 이미 안전한 것들(`existing?.notion_id`처럼
+truthy 체크 후 사용, 또는 `if (!notionId) return`으로 스킵하는
+best-effort 미러 코드)은 제외하고, 진짜 버그 2건을 찾았다:
+
+1. **`findStaffByNameAndPin`**(로그인 라우트가 직접 호출, `/api/login`)
+   — `pin_hash`가 있어서 Postgres 전용 경로로 로그인에 성공해도, 그
+   직원이 postgres-primary로 막 만들어져(PART 5 이후 `createStaff`는
+   `pin_hash`를 생성 시점에 바로 채운다) 아직 Notion 미러가 안 끝난
+   상태면 `notion_id`가 null이라 **`session.staffId`가 null로
+   세팅되는** 문제였다 — 로그인은 "성공"했다고 나오지만 이후 모든
+   화면(내 업무 등)이 깨지는, 실제 발생 가능성이 있는 심각한 버그.
+2. **`findStudentByName`** — 학생등록 동명이인 중복확인에서 같은
+   문제(postgres-primary 신규 학생은 안 걸러짐 → 중복 등록 가능).
+
+둘 다 `displayId` 규약(`notion_id ?? postgres id`)으로 수정 — PART 10
+(tasks)/16(manuals)/17(material 담당자)/18(findStaffIdByName)에서 반복
+발견된 것과 완전히 같은 종류의 버그다. 재발 패턴이 뚜렷하므로 다음
+세션에서도 `lib/notion.ts`에 새 함수를 추가할 때마다 "row.notion_id를
+fallback 없이 그대로 쓰고 있지 않은가"를 기본 체크리스트에 넣을 것.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(94/94, 신규 3건 — 신규 직원
+로그인 시 id 정상 반환, 신규/기존 학생 각각 findStudentByName 정상
+동작)/`npm run build` 전부 통과.
+
+### 신규/변경 파일
+`lib/notion.ts`(`findStaffByNameAndPin`/`findStudentByName` dual-id
+버그 수정), `lib/phaseG.postgres.test.ts`(신규, 3건).
 
 ---
 

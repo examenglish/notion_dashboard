@@ -325,7 +325,10 @@ export async function findStaffByNameAndPin(name: string, pin: string) {
         const ok = await verifyPin(pin, row.pin_hash as string);
         if (!ok) return null;
         return {
-          id: row.notion_id as string,
+          // notion_id가 아직 없는(postgres-primary로 막 만든 직원, 미러
+          // 대기 중) 계정도 로그인 직후 session.staffId가 null이 되면 안
+          // 된다 — PART 10/16/17/18과 동일한 종류의 버그, 여기서도 수정.
+          id: (row.notion_id as string | null) ?? (row.id as string),
           name: row.name as string,
           role: row.role as string,
           mustChangePin: !!row.must_change_password,
@@ -3621,7 +3624,7 @@ export async function findStudentByName(name: string): Promise<{ id: string; nam
   if (branchCode()) {
     try {
       const row = await pgFindByExactColumn("STUDENT", "name", name);
-      if (row) return { id: row.notion_id as string, name: row.name as string };
+      if (row) return { id: (row.notion_id as string | null) ?? (row.id as string), name: row.name as string };
       return null;
     } catch (err) {
       console.error("findStudentByName: postgres lookup failed, falling back to Notion", err instanceof Error ? err.message : String(err));
