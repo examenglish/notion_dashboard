@@ -522,7 +522,11 @@ export async function pgGetRecentClinicRecords(studentNames: Map<string, string>
 export async function pgListManuals(opts: { status?: string } = {}) {
   const rows = await pgFetch("manuals", opts.status ? `select=*&status=eq.${encodeURIComponent(opts.status)}` : "select=*");
   return rows.filter(notArchived).map((r) => ({
-    id: r.notion_id,
+    // notion_id가 아직 없는(postgres-primary 생성 직후) 매뉴얼도 목록에서
+    // 클릭 가능해야 한다 — 다른 모든 postgres read 함수와 동일한 displayId
+    // 규약(staff.md PART 10에서 tasks가 겪은 것과 같은 종류의 버그, 여기서
+    // 선제적으로 수정, staff.md PART 16).
+    id: displayId(r),
     title: r.title,
     category: r.category ?? "",
     targetRoles: r.target_roles ?? [],

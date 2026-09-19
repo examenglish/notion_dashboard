@@ -6323,12 +6323,26 @@ function notionCreateManualDraft(input: { title: string; category: string; targe
   });
 }
 
-// Category C(보류): createManualSteps가 이 함수의 반환값(id)을 곧바로
-// "매뉴얼" relation으로 써서 Notion에 스텝을 생성하므로, 여기서 Notion
-// 생성을 나중으로 미루면(best-effort) 그 시점에 아직 Notion id가 없어
-// 스텝을 저장할 수 없다. MANUAL_STEP 자체도 title 컬럼 존재 여부를 스키마
-// 파일에서 확인하지 못해(수동 ALTER로 추가됐을 가능성) 그대로 두었다 —
-// 매뉴얼 기능은 사용 빈도가 낮아(PART 1 미완료 항목) 오늘 우선순위에서 뒤로 뺀다.
+function mapPgManualRow(row: Record<string, unknown>): ManualRecord {
+  return {
+    id: (row.notion_id as string | null) ?? (row.id as string),
+    title: (row.title as string) ?? "",
+    category: (row.category as string) ?? "",
+    targetRoles: (row.target_roles as string[]) ?? [],
+    status: ((row.status as ManualStatus | null) ?? "DRAFT") as ManualStatus,
+    sourceVideoUrl: (row.video_url as string | null) ?? null,
+    summary: (row.summary as string) ?? "",
+    createdBy: (row.author as string) ?? "",
+    createdAt: ((row.source_payload as any)?.notion_created_time as string | undefined) ?? (row.created_at as string | null) ?? null,
+  };
+}
+
+// `supabase/schema/004_manual_steps_title.sql` 적용 완료(원장, 2026-09-19,
+// staff.md PART 16) — 이제 postgres-primary로 전환 가능. manualId(dual-id)
+// 를 pgResolveRelationId로 처리하므로, createManualDraft가 postgres에
+// 먼저 쓰고 Notion을 나중에(best-effort) 미러해도 createManualSteps가
+// 바로 이어서 부르는 데 문제없다(예전 주석이 걱정했던 "Notion id가 아직
+// 없어 스텝을 못 만드는" 문제는 dual-id 규약으로 이미 해결돼 있었음).
 export async function createManualDraft(input: {
   title: string;
   category: string;
@@ -6337,6 +6351,22 @@ export async function createManualDraft(input: {
   summary: string;
   createdBy: string;
 }): Promise<string> {
+  if (getDbProvider() === "postgres") {
+    const row = await pgInsertRow("MANUAL", {
+      title: input.title,
+      category: input.category || "기타",
+      target_roles: input.targetRoles,
+      status: "DRAFT",
+      video_url: input.sourceVideoUrl,
+      summary: input.summary,
+      author: input.createdBy,
+    });
+    fireAndForget("notion:createManualDraft", async () => {
+      const page = await notionCreateManualDraft(input);
+      await pgSetNotionId("MANUAL", row.id, page.id);
+    });
+    return row.id;
+  }
   const page = await notionCreateManualDraft(input);
   await dualWriteEntity("MANUAL", page);
   return page.id;
@@ -6366,6 +6396,10 @@ export async function listManuals(opts: { status?: ManualStatus; role?: string }
 }
 
 export async function getManual(id: string): Promise<ManualRecord | null> {
+  if (getDbProvider() === "postgres") {
+    const row = await pgGetByNotionId("MANUAL", id);
+    return row ? mapPgManualRow(row) : null;
+  }
   const page: any = await notion.pages.retrieve({ page_id: id }).catch(() => null);
   return page ? mapManualPage(page) : null;
 }
@@ -6426,19 +6460,72 @@ function mapManualStepPage(p: any): ManualStepRecord {
   };
 }
 
-export async function createManualSteps(
-  manualId: string,
-  steps: {
-    order: number;
-    title: string;
-    description: string;
-    screenshot: string;
-    videoTimestamp: string;
-    warning?: string;
-    relatedPath?: string;
-    keywords?: string;
-  }[]
-): Promise<void> {
+function mapPgManualStepRow(row: Record<string, unknown>): ManualStepRecord {
+  return {
+    id: (row.notion_id as string | null) ?? (row.id as string),
+    manualId: (row.manual_notion_ids as string[] | undefined)?.[0] ?? "",
+    order: (row.step_order as number | null) ?? 0,
+    title: (row.title as string) ?? "",
+    description: (row.description as string) ?? "",
+    screenshot: (row.screenshot_url as string | null) ?? null,
+    videoTimestamp: (row.video_timestamp as string) ?? "",
+    warning: (row.caution as string) ?? "",
+    relatedPath: (row.related_path as string) ?? "",
+    keywords: (row.keywords as string) ?? "",
+  };
+}
+
+type NewManualStepInput = {
+  order: number;
+  title: string;
+  description: string;
+  screenshot: string;
+  videoTimestamp: string;
+  warning?: string;
+  relatedPath?: string;
+  keywords?: string;
+};
+
+function buildManualStepNotionProps(manualId: string, step: NewManualStepInput) {
+  return {
+    제목: { title: [{ text: { content: step.title } }] },
+    매뉴얼: { relation: [{ id: manualId }] },
+    순서: { number: step.order },
+    설명: { rich_text: chunkRichText(step.description) },
+    스크린샷: { url: step.screenshot },
+    영상타임스탬프: { rich_text: [{ text: { content: step.videoTimestamp } }] },
+    ...(step.warning ? { 주의사항: { rich_text: chunkRichText(step.warning) } } : {}),
+    ...(step.relatedPath ? { 관련경로: { rich_text: [{ text: { content: step.relatedPath } }] } } : {}),
+    ...(step.keywords ? { 키워드: { rich_text: [{ text: { content: step.keywords } }] } } : {}),
+  };
+}
+
+export async function createManualSteps(manualId: string, steps: NewManualStepInput[]): Promise<void> {
+  if (getDbProvider() === "postgres") {
+    const manualPgId = await pgResolveRelationId("MANUAL", manualId);
+    for (const step of steps) {
+      const row = await pgInsertRow("MANUAL_STEP", {
+        title: step.title,
+        manual_id: manualPgId,
+        manual_notion_ids: [manualId],
+        step_order: step.order,
+        description: step.description,
+        screenshot_url: step.screenshot || null,
+        video_timestamp: step.videoTimestamp,
+        caution: step.warning ?? "",
+        related_path: step.relatedPath ?? "",
+        keywords: step.keywords ?? "",
+      });
+      fireAndForget("notion:createManualSteps", async () => {
+        const created = await notion.pages.create({
+          parent: { data_source_id: requireManualStepDb() } as any,
+          properties: buildManualStepNotionProps(manualId, step) as any,
+        });
+        await pgSetNotionId("MANUAL_STEP", row.id, created.id);
+      });
+    }
+    return;
+  }
   const stepDb = requireManualStepDb();
   for (const step of steps) {
     const created = await notion.pages.create({
@@ -6460,6 +6547,15 @@ export async function createManualSteps(
 }
 
 export async function listManualSteps(manualId: string): Promise<ManualStepRecord[]> {
+  if (getDbProvider() === "postgres") {
+    const manualPgId = await pgResolveRelationId("MANUAL", manualId);
+    if (!manualPgId) return [];
+    const rows = await pgQueryRaw("MANUAL_STEP", `manual_id=eq.${manualPgId}`);
+    return rows
+      .filter(pgNotArchived)
+      .map(mapPgManualStepRow)
+      .sort((a, b) => a.order - b.order);
+  }
   const records = await queryAllPages({
     data_source_id: requireManualStepDb(),
     filter: { property: "매뉴얼", relation: { contains: manualId } },
@@ -6471,26 +6567,65 @@ export async function updateManualStep(
   id: string,
   input: { title?: string; description?: string; screenshot?: string | null; warning?: string; relatedPath?: string; order?: number }
 ): Promise<void> {
-  const properties: any = {};
-  if (input.title !== undefined) properties["제목"] = { title: [{ text: { content: input.title } }] };
-  if (input.description !== undefined) properties["설명"] = { rich_text: chunkRichText(input.description) };
-  if (input.screenshot !== undefined) properties["스크린샷"] = { url: input.screenshot };
-  if (input.warning !== undefined) properties["주의사항"] = { rich_text: chunkRichText(input.warning) };
-  if (input.relatedPath !== undefined) properties["관련경로"] = { rich_text: [{ text: { content: input.relatedPath } }] };
-  if (input.order !== undefined) properties["순서"] = { number: input.order };
-  const updated = await notion.pages.update({ page_id: id, properties });
+  const buildProperties = () => {
+    const properties: any = {};
+    if (input.title !== undefined) properties["제목"] = { title: [{ text: { content: input.title } }] };
+    if (input.description !== undefined) properties["설명"] = { rich_text: chunkRichText(input.description) };
+    if (input.screenshot !== undefined) properties["스크린샷"] = { url: input.screenshot };
+    if (input.warning !== undefined) properties["주의사항"] = { rich_text: chunkRichText(input.warning) };
+    if (input.relatedPath !== undefined) properties["관련경로"] = { rich_text: [{ text: { content: input.relatedPath } }] };
+    if (input.order !== undefined) properties["순서"] = { number: input.order };
+    return properties;
+  };
+  if (getDbProvider() === "postgres") {
+    const patch: Record<string, unknown> = {};
+    if (input.title !== undefined) patch.title = input.title;
+    if (input.description !== undefined) patch.description = input.description;
+    if (input.screenshot !== undefined) patch.screenshot_url = input.screenshot;
+    if (input.warning !== undefined) patch.caution = input.warning;
+    if (input.relatedPath !== undefined) patch.related_path = input.relatedPath;
+    if (input.order !== undefined) patch.step_order = input.order;
+    await pgPatchByNotionId("MANUAL_STEP", id, patch);
+    fireAndForget("notion:updateManualStep", () => notion.pages.update({ page_id: id, properties: buildProperties() }));
+    return;
+  }
+  const updated = await notion.pages.update({ page_id: id, properties: buildProperties() });
   await dualWriteEntity("MANUAL_STEP", updated);
 }
 
 export async function deleteManualStep(id: string): Promise<void> {
+  if (getDbProvider() === "postgres") {
+    await pgArchiveByNotionId("MANUAL_STEP", id);
+    fireAndForget("notion:deleteManualStep", () => notion.pages.update({ page_id: id, archived: true }));
+    return;
+  }
   const archived = await notion.pages.update({ page_id: id, archived: true });
   await dualWriteEntity("MANUAL_STEP", archived);
 }
 
 // 화면 연결(섹션23) — "? 사용방법" 링크가 현재 경로와 관련경로가 일치하는
-// 게시된 스텝을 찾을 때 쓴다. DB.MANUAL_STEP이 아직 없으면 조용히 빈 배열.
+// 게시된 스텝을 찾을 때 쓴다. DB.MANUAL_STEP이 아직 없으면 조용히 빈 배열
+// — 이 가드는 provider와 무관하다(listManuals의 requireManualDb()와 같은
+// 이유: 매뉴얼 기능 자체가 /api/admin/setup으로 아직 설정 안 된 상태를
+// 가리키는 판단 기준으로 원래부터 Notion env var를 써왔다).
 export async function listPublishedStepsByPath(path: string): Promise<ManualStepRecord[]> {
   if (!DB.MANUAL_STEP || !DB.MANUAL) return [];
+  if (getDbProvider() === "postgres") {
+    const rows = (await pgQueryRaw("MANUAL_STEP", `related_path=eq.${encodeURIComponent(path)}`)).filter(pgNotArchived);
+    if (rows.length === 0) return [];
+    const manualIds = Array.from(
+      new Set(rows.map((r) => (r.manual_notion_ids as string[] | undefined)?.[0]).filter((v): v is string => !!v))
+    );
+    const publishedManualIds = new Set<string>();
+    for (const id of manualIds) {
+      const m = await getManual(id);
+      if (m?.status === "PUBLISHED") publishedManualIds.add(id);
+    }
+    return rows
+      .map(mapPgManualStepRow)
+      .filter((s) => publishedManualIds.has(s.manualId))
+      .sort((a, b) => a.order - b.order);
+  }
   const steps = await queryAllPages({
     data_source_id: DB.MANUAL_STEP,
     filter: { property: "관련경로", rich_text: { equals: path } },

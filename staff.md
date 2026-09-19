@@ -4,7 +4,24 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (**PART 15 신규 — 시험대비(EXAM_PREP)/학교별
+마지막 업데이트: 2026-09-19 (**PART 16 신규 — 매뉴얼(MANUAL/MANUAL_STEP)
+WRITE를 Notion-only → PostgreSQL-primary로 전환.** 원장이 `manual_steps.
+title` 컬럼을 production Supabase에 직접 적용(`alter table manual_steps
+add column if not exists title text;`, 사직/금정 공용 DB라 1회만) —
+`004_manual_steps_title.sql` 블로커 해제. `createManualDraft`/
+`createManualSteps`/`getManual`/`listManualSteps`/`updateManualStep`/
+`deleteManualStep`/`listPublishedStepsByPath` 전부 전환(`updateManual`/
+`listManuals`은 이전 세션에 이미 전환돼 있었음, 이번엔 안 건드림). 덤으로
+`pgListManuals`(lib/supabasePgRead.ts)의 `id: r.notion_id` 버그 발견/수정
+— PART 10의 tasks id 버그와 완전히 같은 종류(notion_id null일 때 대체
+없음 → postgres-primary로 막 만든 매뉴얼이 목록엔 뜨지만 클릭하면 깨짐).
+테스트 7건 신규, 77/77 통과, tsc/build 통과. PART 15(시험대비)까지 완료
+처리는 유지. 아래 "PART 16" 먼저 확인. **이 세션부터 원장이 잠든 동안
+Phase A~G(매뉴얼→파일업로드/Storage→전수조사→나머지 전환→hot path
+제거→PIN fallback 정리→운영 안정성) 순서로 자율 진행 중** — 각 Phase
+결과는 이 파일 상단에 계속 누적)
+
+이전 업데이트: 2026-09-19 (**PART 15 — 시험대비(EXAM_PREP)/학교별
 시험범위(SCHOOL_EXAM_RANGE) 전체를 Notion-only → PostgreSQL-primary로
 전환.** 9개 함수(`getSchoolExamRange`/`getSchoolExamRangeHistory`/
 `getSchoolExamRangeLatestMap`/`upsertSchoolExamRange`/`getExamPrepSheet`/
@@ -91,6 +108,56 @@ gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
 PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
 004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
+
+---
+
+## PART 16 — 매뉴얼 WRITE Notion-only → PostgreSQL-primary 전환 (2026-09-19)
+
+### 배경
+PART 15 다음 순서(원장 지시, 야간 자율진행 Phase A). `004_manual_steps_title.sql`
+(manual_steps에 title 컬럼 추가)이 그동안 미적용 blocker였는데, 원장이
+production Supabase SQL Editor에서 직접 실행 완료 — 사직/금정이 branch_id로
+격리된 같은 DB라 한 번만 적용하면 됨.
+
+### 전환한 함수
+`createManualDraft`(manuals insert) / `getManual`(dual-id 조회) /
+`createManualSteps`(manual_steps insert, `manual_id` 네이티브 FK는
+`pgResolveRelationId`로 해결) / `listManualSteps`(manual_id로 필터) /
+`updateManualStep`(title 포함 patch) / `deleteManualStep`(archive) /
+`listPublishedStepsByPath`("? 사용방법" 링크용, related_path로 찾은 뒤
+게시된 매뉴얼만 필터). 전부 `getDbProvider()==="postgres"` 분기 + 기존
+Notion 코드 폴백 유지, Notion 쓰기는 `fireAndForget` best-effort.
+
+`createManualDraft`의 예전 주석("Notion 생성을 미루면 매뉴얼 id가 없어
+바로 이어서 step을 못 만든다")은 실제로는 걱정할 필요가 없었다 —
+`createManualSteps`가 `manualId`를 `pgResolveRelationId`로 처리하므로
+postgres 전용 id(아직 notion_id 없음)를 받아도 정상 동작한다(dual-id
+규약이 이미 이 문제를 해결해두고 있었음).
+
+### 버그 수정(덤으로 발견)
+`lib/supabasePgRead.ts`의 `pgListManuals`가 `id: r.notion_id`를 그대로
+써서(displayId() 미사용) postgres-primary로 막 만든 매뉴얼은 notion_id가
+null인 동안 목록에 `id: null`로 뜨는 버그가 있었다 — PART 10에서 tasks가
+겪었던 것과 완전히 같은 종류. `displayId(r)`로 수정.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(77/77, 신규 7건 — 매뉴얼 생성 직후
+dual-id로 step 연결, legacy notion_id 매뉴얼에 step 추가, branch
+isolation, Notion mirror 실패해도 저장 유지, title 포함 수정, native
+UUID 수정, 삭제 후 soft-delete 확인)/`npm run build` 전부 통과.
+
+### ⬜ 미완료 — 다음 세션(또는 원장)이 확인할 것
+브라우저로 로그인해서 매뉴얼 생성→step 추가→목록→상세/검토→수정→삭제
+전체 흐름이 실제로 되는지 — 실제 운영 데이터를 만들지 말라는 지시에
+따라 이번 세션은 코드/테스트 레벨 검증까지만 했다.
+
+### 신규/변경 파일
+`lib/notion.ts`(`mapPgManualRow`/`mapPgManualStepRow`/
+`buildManualStepNotionProps` 신규, `createManualDraft`/`getManual`/
+`createManualSteps`/`listManualSteps`/`updateManualStep`/
+`deleteManualStep`/`listPublishedStepsByPath`에 postgres 분기),
+`lib/supabasePgRead.ts`(`pgListManuals`의 id 버그 수정),
+`lib/manuals.postgres.test.ts`(신규, 7건).
 
 ---
 
