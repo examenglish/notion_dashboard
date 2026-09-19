@@ -63,6 +63,7 @@ import {
   pgInsertRow,
   pgSetNotionId,
   pgResolveRelationId,
+  pgResolveRelationIds,
   pgGetByNotionId,
   pgFindByExactColumn,
   pgArchiveByNotionId,
@@ -1741,7 +1742,16 @@ async function studentSchoolGradeMap(): Promise<Map<string, { school: string; gr
   return new Map(students.map((s) => [s.id, { school: s.school, grade: s.grade }]));
 }
 
-export async function createClassProgress(input: {
+type PerStudentFlags = {
+  vocabFail: boolean;
+  homeworkIncomplete: boolean;
+  absent: boolean;
+  late?: boolean;
+  individualNotice?: string;
+  scores?: AchievementScore[];
+};
+
+type CreateClassProgressInput = {
   classId: string;
   date: string;
   subjects: string[];
@@ -1749,17 +1759,7 @@ export async function createClassProgress(input: {
   homework: string;
   nextAssignment: string;
   notice: string;
-  perStudent: Record<
-    string,
-    {
-      vocabFail: boolean;
-      homeworkIncomplete: boolean;
-      absent: boolean;
-      late?: boolean;
-      individualNotice?: string;
-      scores?: AchievementScore[];
-    }
-  >;
+  perStudent: Record<string, PerStudentFlags>;
   briefingTexts?: Record<string, string>;
   // Students called up from a different class for a one-off individual
   // record (e.g. a makeup or guest attendee), in addition to the class's
@@ -1772,7 +1772,223 @@ export async function createClassProgress(input: {
   // 기록이 서로 덮어쓰지 않도록 구분하는 값("1교시"/"2교시" 등). 대부분의
   // 반(교시를 나누지 않는)은 비워두면 기존과 동일하게 동작한다.
   period?: string;
-}) {
+};
+
+// postgres-primary 경로(수업진도/출결, staff.md PART 13). Postgres write
+// 성공을 기준으로 삼고, Notion은 fireAndForget best-effort 미러로 격리한다
+// — 강사가 매 교시 쓰는 핵심 입력이 Notion 성공 여부에 더 이상 의존하지
+// 않는다. 학생별 daily_record/briefing 생성은 Promise.allSettled로 병렬
+// 처리해 한 학생의 오류가 나머지 학생 기록 저장을 막지 않게 하되(부분
+// 성공은 그대로 Postgres에 남는다 — "조용히 누락" 방지를 위해 실패한
+// 학생은 명시적으로 에러에 모아 던진다), 반별진도(class_progress) 자체는
+// 먼저 만들어 학생 기록들이 항상 유효한 progress row를 가리키게 한다.
+async function createClassProgressPg(input: CreateClassProgressInput) {
+  const classes = await listClasses();
+  const cls = classes.find((c) => c.id === input.classId);
+  if (!cls) throw new Error("반을 찾을 수 없습니다.");
+  const studentIds = Array.from(new Set([...cls.studentIds, ...(input.extraStudentIds ?? [])]));
+
+  const [classPgId, studentNames, studentPgIdMap] = await Promise.all([
+    pgResolveRelationId("CLASS", input.classId),
+    pgStudentNameMap(),
+    pgResolveRelationIds("STUDENT", studentIds),
+  ]);
+
+  const progressRow = await pgInsertRow("CLASS_PROGRESS", {
+    title: `${input.date} ${cls.name}${input.period ? ` ${input.period}` : ""} 진도`,
+    class_id: classPgId,
+    class_notion_ids: [input.classId],
+    record_date: input.date,
+    subjects: input.subjects,
+    progress_content: input.progress,
+    homework_content: input.homework,
+    next_test: input.nextAssignment,
+    notice: input.notice,
+    period: input.period || null,
+    student_records_created: false,
+  });
+  console.log("[postgres-primary] createClassProgress: postgres write ok", { id: progressRow.id, classId: input.classId, date: input.date });
+  const progressDisplayId = progressRow.id;
+
+  type PerStudentResult = {
+    studentId: string;
+    studentName: string;
+    flags: PerStudentFlags;
+    dailyRow: { id: string; notion_id: string | null };
+    briefingRow: { id: string; notion_id: string | null };
+    briefingText: string;
+    reviewTaskRow: { id: string; notion_id: string | null } | null;
+  };
+
+  const settled = await Promise.allSettled<PerStudentResult>(
+    studentIds.map(async (studentId): Promise<PerStudentResult> => {
+      const studentName = studentNames.get(studentId) ?? "";
+      const flags: PerStudentFlags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
+      const dailyRow = await pgInsertRow("DAILY_RECORD", {
+        title: `${studentName} ${input.date}`,
+        student_id: studentPgIdMap.get(studentId) ?? null,
+        student_notion_ids: [studentId],
+        class_notion_ids: [input.classId],
+        record_date: input.date,
+        progress_content: input.progress,
+        attendance: flags.absent ? "결석" : flags.late ? "지각" : "출석",
+        homework_done: !flags.homeworkIncomplete,
+        vocab_result: flags.vocabFail ? "재시험" : "통과",
+        class_progress_notion_ids: [progressDisplayId],
+        note: flags.individualNotice ?? "",
+        achievement: serializeAchievementScores(flags.scores ?? []),
+      });
+
+      const briefingText =
+        input.briefingTexts?.[studentId] ??
+        formatBriefingText({
+          date: input.date,
+          className: cls.name,
+          studentName,
+          progress: input.progress,
+          homework: input.homework,
+          nextAssignment: input.nextAssignment,
+          notice: input.notice,
+          vocabFail: flags.vocabFail,
+          homeworkIncomplete: flags.homeworkIncomplete,
+          absent: flags.absent,
+          individualNotice: flags.individualNotice,
+          scores: (flags.scores ?? []).map((s) => ({ type: s.type, raw: achievementScoreToRaw(s) })),
+        });
+      const briefingRow = await pgInsertRow("BRIEFING", {
+        title: `${studentName} 데일리브리핑 ${input.date}`,
+        student_id: studentPgIdMap.get(studentId) ?? null,
+        student_notion_ids: [studentId],
+        record_date: input.date,
+        briefing_type: !flags.absent && (flags.vocabFail || flags.homeworkIncomplete) ? "주의" : "전달사항",
+        content: briefingText,
+      });
+
+      let reviewTaskRow: { id: string; notion_id: string | null } | null = null;
+      if (input.reviewDays && input.reviewDays > 0) {
+        reviewTaskRow = await pgInsertRow("TODO", {
+          title: `복습 - ${studentName}`,
+          type: "복습",
+          student_notion_ids: [studentId],
+          class_notion_ids: [input.classId],
+          due_date: addDaysToDate(input.date, input.reviewDays),
+          memo: input.progress,
+          complete: false,
+          priority: "보통",
+        });
+      }
+
+      return { studentId, studentName, flags, dailyRow, briefingRow, briefingText, reviewTaskRow };
+    })
+  );
+
+  const succeeded: PerStudentResult[] = [];
+  const failedStudentIds: string[] = [];
+  settled.forEach((r, i) => {
+    if (r.status === "fulfilled") succeeded.push(r.value);
+    else failedStudentIds.push(studentIds[i]);
+  });
+  if (failedStudentIds.length > 0) {
+    const failedNames = failedStudentIds.map((id) => studentNames.get(id) ?? id).join(", ");
+    console.error("[postgres-primary] createClassProgress: 일부 학생 기록 저장 실패", { progressId: progressDisplayId, failedStudentIds });
+    // 이미 성공한 학생들의 daily_record/briefing은 그대로 Postgres에 남아있다
+    // (아래에서 progress row에 반영) — 실패한 학생만 명시적으로 알려서 조용히
+    // 누락되지 않게 한다. 재시도는 checkInAttendance/updateClassProgress가
+    // "이미 있는 학생은 건드리지 않는다" 규칙이라 안전하게 이어서 할 수 있다.
+    await pgPatchById("CLASS_PROGRESS", progressRow.id, {
+      student_records_created: succeeded.length > 0,
+      daily_record_notion_ids: succeeded.map((s) => s.dailyRow.id),
+    });
+    throw new Error(`다음 학생 기록 저장에 실패했습니다: ${failedNames} (나머지 ${succeeded.length}명은 저장됨)`);
+  }
+
+  await pgPatchById("CLASS_PROGRESS", progressRow.id, {
+    student_records_created: true,
+    daily_record_notion_ids: succeeded.map((s) => s.dailyRow.id),
+  });
+
+  fireAndForget("notion:createClassProgress", async () => {
+    const classPage: any = await notion.pages.retrieve({ page_id: input.classId }).catch(() => null);
+    const className = classPage ? getTitle(classPage, "반이름") : cls.name;
+    const progressPage = await notion.pages.create({
+      parent: { data_source_id: DB.CLASS_PROGRESS } as any,
+      properties: {
+        제목: { title: [{ text: { content: `${input.date} ${className}${input.period ? ` ${input.period}` : ""} 진도` } }] },
+        반: { relation: [{ id: input.classId }] },
+        날짜: { date: { start: input.date } },
+        수업과목: { multi_select: input.subjects.map((name) => ({ name })) },
+        진도내용: { rich_text: [{ text: { content: input.progress } }] },
+        과제내용: { rich_text: [{ text: { content: input.homework } }] },
+        다음시간테스트: { rich_text: [{ text: { content: input.nextAssignment } }] },
+        전달사항: { rich_text: [{ text: { content: input.notice } }] },
+        ...(input.period ? { 교시: { select: { name: input.period } } } : {}),
+      } as any,
+    });
+    await pgSetNotionId("CLASS_PROGRESS", progressRow.id, progressPage.id);
+
+    await Promise.all(
+      succeeded.map(async ({ studentId, studentName, flags, dailyRow, briefingRow, briefingText, reviewTaskRow }) => {
+        const daily = await notion.pages.create({
+          parent: { data_source_id: DB.DAILY_RECORD } as any,
+          properties: {
+            제목: { title: [{ text: { content: `${studentName} ${input.date}` } }] },
+            학생: { relation: [{ id: studentId }] },
+            반: { relation: [{ id: input.classId }] },
+            날짜: { date: { start: input.date } },
+            진도내용: { rich_text: [{ text: { content: input.progress } }] },
+            출결: { select: { name: flags.absent ? "결석" : flags.late ? "지각" : "출석" } },
+            과제여부: { checkbox: !flags.homeworkIncomplete },
+            단어테스트결과: { select: { name: flags.vocabFail ? "재시험" : "통과" } },
+            반별진도원본: { relation: [{ id: progressPage.id }] },
+            비고: { rich_text: [{ text: { content: flags.individualNotice ?? "" } }] },
+            성취사항: { rich_text: [{ text: { content: serializeAchievementScores(flags.scores ?? []) } }] },
+          } as any,
+        });
+        await pgSetNotionId("DAILY_RECORD", dailyRow.id, daily.id);
+
+        const briefing = await notion.pages.create({
+          parent: { data_source_id: DB.BRIEFING } as any,
+          properties: {
+            제목: { title: [{ text: { content: `${studentName} 데일리브리핑 ${input.date}` } }] },
+            학생: { relation: [{ id: studentId }] },
+            날짜: { date: { start: input.date } },
+            브리핑유형: { select: { name: !flags.absent && (flags.vocabFail || flags.homeworkIncomplete) ? "주의" : "전달사항" } },
+            브리핑내용: { rich_text: [{ text: { content: briefingText } }] },
+          } as any,
+        });
+        await pgSetNotionId("BRIEFING", briefingRow.id, briefing.id);
+
+        if (reviewTaskRow) {
+          const reviewPage = await notion.pages.create({
+            parent: { data_source_id: DB.TODO } as any,
+            properties: {
+              제목: { title: [{ text: { content: `복습 - ${studentName}` } }] },
+              유형: { select: { name: "복습" } },
+              관련학생: { relation: [{ id: studentId }] },
+              관련반: { relation: [{ id: input.classId }] },
+              예정일: { date: { start: addDaysToDate(input.date, input.reviewDays!) } },
+              메모: { rich_text: [{ text: { content: input.progress } }] },
+              완료여부: { checkbox: false },
+              우선순위: { select: { name: "보통" } },
+            } as any,
+          });
+          await pgSetNotionId("TODO", reviewTaskRow.id, reviewPage.id);
+        }
+      })
+    );
+
+    console.log("[postgres-primary] createClassProgress: notion mirror synced", { id: progressRow.id, notionId: progressPage.id });
+  });
+
+  return {
+    progressPageId: progressDisplayId,
+    studentCount: succeeded.length,
+    briefingCount: succeeded.length,
+  };
+}
+
+export async function createClassProgress(input: CreateClassProgressInput) {
+  if (getDbProvider() === "postgres") return createClassProgressPg(input);
   const classPage: any = await notion.pages.retrieve({ page_id: input.classId });
   const className = getTitle(classPage, "반이름");
   const classRosterIds = getRelationIds(classPage, "소속학생");
@@ -1888,7 +2104,77 @@ export async function createClassProgress(input: {
 // period가 있으면 그 교시 기록만, 없으면(교시를 나누지 않는 반) 교시가
 // 비어있는 기록만 찾는다 — 그래야 1교시/2교시로 나뉜 반의 기록이 서로
 // 섞이지 않는다.
+// class_progress raw row(id/notion_id 포함) → getClassProgressForEdit이
+// 돌려주는 표준 shape. daily_records는 class_progress 쪽에 native FK가
+// 없어(tasks.parent_task_id처럼 나중에 추가된 것과 달리 원래 스키마부터
+// 없었음) class_progress_notion_ids(dual-id 배열, Notion "반별진도원본"
+// relation 미러) 안에 이 progress row의 현재 dual-id(id 또는 notion_id)가
+// 들어있는지로 찾는다 — notion_id가 미러 이후에 채워질 수 있으므로 둘 다
+// OR로 확인해야 생성 직후/미러 이후 어느 시점에 조회해도 안전하다.
+// deleteDailyRecordEntry(원장이 학생 1명 일일기록 삭제)가 archive(soft
+// delete)로 지우므로, 여기서도 그 규약(source_payload.archived) 그대로
+// 걸러야 지운 학생 기록이 진도 수정 화면에 다시 나타나지 않는다.
+function pgNotArchived(row: Record<string, unknown>): boolean {
+  return (row.source_payload as { archived?: boolean } | null)?.archived !== true;
+}
+
+async function pgFindDailyRecordsForProgress(row: Record<string, unknown>): Promise<Record<string, unknown>[]> {
+  const pgId = row.id as string;
+  const notionId = row.notion_id as string | null;
+  const clauses = [`class_progress_notion_ids.cs.{${encodeURIComponent(pgId)}}`];
+  if (notionId) clauses.push(`class_progress_notion_ids.cs.{${encodeURIComponent(notionId)}}`);
+  const rows = await pgQueryRaw("DAILY_RECORD", `or=(${clauses.join(",")})`);
+  return rows.filter(pgNotArchived);
+}
+
+async function getClassProgressForEditByRow(row: Record<string, unknown>) {
+  const pgId = row.id as string;
+  const notionId = row.notion_id as string | null;
+  const progressDisplayId = notionId ?? pgId;
+  const dailyRows = await pgFindDailyRecordsForProgress(row);
+
+  const studentIds: string[] = [];
+  const perStudent: Record<
+    string,
+    { absent: boolean; late: boolean; vocabFail: boolean; homeworkIncomplete: boolean; individualNotice: string; scores: AchievementScore[] }
+  > = {};
+  for (const dp of dailyRows) {
+    const studentId = (dp.student_notion_ids as string[] | null)?.[0];
+    if (!studentId) continue;
+    studentIds.push(studentId);
+    perStudent[studentId] = {
+      absent: dp.attendance === "결석",
+      late: dp.attendance === "지각",
+      vocabFail: dp.vocab_result === "재시험",
+      homeworkIncomplete: !dp.homework_done,
+      individualNotice: (dp.note as string) ?? "",
+      scores: parseAchievementScores((dp.achievement as string) ?? ""),
+    };
+  }
+
+  return {
+    progressId: progressDisplayId,
+    period: (row.period as string | null) ?? null,
+    subjects: (row.subjects as string[]) ?? [],
+    progress: (row.progress_content as string) ?? "",
+    homework: (row.homework_content as string) ?? "",
+    nextAssignment: (row.next_test as string) ?? "",
+    notice: (row.notice as string) ?? "",
+    studentIds,
+    perStudent,
+  };
+}
+
 export async function getClassProgressForEdit(classId: string, date: string, period?: string) {
+  if (getDbProvider() === "postgres") {
+    const classPgId = await pgResolveRelationId("CLASS", classId);
+    if (!classPgId) return null;
+    const periodFilter = period ? `period=eq.${encodeURIComponent(period)}` : `period=is.null`;
+    const rows = await pgQueryRaw("CLASS_PROGRESS", `class_id=eq.${classPgId}&record_date=eq.${date}&${periodFilter}`);
+    const row = rows[0];
+    if (!row) return null;
+    return getClassProgressForEditByRow(row as Record<string, unknown>);
+  }
   const res = await notion.dataSources.query({
     data_source_id: DB.CLASS_PROGRESS,
     filter: {
@@ -1961,6 +2247,31 @@ export async function saveClassRecordScores(
   progressId: string,
   scores: Record<string, AchievementScore[]>
 ): Promise<{ updated: number }> {
+  if (getDbProvider() === "postgres") {
+    const progressRow = await pgGetByNotionId("CLASS_PROGRESS", progressId);
+    if (!progressRow) return { updated: 0 };
+    const dailyRows = await pgFindDailyRecordsForProgress(progressRow);
+    let updated = 0;
+    await Promise.all(
+      dailyRows.map(async (dp) => {
+        const studentId = (dp.student_notion_ids as string[] | null)?.[0];
+        if (!studentId || !(studentId in scores)) return;
+        await pgPatchById("DAILY_RECORD", dp.id as string, { achievement: serializeAchievementScores(scores[studentId]) });
+        updated++;
+        const notionId = dp.notion_id as string | null;
+        if (notionId) {
+          fireAndForget("notion:saveClassRecordScores", async () => {
+            const updatedDaily = await notion.pages.update({
+              page_id: notionId,
+              properties: { 성취사항: { rich_text: [{ text: { content: serializeAchievementScores(scores[studentId]) } }] } } as any,
+            });
+            void updatedDaily;
+          });
+        }
+      })
+    );
+    return { updated };
+  }
   const dailyRecords = await queryAllPages({
     data_source_id: DB.DAILY_RECORD,
     filter: { property: "반별진도원본", relation: { contains: progressId } },
@@ -2047,7 +2358,7 @@ export async function findClassRecordGaps(from: string, to: string, includeExamC
 // 먼저 체크인해 브리핑 없이 레코드만 만들어진 경우를 보정하기 위함. 이미
 // 브리핑이 있는 학생(기존처럼 교사가 처음부터 다 채워 저장한 경우, 또는 오타
 // 수정 등으로 재저장하는 경우)은 중복 생성하지 않는다.
-export async function updateClassProgress(input: {
+type UpdateClassProgressInput = {
   progressId: string;
   classId: string;
   date: string;
@@ -2056,19 +2367,184 @@ export async function updateClassProgress(input: {
   homework?: string;
   nextAssignment?: string;
   notice?: string;
-  perStudent: Record<
-    string,
-    {
-      vocabFail: boolean;
-      homeworkIncomplete: boolean;
-      absent: boolean;
-      late?: boolean;
-      individualNotice?: string;
-      scores?: AchievementScore[];
-    }
-  >;
+  perStudent: Record<string, PerStudentFlags>;
   extraStudentIds?: string[];
-}) {
+};
+
+// postgres-primary 경로(staff.md PART 13). checkInAttendance도 기존 기록이
+// 있으면 이 함수를 그대로 재사용한다(원래 구조 그대로 유지).
+async function updateClassProgressPg(input: UpdateClassProgressInput) {
+  const progressRow = await pgGetByNotionId("CLASS_PROGRESS", input.progressId);
+  if (!progressRow) throw new Error("수업 기록을 찾을 수 없습니다.");
+  const classes = await listClasses();
+  const cls = classes.find((c) => c.id === input.classId);
+  if (!cls) throw new Error("반을 찾을 수 없습니다.");
+  const studentIds = Array.from(new Set([...cls.studentIds, ...(input.extraStudentIds ?? [])]));
+
+  const patch: Record<string, unknown> = {};
+  if (input.subjects !== undefined) patch.subjects = input.subjects;
+  if (input.progress !== undefined) patch.progress_content = input.progress;
+  if (input.homework !== undefined) patch.homework_content = input.homework;
+  if (input.nextAssignment !== undefined) patch.next_test = input.nextAssignment;
+  if (input.notice !== undefined) patch.notice = input.notice;
+  if (Object.keys(patch).length > 0) await pgPatchById("CLASS_PROGRESS", progressRow.id as string, patch);
+
+  const [existingDailyRows, studentNames, studentPgIdMap] = await Promise.all([
+    pgFindDailyRecordsForProgress(progressRow),
+    pgStudentNameMap(),
+    pgResolveRelationIds("STUDENT", studentIds),
+  ]);
+  const dailyByStudent = new Map<string, Record<string, unknown>>();
+  for (const dp of existingDailyRows) {
+    const sid = (dp.student_notion_ids as string[] | null)?.[0];
+    if (sid) dailyByStudent.set(sid, dp);
+  }
+
+  const progressDisplayId = (progressRow.notion_id as string | null) ?? (progressRow.id as string);
+  const newDailyRows: { studentId: string; studentName: string; flags: PerStudentFlags; row: { id: string; notion_id: string | null } }[] = [];
+  for (const studentId of studentIds) {
+    const flags: PerStudentFlags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
+    const dailyPatch: Record<string, unknown> = {
+      attendance: flags.absent ? "결석" : flags.late ? "지각" : "출석",
+      homework_done: !flags.homeworkIncomplete,
+      vocab_result: flags.vocabFail ? "재시험" : "통과",
+      note: flags.individualNotice ?? "",
+      achievement: serializeAchievementScores(flags.scores ?? []),
+    };
+    if (input.progress !== undefined) dailyPatch.progress_content = input.progress;
+
+    const existing = dailyByStudent.get(studentId);
+    if (existing) {
+      await pgPatchById("DAILY_RECORD", existing.id as string, dailyPatch);
+    } else {
+      const studentName = studentNames.get(studentId) ?? "";
+      const row = await pgInsertRow("DAILY_RECORD", {
+        title: `${studentName} ${input.date}`,
+        student_id: studentPgIdMap.get(studentId) ?? null,
+        student_notion_ids: [studentId],
+        class_notion_ids: [input.classId],
+        record_date: input.date,
+        class_progress_notion_ids: [progressDisplayId],
+        ...dailyPatch,
+      });
+      newDailyRows.push({ studentId, studentName, flags, row });
+    }
+  }
+
+  if (newDailyRows.length > 0) {
+    const allIds = [...Array.from(dailyByStudent.values()).map((d) => d.id as string), ...newDailyRows.map((d) => d.row.id)];
+    await pgPatchById("CLASS_PROGRESS", progressRow.id as string, { student_records_created: true, daily_record_notion_ids: allIds });
+  }
+
+  const newBriefings: { studentId: string; studentName: string; text: string; row: { id: string; notion_id: string | null } }[] = [];
+  if (input.progress !== undefined && input.progress.trim() !== "") {
+    await Promise.all(
+      studentIds.map(async (studentId) => {
+        const existingBriefing = await pgQueryRaw(
+          "BRIEFING",
+          `student_notion_ids=cs.{${encodeURIComponent(studentId)}}&record_date=eq.${input.date}`
+        );
+        if (existingBriefing.length > 0) return;
+
+        const studentName = studentNames.get(studentId) ?? "";
+        const flags: PerStudentFlags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
+        const briefingText = formatBriefingText({
+          date: input.date,
+          className: cls.name,
+          studentName,
+          progress: input.progress!,
+          homework: input.homework ?? "",
+          nextAssignment: input.nextAssignment ?? "",
+          notice: input.notice ?? "",
+          vocabFail: flags.vocabFail,
+          homeworkIncomplete: flags.homeworkIncomplete,
+          absent: flags.absent,
+          individualNotice: flags.individualNotice,
+          scores: (flags.scores ?? []).map((s) => ({ type: s.type, raw: achievementScoreToRaw(s) })),
+        });
+        const row = await pgInsertRow("BRIEFING", {
+          title: `${studentName} 데일리브리핑 ${input.date}`,
+          student_id: studentPgIdMap.get(studentId) ?? null,
+          student_notion_ids: [studentId],
+          record_date: input.date,
+          briefing_type: !flags.absent && (flags.vocabFail || flags.homeworkIncomplete) ? "주의" : "전달사항",
+          content: briefingText,
+        });
+        newBriefings.push({ studentId, studentName, text: briefingText, row });
+      })
+    );
+  }
+
+  fireAndForget("notion:updateClassProgress", async () => {
+    const progressNotionId = progressRow.notion_id as string | null;
+    if (progressNotionId) {
+      const progressPageProperties: any = { 반: { relation: [{ id: input.classId }] } };
+      if (input.subjects !== undefined) progressPageProperties.수업과목 = { multi_select: input.subjects.map((name) => ({ name })) };
+      if (input.progress !== undefined) progressPageProperties.진도내용 = { rich_text: [{ text: { content: input.progress } }] };
+      if (input.homework !== undefined) progressPageProperties.과제내용 = { rich_text: [{ text: { content: input.homework } }] };
+      if (input.nextAssignment !== undefined) progressPageProperties.다음시간테스트 = { rich_text: [{ text: { content: input.nextAssignment } }] };
+      if (input.notice !== undefined) progressPageProperties.전달사항 = { rich_text: [{ text: { content: input.notice } }] };
+      await notion.pages.update({ page_id: progressNotionId, properties: progressPageProperties });
+    }
+
+    await Promise.all(
+      studentIds.map(async (studentId) => {
+        const flags: PerStudentFlags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
+        const properties: any = {
+          출결: { select: { name: flags.absent ? "결석" : flags.late ? "지각" : "출석" } },
+          과제여부: { checkbox: !flags.homeworkIncomplete },
+          단어테스트결과: { select: { name: flags.vocabFail ? "재시험" : "통과" } },
+          비고: { rich_text: [{ text: { content: flags.individualNotice ?? "" } }] },
+          성취사항: { rich_text: [{ text: { content: serializeAchievementScores(flags.scores ?? []) } }] },
+        };
+        if (input.progress !== undefined) properties.진도내용 = { rich_text: [{ text: { content: input.progress } }] };
+
+        const existing = dailyByStudent.get(studentId);
+        if (existing?.notion_id) {
+          await notion.pages.update({ page_id: existing.notion_id as string, properties });
+          return;
+        }
+        const created = newDailyRows.find((d) => d.studentId === studentId);
+        if (created && progressNotionId) {
+          const studentName = studentNames.get(studentId) ?? "";
+          const daily = await notion.pages.create({
+            parent: { data_source_id: DB.DAILY_RECORD } as any,
+            properties: {
+              제목: { title: [{ text: { content: `${studentName} ${input.date}` } }] },
+              학생: { relation: [{ id: studentId }] },
+              반: { relation: [{ id: input.classId }] },
+              날짜: { date: { start: input.date } },
+              반별진도원본: { relation: [{ id: progressNotionId }] },
+              ...properties,
+            } as any,
+          });
+          await pgSetNotionId("DAILY_RECORD", created.row.id, daily.id);
+        }
+      })
+    );
+
+    await Promise.all(
+      newBriefings.map(async ({ studentId, studentName, text, row }) => {
+        const flags: PerStudentFlags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
+        const briefing = await notion.pages.create({
+          parent: { data_source_id: DB.BRIEFING } as any,
+          properties: {
+            제목: { title: [{ text: { content: `${studentName} 데일리브리핑 ${input.date}` } }] },
+            학생: { relation: [{ id: studentId }] },
+            날짜: { date: { start: input.date } },
+            브리핑유형: { select: { name: !flags.absent && (flags.vocabFail || flags.homeworkIncomplete) ? "주의" : "전달사항" } },
+            브리핑내용: { rich_text: [{ text: { content: text } }] },
+          } as any,
+        });
+        await pgSetNotionId("BRIEFING", row.id, briefing.id);
+      })
+    );
+    console.log("[postgres-primary] updateClassProgress: notion mirror synced", { id: progressRow.id });
+  });
+}
+
+export async function updateClassProgress(input: UpdateClassProgressInput) {
+  if (getDbProvider() === "postgres") return updateClassProgressPg(input);
   const classPage: any = await notion.pages.retrieve({ page_id: input.classId });
   const className = getTitle(classPage, "반이름");
   const classRosterIds = getRelationIds(classPage, "소속학생");
@@ -2204,6 +2680,93 @@ export async function checkInAttendance(input: {
       extraStudentIds: input.extraStudentIds,
     });
     return { progressId: existing.progressId, created: false };
+  }
+
+  if (getDbProvider() === "postgres") {
+    const classes = await listClasses();
+    const cls = classes.find((c) => c.id === input.classId);
+    if (!cls) throw new Error("반을 찾을 수 없습니다.");
+    const studentIds = Array.from(new Set([...cls.studentIds, ...(input.extraStudentIds ?? [])]));
+    const [classPgId, studentNames, studentPgIdMap] = await Promise.all([
+      pgResolveRelationId("CLASS", input.classId),
+      pgStudentNameMap(),
+      pgResolveRelationIds("STUDENT", studentIds),
+    ]);
+
+    const progressRow = await pgInsertRow("CLASS_PROGRESS", {
+      title: `${input.date} ${cls.name}${input.period ? ` ${input.period}` : ""} 진도`,
+      class_id: classPgId,
+      class_notion_ids: [input.classId],
+      record_date: input.date,
+      period: input.period || null,
+      student_records_created: false,
+    });
+    const progressDisplayId = progressRow.id;
+
+    const settled = await Promise.allSettled(
+      studentIds.map(async (studentId) => {
+        const studentName = studentNames.get(studentId) ?? "";
+        const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
+        const row = await pgInsertRow("DAILY_RECORD", {
+          title: `${studentName} ${input.date}`,
+          student_id: studentPgIdMap.get(studentId) ?? null,
+          student_notion_ids: [studentId],
+          class_notion_ids: [input.classId],
+          record_date: input.date,
+          attendance: flags.absent ? "결석" : flags.late ? "지각" : "출석",
+          homework_done: !flags.homeworkIncomplete,
+          vocab_result: flags.vocabFail ? "재시험" : "통과",
+          class_progress_notion_ids: [progressDisplayId],
+        });
+        return { studentId, studentName, flags, row };
+      })
+    );
+    const succeeded = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    const failedStudentIds = studentIds.filter((_, i) => settled[i].status === "rejected");
+    await pgPatchById("CLASS_PROGRESS", progressRow.id, {
+      student_records_created: succeeded.length > 0,
+      daily_record_notion_ids: succeeded.map((s) => s.row.id),
+    });
+    if (failedStudentIds.length > 0) {
+      console.error("[postgres-primary] checkInAttendance: 일부 학생 출결 저장 실패", { progressId: progressDisplayId, failedStudentIds });
+      throw new Error(`다음 학생의 출결 저장에 실패했습니다: ${failedStudentIds.map((id) => studentNames.get(id) ?? id).join(", ")}`);
+    }
+
+    fireAndForget("notion:checkInAttendance", async () => {
+      const classPage: any = await notion.pages.retrieve({ page_id: input.classId }).catch(() => null);
+      const className = classPage ? getTitle(classPage, "반이름") : cls.name;
+      const progressPage = await notion.pages.create({
+        parent: { data_source_id: DB.CLASS_PROGRESS } as any,
+        properties: {
+          제목: { title: [{ text: { content: `${input.date} ${className}${input.period ? ` ${input.period}` : ""} 진도` } }] },
+          반: { relation: [{ id: input.classId }] },
+          날짜: { date: { start: input.date } },
+          ...(input.period ? { 교시: { select: { name: input.period } } } : {}),
+        } as any,
+      });
+      await pgSetNotionId("CLASS_PROGRESS", progressRow.id, progressPage.id);
+      await Promise.all(
+        succeeded.map(async ({ studentId, studentName, flags, row }) => {
+          const daily = await notion.pages.create({
+            parent: { data_source_id: DB.DAILY_RECORD } as any,
+            properties: {
+              제목: { title: [{ text: { content: `${studentName} ${input.date}` } }] },
+              학생: { relation: [{ id: studentId }] },
+              반: { relation: [{ id: input.classId }] },
+              날짜: { date: { start: input.date } },
+              출결: { select: { name: flags.absent ? "결석" : flags.late ? "지각" : "출석" } },
+              과제여부: { checkbox: !flags.homeworkIncomplete },
+              단어테스트결과: { select: { name: flags.vocabFail ? "재시험" : "통과" } },
+              반별진도원본: { relation: [{ id: progressPage.id }] },
+            } as any,
+          });
+          await pgSetNotionId("DAILY_RECORD", row.id, daily.id);
+        })
+      );
+      console.log("[postgres-primary] checkInAttendance: notion mirror synced", { id: progressRow.id });
+    });
+
+    return { progressId: progressDisplayId, created: true };
   }
 
   const classPage: any = await notion.pages.retrieve({ page_id: input.classId });
@@ -2501,34 +3064,44 @@ async function syncAttendanceForPlannedAbsence(studentId: string, date: string) 
 // ClassRecordForm이 아직 저장된 적 없는 반/날짜를 열었을 때도 결석 체크박스를
 // 미리 체크해 보여줄 수 있도록, 주어진 날짜에 "결석예정"으로 등록된 학생 id
 // 목록을 돌려준다.
+// 이 함수는 아직 100% Notion 전용(ADMIN_INBOX 읽기, 이번 수업진도/출결
+// postgres-primary 전환 범위 밖 — staff.md PART 13 참고)이다. 다만 이
+// 결과는 "결석예정 체크박스를 미리 켜두는" 편의 기능일 뿐이라, Notion이
+// 느리거나 죽어있어도 수업 기록 입력 화면 전체(getClassProgressForEdit)가
+// 막히면 안 된다 — 실패하면 조용히 빈 배열로 폴백하고 로그만 남긴다.
 export async function getPlannedAbsentStudentIds(date: string): Promise<string[]> {
-  const [byDate, byRange] = await Promise.all([
-    queryAllPages({
-      data_source_id: DB.ADMIN_INBOX,
-      filter: {
-        and: [
-          { property: "입력유형", select: { equals: "결석예정" } },
-          { property: "날짜", date: { equals: date } },
-        ],
-      },
-    }),
-    queryAllPages({
-      data_source_id: DB.ADMIN_INBOX,
-      filter: {
-        and: [
-          { property: "입력유형", select: { equals: "결석예정" } },
-          { property: "날짜", date: { on_or_before: date } },
-          { property: "종료일", date: { on_or_after: date } },
-        ],
-      },
-    }),
-  ]);
-  const ids = new Set<string>();
-  for (const p of [...byDate, ...byRange] as any[]) {
-    const sid = getRelationIds(p, "대상학생")[0];
-    if (sid) ids.add(sid);
+  try {
+    const [byDate, byRange] = await Promise.all([
+      queryAllPages({
+        data_source_id: DB.ADMIN_INBOX,
+        filter: {
+          and: [
+            { property: "입력유형", select: { equals: "결석예정" } },
+            { property: "날짜", date: { equals: date } },
+          ],
+        },
+      }),
+      queryAllPages({
+        data_source_id: DB.ADMIN_INBOX,
+        filter: {
+          and: [
+            { property: "입력유형", select: { equals: "결석예정" } },
+            { property: "날짜", date: { on_or_before: date } },
+            { property: "종료일", date: { on_or_after: date } },
+          ],
+        },
+      }),
+    ]);
+    const ids = new Set<string>();
+    for (const p of [...byDate, ...byRange] as any[]) {
+      const sid = getRelationIds(p, "대상학생")[0];
+      if (sid) ids.add(sid);
+    }
+    return Array.from(ids);
+  } catch (err) {
+    console.error("getPlannedAbsentStudentIds failed — falling back to empty (수업 기록 입력 자체는 막지 않음)", err);
+    return [];
   }
-  return Array.from(ids);
 }
 
 function notionCreateAdminInbox(input: {

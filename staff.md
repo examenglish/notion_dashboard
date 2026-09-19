@@ -4,7 +4,26 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (**PART 12 신규 — Phase 3 마감: className 보류
+마지막 업데이트: 2026-09-19 (**PART 13 신규 — 일일 수업진도/출결 입력을
+Notion-only → PostgreSQL-primary로 전환.** `createClassProgress`/
+`updateClassProgress`/`checkInAttendance`/`saveClassRecordScores`(강사가
+매 교시 쓰는 핵심 입력 경로) 전부 postgres write 성공 = 요청 성공, Notion은
+`fireAndForget` best-effort 미러로 전환. **새 schema migration 없이**
+구현 — `class_progress.class_id`(기존 native FK)와 `daily_records.
+class_progress_notion_ids`(기존 dual-id 배열)의 OR 매칭 조합만으로
+class_progress→daily_records 역참조를 해결했다(`tasks.parent_task_id`
+패턴과 동일 아이디어, 다만 그건 이미 FK가 있었고 여기는 배열 dual-id OR로
+충분했음). 학생별 daily_record/briefing fanout은 `Promise.allSettled`로
+병렬 처리하되 부분 실패 시 성공분은 그대로 Postgres에 남기고 실패한
+학생만 명시적 에러로 알린다(조용한 데이터 누락 없음, 진짜 트랜잭션은
+RPC 신설이 필요해 이번엔 안 함 — 원래 Notion 구현도 트랜잭션이 없었으므로
+회귀 아님). 테스트 10건 신규(`lib/classRecord.postgres.test.ts`, Notion
+SDK mock + 인메모리 Supabase REST fake), 57/57 통과. `findClassRecordGaps`/
+`getPlannedAbsentStudentIds`는 이번 범위 밖(전자는 미변환, 후자는 실패
+격리만 추가). PART 12(Phase 3 마감: className/담당자별 현황)까지 완료
+처리는 유지. 아래 "PART 13" 먼저 확인)
+
+이전 업데이트: 2026-09-19 (**PART 12 — Phase 3 마감: className 보류
 해소 + 관리자 담당자별 현황.** 원장 지시로 "intent.className이 정말 새
 스키마가 필요한지" 재검토 → `tasks.class_notion_ids`(text[])가 이미
 존재했고(Notion "관련반" relation 미러, migrate_notion_to_supabase.mjs
@@ -21,7 +40,7 @@ T() 매핑에도 있음) `createTasks`/`TaskRecord`가 그냥 안 쓰고 있었�
 재배정 정책/학생부재 outcome enum은 지시대로 손대지 않음(학생부재는
 기존 memo 자유입력으로 이미 기록 가능, 확인만 하고 새 enum 안 만듦).
 테스트 6건 추가(47/47 통과), tsc/vitest/build 전부 통과. PART 11까지의
-내용은 유지. 아래 "PART 12" 먼저 확인)
+내용은 유지)
 
 이전 업데이트: 2026-09-19 (**PART 11 — 더 심각한 버그 수정** —
 Phase 3 audit 중 발견: `getTask`(업무 상세 조회, `GET /api/tasks/[id]`가
@@ -36,6 +55,103 @@ gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
 PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
 004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
+
+---
+
+## PART 13 — 일일 수업진도/출결 입력 Notion-only → PostgreSQL-primary 전환 (2026-09-19)
+
+### 배경
+Phase 3(업무 자동배정/상황판) 완료 후 로드맵을 재확인해 원장이 지정한
+다음 gap: `createClassProgress`/`updateClassProgress`/`checkInAttendance`/
+`saveClassRecordScores` — 강사가 매 교시 쓰는 핵심 입력인데 100% Notion
+전용이었다(`getDbProvider` 분기 자체가 없었음). Notion 장애/토큰 만료가
+이 경로를 막으면 수업이 안 돌아간다는 게 문제.
+
+### 1) 데이터 모델 — 새 schema 불필요, 기존 컬럼으로 충분했다
+`class_progress`(id/notion_id/**class_id**(네이티브 FK)/record_date/
+subjects/progress_content/homework_content/next_test/notice/**period**/
+student_records_created/daily_record_notion_ids), `daily_records`(id/
+notion_id/**student_id**(네이티브 FK)/record_date/progress_content/
+attendance/homework_done/vocab_result/**class_progress_notion_ids**(dual-id
+배열)/note/achievement), `briefings`(student_id/record_date/briefing_type/
+content) — 전부 001_initial_schema.sql에 이미 있었다(마이그레이션 매핑
+`migrate_notion_to_supabase.mjs`의 T() 매핑도 이미 일치).
+
+**유일한 설계 과제**: daily_records가 class_progress를 가리키는 네이티브
+FK가 없다(tasks.parent_task_id처럼 "감사 이후 추가"된 적이 없음) —
+`class_progress_notion_ids`(text[], dual-id 배열)만 있다. 새 FK 컬럼을
+추가할지 고민했지만, class_progress 행 조회 시 `{id, notion_id}` 둘 다
+알고 있으므로 daily_records를
+`or=(class_progress_notion_ids.cs.{id},class_progress_notion_ids.cs.{notion_id})`
+로 조회하면 Notion 미러 시점과 무관하게(미러 전/후 둘 다) 정확히 찾을 수
+있다는 걸 확인해서 **새 컬럼 없이** 해결(`pgFindDailyRecordsForProgress`
+헬퍼, `lib/notion.ts`). class_progress 자체는 `class_id`(네이티브 FK)가
+이미 있어서 반+날짜+교시로 조회하는 데 전혀 문제 없었다.
+
+### 2) 전환한 함수 (lib/notion.ts, 전부 `getDbProvider()==="postgres"` 분기 + 기존 Notion 코드 폴백 유지)
+- `getClassProgressForEdit` — `class_id=eq.<uuid>&record_date=eq.<date>&period=eq.<p>|is.null`로 조회.
+- `createClassProgress` — class_progress 1건 + 학생별 daily_record/briefing(+선택적 "복습" TODO)을 `Promise.allSettled`로 병렬 생성.
+- `updateClassProgress` — 기존 daily_record는 patch, 로스터에 새로 추가된 학생만 insert, 브리핑은 그날 아직 없는 학생에게만 보정 생성(원래 로직 그대로).
+- `checkInAttendance` — 이미 있으면 `updateClassProgress` 그대로 위임(변경 없음, 두 함수가 이미 postgres-aware이므로 자동으로 같이 전환됨), 없으면 진도 없이 출결 골격만 생성.
+- `saveClassRecordScores` — `achievement` 컬럼만 patch, 다른 필드 절대 안 건드림(기존 설계 의도 그대로).
+- 학생별 fanout에서 archive(soft delete)된 daily_record는 걸러야 해서(`deleteDailyRecordEntry`가 `source_payload.archived`로 지움) `pgFindDailyRecordsForProgress`에 `pgNotArchived` 필터 추가 — 안 거르면 삭제된 학생 기록이 수정 화면에 되살아나는 회귀가 생길 뻔했다(Notion 쪽은 archived 페이지가 쿼리에서 자동 제외되므로 원래 안전했음).
+
+### 3) fanout 안전성 / 부분 실패 처리
+현재(기존 Notion 구현) 의도를 먼저 확인: 원래도 트랜잭션이 없었다 — 학생별
+`notion.pages.create`가 for-loop 중간에 실패하면 그 앞의 학생들 기록은
+그대로 남고 예외만 던져 500이 되는 구조. Postgres RPC로 진짜 원자성을
+주려면 새 SQL 함수(schema 변경)가 필요해 원장 지시("schema 변경 필요하면
+SQL 파일만 만들고 STOP")에 해당하지만, **기존 동작 자체가 애초에
+트랜잭션이 아니었으므로 이번 전환에서 RPC를 새로 만들 필요는 없다고
+판단**했다(회귀가 아니라 동등 수준 유지). 대신 `Promise.allSettled`로
+바꿔서: 성공한 학생 기록은 실패와 무관하게 그대로 Postgres에 남기고,
+실패한 학생 이름을 명시적으로 모아 에러로 던진다("조용히 누락 금지" 지시
+반영) — 순차 for-loop보다 이 편이 오히려 더 안전하다(순차였다면 3번째
+학생에서 실패 시 4번째 이후는 아예 시도도 안 됐을 것).
+
+**진짜 원자적 처리가 필요하다고 판단되면**(예: 부분 실패가 운영에서 실제
+문제가 된다면) Postgres RPC(`plpgsql` 함수, `supabase/schema/005_*.sql`)
+설계가 다음 후보 — 이번엔 스키마 변경 없이 가능한 선에서 최대한 안전하게
+처리했다.
+
+### 4) ID 처리 / branch isolation
+Phase 3의 dual-id 규약(notion_id 또는 postgres uuid 둘 다 허용) 그대로
+유지 — `pgResolveRelationId`/`pgResolveRelationIds`(신규 다건 버전,
+`lib/supabaseRepo.ts`, 학생 N명을 한 번에 resolve). 모든 relation resolve는
+`listClasses()`/`pgFetch` 등 기존에 이미 branch_id로 스코프된 함수만
+사용 — 새로 짠 branch 격리 로직 없음(기존 인프라 그대로 재사용).
+
+### 5) 범위 밖(이번에 안 건드림)
+- `findClassRecordGaps`("빠진 진도 확인" 관리자 유틸) — 대상 4개 함수에
+  안 들어있었고, 핵심 입력 경로가 아니라(강사가 매번 쓰는 게 아니라 관리자가
+  가끔 확인하는 용도) 이번 범위에서 제외. 여전히 100% Notion.
+- `getPlannedAbsentStudentIds`(결석예정 체크박스 미리 켜기, ADMIN_INBOX
+  읽기) — 여전히 Notion 전용이지만, 실패해도 전체 GET 요청이 500 나지
+  않도록 try/catch 폴백만 추가(빈 배열 반환 + 로그).
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(57/57, 신규 10건 —
+`lib/classRecord.postgres.test.ts`: native PG UUID 반/legacy notion_id
+반 생성, 결석/지각 출결, branch isolation 2건, Notion mirror 실패해도
+Postgres 성공 유지, 부분 실패 시 성공분 보존, checkInAttendance
+idempotency, updateClassProgress→getClassProgressForEdit 왕복, 점수만
+갱신하고 다른 학생 안 건드림)/`npm run build` 전부 통과.
+
+### ⬜ 미완료 — 다음 세션(또는 원장)이 확인할 것
+브라우저로 로그인해서 실제 수업 입력 화면(`/input` 또는 `/director/input`)
+에서 (1) 새 반/기존 반 모두 진도 저장이 되는지, (2) 조교의 빠른
+출결체크(`checkInAttendance`)가 정상 동작하는지, (3) 저장된 기록을 다시
+열어(`getClassProgressForEdit`) 수정 후 재저장이 되는지 — 실제 운영
+학생/수업 데이터를 테스트용으로 만들지 말라는 지시에 따라 이번 세션은
+코드/테스트 레벨 검증까지만 했다.
+
+### 신규/변경 파일
+`lib/notion.ts`(`getClassProgressForEditByRow`/`pgFindDailyRecordsForProgress`/
+`pgNotArchived`/`createClassProgressPg`/`updateClassProgressPg` 신규,
+`getClassProgressForEdit`/`createClassProgress`/`updateClassProgress`/
+`checkInAttendance`/`saveClassRecordScores`/`getPlannedAbsentStudentIds`에
+postgres 분기 또는 안전망 추가), `lib/supabaseRepo.ts`(`pgResolveRelationIds`
+신규), `lib/classRecord.postgres.test.ts`(신규, 10건).
 
 ---
 

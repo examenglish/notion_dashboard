@@ -341,6 +341,16 @@ export async function pgResolveRelationId(targetEntity: EntityKey, notionId: str
   return map.get(notionId) ?? null;
 }
 
+/**
+ * pgResolveRelationId의 다건 버전 — 반 하나의 학생 N명처럼 여러 dual-id를
+ * 한 번에 native uuid로 바꿔야 할 때 학생 수만큼 왕복하지 않도록 한 번의
+ * 쿼리로 처리한다(수업진도 fanout, staff.md PART 13).
+ */
+export async function pgResolveRelationIds(targetEntity: EntityKey, notionIds: string[]): Promise<Map<string, string>> {
+  const { env, branchId } = await requireEnvAndBranch();
+  return resolveRelationIds(TABLE[targetEntity], notionIds, branchId, env.key, env.url);
+}
+
 /** notion_id 또는 postgres id(uuid)로 행 하나를 통째로 읽는다(notion.pages.retrieve 대체용). 없으면 null. */
 export async function pgGetByNotionId(entityKey: EntityKey, notionId: string): Promise<Record<string, unknown> | null> {
   const { env, branchId } = await requireEnvAndBranch();
