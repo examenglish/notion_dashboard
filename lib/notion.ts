@@ -4562,14 +4562,22 @@ function parseExamPrepData(raw: string, level: SchoolLevel): ExamPrepData {
 }
 
 export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet> {
+  const isPostgres = getDbProvider() === "postgres";
   const [student, res] = await Promise.all([
     getStudent(studentId),
-    notion.dataSources.query({
-      data_source_id: DB.EXAM_PREP,
-      filter: { property: "학생", relation: { contains: studentId } },
-      sorts: [{ property: "갱신일", direction: "descending" }],
-      page_size: 1,
-    }),
+    isPostgres
+      ? pgQueryRaw("EXAM_PREP", `student_notion_ids=cs.{${encodeURIComponent(studentId)}}`).then((rows) => ({
+          results: rows
+            .filter(pgNotArchived)
+            .sort((a, b) => ((b.updated_on as string) ?? "").localeCompare((a.updated_on as string) ?? ""))
+            .slice(0, 1),
+        }))
+      : notion.dataSources.query({
+          data_source_id: DB.EXAM_PREP,
+          filter: { property: "학생", relation: { contains: studentId } },
+          sorts: [{ property: "갱신일", direction: "descending" }],
+          page_size: 1,
+        }),
   ]);
 
   // 시험범위·시험일은 더 이상 학생별로 따로 관리하지 않는다 — 같은
@@ -4601,30 +4609,32 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
     };
   }
 
-  const level = (getSelect(page, "학교급") as SchoolLevel | null) ?? fallbackLevel;
+  const level = isPostgres
+    ? ((page.school_level as SchoolLevel | null) ?? fallbackLevel)
+    : ((getSelect(page, "학교급") as SchoolLevel | null) ?? fallbackLevel);
   return {
-    id: page.id,
+    id: isPostgres ? ((page.notion_id as string | null) ?? (page.id as string)) : page.id,
     studentId,
     studentName: student.name,
     school: student.school,
     grade: student.grade,
     level,
-    examTitle: getRichText(page, "시험명"),
+    examTitle: isPostgres ? ((page.exam_title as string) ?? "") : getRichText(page, "시험명"),
     examRange: schoolExamRange?.examRange ?? "",
     examDate: schoolExamRange?.examStartDate ?? null,
     examEndDate: schoolExamRange?.examEndDate ?? null,
     examDDay,
-    teachers: splitTeachers(getRichText(page, "담당교사")),
-    progress: getNumber(page, "진행률") ?? 0,
-    weakPoints: getRichText(page, "취약부분"),
-    updatedAt: getDate(page, "갱신일"),
+    teachers: isPostgres ? splitTeachers((page.teachers as string) ?? "") : splitTeachers(getRichText(page, "담당교사")),
+    progress: isPostgres ? ((page.progress as number | null) ?? 0) : (getNumber(page, "진행률") ?? 0),
+    weakPoints: isPostgres ? ((page.weak_points as string) ?? "") : getRichText(page, "취약부분"),
+    updatedAt: isPostgres ? ((page.updated_on as string | null) ?? null) : getDate(page, "갱신일"),
     // 이미 저장된 시트가 있는 학생은 여기서 더 이상 학교 단원을 재병합하지
     // 않는다 — 매번 읽을 때마다 병합하면, 학생이 명시적으로 지운 단원이
     // DB⑩에 그대로 남아있는 한 열 때마다 계속 되살아나는 문제가 있었다
     // (2026-08-17 임채민 사례로 발견). 이제 병합은 upsertSchoolExamRange가
     // 저장되는 시점에 pushSchoolUnitsToStudents가 1회만 밀어넣고, 그 뒤로는
     // 학생이 지우면 지운 채로 유지된다.
-    data: parseExamPrepData(getRichText(page, "데이터"), level),
+    data: isPostgres ? parseExamPrepData(JSON.stringify(page.exam_data ?? null), level) : parseExamPrepData(getRichText(page, "데이터"), level),
   };
 }
 
@@ -4637,20 +4647,30 @@ export async function getExamPrepSheet(studentId: string): Promise<ExamPrepSheet
 export async function pushSchoolUnitsToStudents(entry: SchoolExamRangeEntry): Promise<number> {
   const entries = await getAllExamPrepEntries();
   const targets = entries.filter((e) => e.student.school === entry.school && e.student.grade === entry.grade);
+  const isPostgres = getDbProvider() === "postgres";
   let updated = 0;
   await Promise.all(
     targets.map(async (e) => {
-      const level = (getSelect(e.page, "학교급") as SchoolLevel | null) ?? levelFromGrade(e.student.grade) ?? "중등";
-      const data = parseExamPrepData(getRichText(e.page, "데이터"), level);
-      const merged = mergeSchoolUnits(data, entry);
-      if (merged === data) return;
-      await notion.pages.update({
-        page_id: e.page.id,
-        properties: {
-          데이터: { rich_text: chunkRichText(JSON.stringify(merged)) },
-          진행률: { number: computeProgress(merged) },
-        },
-      });
+      const merged = mergeSchoolUnits(e.data, entry);
+      if (merged === e.data) return;
+      if (isPostgres) {
+        await pgPatchByNotionId("EXAM_PREP", e.id, { exam_data: merged, progress: computeProgress(merged) });
+        fireAndForget("notion:pushSchoolUnitsToStudents", () =>
+          notion.pages.update({
+            page_id: e.id,
+            properties: { 데이터: { rich_text: chunkRichText(JSON.stringify(merged)) }, 진행률: { number: computeProgress(merged) } },
+          })
+        );
+      } else {
+        const updatedPage = await notion.pages.update({
+          page_id: e.id,
+          properties: {
+            데이터: { rich_text: chunkRichText(JSON.stringify(merged)) },
+            진행률: { number: computeProgress(merged) },
+          },
+        });
+        await dualWriteEntity("EXAM_PREP", updatedPage);
+      }
       updated++;
     })
   );
@@ -4669,6 +4689,66 @@ export async function saveExamPrepSheet(input: {
   data: ExamPrepData;
 }): Promise<{ id: string; progress: number }> {
   const progress = computeProgress(input.data);
+
+  if (getDbProvider() === "postgres") {
+    const patch: Record<string, unknown> = {
+      school_level: input.level,
+      exam_title: input.examTitle,
+      teachers: joinTeachers(input.teachers),
+      progress,
+      weak_points: input.weakPoints,
+      exam_data: input.data,
+      updated_on: todayKST(),
+    };
+    const buildNotionProps = () => ({
+      학교급: { select: { name: input.level } },
+      시험명: { rich_text: [{ text: { content: input.examTitle } }] },
+      시험범위: { rich_text: [{ text: { content: input.examRange } }] },
+      담당교사: { rich_text: [{ text: { content: joinTeachers(input.teachers) } }] },
+      진행률: { number: progress },
+      취약부분: { rich_text: [{ text: { content: input.weakPoints } }] },
+      데이터: { rich_text: chunkRichText(JSON.stringify(input.data)) },
+      갱신일: { date: { start: todayKST() } },
+      시험일: input.examDate ? { date: { start: input.examDate } } : { date: null },
+    });
+
+    if (input.id) {
+      await pgPatchByNotionId("EXAM_PREP", input.id, patch);
+      fireAndForget("notion:saveExamPrepSheet", async () => {
+        const row = await pgGetByNotionId("EXAM_PREP", input.id!);
+        const notionId = row?.notion_id as string | undefined;
+        if (!notionId) return; // 아직 미러 전인 postgres-only 행 — best-effort
+        const updated = await notion.pages.update({ page_id: notionId, properties: buildNotionProps() });
+        await dualWriteEntity("EXAM_PREP", updated);
+      });
+      return { id: input.id, progress };
+    }
+
+    const [studentRow, studentPgId] = await Promise.all([
+      pgGetByNotionId("STUDENT", input.studentId),
+      pgResolveRelationId("STUDENT", input.studentId),
+    ]);
+    const studentName = (studentRow?.name as string | undefined) ?? "-";
+    const row = await pgInsertRow("EXAM_PREP", {
+      title: `${studentName} ${input.examTitle || "시험대비"}`,
+      student_id: studentPgId,
+      student_notion_ids: [input.studentId],
+      ...patch,
+    });
+    fireAndForget("notion:saveExamPrepSheet", async () => {
+      const page = await notion.pages.create({
+        parent: { data_source_id: DB.EXAM_PREP } as any,
+        properties: {
+          제목: { title: [{ text: { content: `${studentName} ${input.examTitle || "시험대비"}` } }] },
+          학생: { relation: [{ id: input.studentId }] },
+          ...buildNotionProps(),
+        } as any,
+      });
+      await pgSetNotionId("EXAM_PREP", row.id, page.id);
+    });
+    return { id: row.id, progress };
+  }
+
   const properties: any = {
     학교급: { select: { name: input.level } },
     시험명: { rich_text: [{ text: { content: input.examTitle } }] },
@@ -4685,7 +4765,8 @@ export async function saveExamPrepSheet(input: {
   };
 
   if (input.id) {
-    await notion.pages.update({ page_id: input.id, properties });
+    const updated = await notion.pages.update({ page_id: input.id, properties });
+    await dualWriteEntity("EXAM_PREP", updated);
     return { id: input.id, progress };
   }
 
@@ -4699,12 +4780,62 @@ export async function saveExamPrepSheet(input: {
       ...properties,
     } as any,
   });
+  await dualWriteEntity("EXAM_PREP", page);
   return { id: page.id, progress };
 }
 
-// 학생별 최신 시험대비 시트 하나씩(페이지 + 학생 정보) — 현황판과
-// getExamPrepTemplate(동일 학교/학년 자동입력)이 공통으로 쓴다.
-async function getAllExamPrepEntries(): Promise<{ page: any; student: Awaited<ReturnType<typeof getStudent>> }[]> {
+// 학생별 최신 시험대비 시트 하나씩 — 현황판/getExamPrepTemplate(동일
+// 학교/학년 자동입력)/pushSchoolUnitsToStudents/broadcastTextSourceSteps가
+// 공통으로 쓴다. Notion page/Postgres row 차이를 여기서 한 번만 흡수해
+// provider-무관 shape으로 돌려준다 — 호출부 4곳이 각자 getSelect/getRichText를
+// 반복하지 않아도 된다(staff.md PART 15).
+type ExamPrepEntry = {
+  // dual-id(notion_id 있으면 그것, 없으면 postgres 고유 id) — 쓰기 쪽에서
+  // pgPatchByNotionId/notion.pages.update 양쪽에 그대로 넘길 수 있다.
+  id: string;
+  studentId: string;
+  student: Awaited<ReturnType<typeof getStudent>>;
+  level: SchoolLevel;
+  data: ExamPrepData;
+  examTitle: string;
+  teachers: string[];
+  progress: number;
+  weakPoints: string;
+  updatedAt: string | null;
+};
+
+async function getAllExamPrepEntries(): Promise<ExamPrepEntry[]> {
+  if (getDbProvider() === "postgres") {
+    const rows = await pgQueryRaw("EXAM_PREP", "select=*");
+    const sorted = rows
+      .filter(pgNotArchived)
+      .sort((a, b) => ((b.updated_on as string) ?? "").localeCompare((a.updated_on as string) ?? ""));
+    const byStudent = new Map<string, Record<string, unknown>>();
+    for (const r of sorted) {
+      const sid = (r.student_notion_ids as string[] | undefined)?.[0];
+      if (!sid || byStudent.has(sid)) continue;
+      byStudent.set(sid, r);
+    }
+    const studentIds = Array.from(byStudent.keys());
+    const students = await Promise.all(studentIds.map((id) => getStudent(id)));
+    return studentIds.map((id, i) => {
+      const r = byStudent.get(id)!;
+      const level = (r.school_level as SchoolLevel | null) ?? "중등";
+      return {
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        studentId: id,
+        student: students[i],
+        level,
+        data: parseExamPrepData(JSON.stringify(r.exam_data ?? null), level),
+        examTitle: (r.exam_title as string) ?? "",
+        teachers: splitTeachers((r.teachers as string) ?? ""),
+        progress: (r.progress as number | null) ?? 0,
+        weakPoints: (r.weak_points as string) ?? "",
+        updatedAt: (r.updated_on as string | null) ?? null,
+      };
+    });
+  }
+
   const results = await queryAllPages({
     data_source_id: DB.EXAM_PREP,
     sorts: [{ property: "갱신일", direction: "descending" }],
@@ -4720,7 +4851,22 @@ async function getAllExamPrepEntries(): Promise<{ page: any; student: Awaited<Re
 
   const studentIds = Array.from(byStudent.keys());
   const students = await Promise.all(studentIds.map((id) => getStudent(id)));
-  return studentIds.map((id, i) => ({ page: byStudent.get(id), student: students[i] }));
+  return studentIds.map((id, i) => {
+    const p = byStudent.get(id);
+    const level = (getSelect(p, "학교급") as SchoolLevel | null) ?? "중등";
+    return {
+      id: p.id,
+      studentId: id,
+      student: students[i],
+      level,
+      data: parseExamPrepData(getRichText(p, "데이터"), level),
+      examTitle: getRichText(p, "시험명"),
+      teachers: splitTeachers(getRichText(p, "담당교사")),
+      progress: getNumber(p, "진행률") ?? 0,
+      weakPoints: getRichText(p, "취약부분"),
+      updatedAt: getDate(p, "갱신일"),
+    };
+  });
 }
 
 // 현황판/진도표 — 시험대비 시트가 있는 모든 학생을 한 번에 모아온다.
@@ -4731,28 +4877,27 @@ export async function listExamPrepOverview() {
     getSchoolExamRangeLatestMap(),
   ]);
 
-  return entries.map(({ page: p, student: s }) => {
-    const level = (getSelect(p, "학교급") as SchoolLevel | null) ?? "중등";
-    const data = parseExamPrepData(getRichText(p, "데이터"), level);
+  return entries.map((e) => {
+    const s = e.student;
     return {
       studentId: s.id,
       studentName: s.name,
       school: s.school,
       grade: s.grade,
-      level,
-      examTitle: getRichText(p, "시험명"),
+      level: e.level,
+      examTitle: e.examTitle,
       examRange: schoolRangeMap.get(`${s.school}|${s.grade ?? ""}`)?.examRange ?? "",
       examDate: schoolRangeMap.get(`${s.school}|${s.grade ?? ""}`)?.examStartDate ?? null,
       examDDay: (() => {
         const start = schoolRangeMap.get(`${s.school}|${s.grade ?? ""}`)?.examStartDate;
         return start ? daysUntilKST(start) : null;
       })(),
-      teachers: splitTeachers(getRichText(p, "담당교사")),
-      progress: getNumber(p, "진행률") ?? 0,
-      weakPoints: getRichText(p, "취약부분"),
-      updatedAt: getDate(p, "갱신일"),
+      teachers: e.teachers,
+      progress: e.progress,
+      weakPoints: e.weakPoints,
+      updatedAt: e.updatedAt,
       latestExam: examMap.get(s.id) ?? null,
-      categories: computeCategoryBreakdown(data),
+      categories: computeCategoryBreakdown(e.data),
     };
   });
 }
@@ -4772,11 +4917,6 @@ export async function getExamPrepTemplate(input: {
   );
   if (matches.length === 0) return null;
 
-  const parsed = matches.map((e) => {
-    const level = (getSelect(e.page, "학교급") as SchoolLevel | null) ?? "중등";
-    return { page: e.page, level, data: parseExamPrepData(getRichText(e.page, "데이터"), level) };
-  });
-
   const uniq = (vals: (string | null | undefined)[]) =>
     Array.from(new Set(vals.filter((v): v is string => !!v && v.trim() !== "")));
 
@@ -4791,22 +4931,22 @@ export async function getExamPrepTemplate(input: {
   const schoolPrintOf = (data: ExamPrepData): string =>
     data.level === "중등" ? data.middle.schoolPrint : labelsOf(data, "학교프린트").join(", ");
 
-  // getAllExamPrepEntries()는 갱신일 내림차순이므로 matches[0]/parsed[0]가 최신.
-  const latest = parsed[0];
+  // getAllExamPrepEntries()는 갱신일 내림차순이므로 matches[0]가 최신.
+  const latest = matches[0];
   return {
     level: latest.level,
     latest: {
-      examTitle: getRichText(latest.page, "시험명"),
-      teachers: splitTeachers(getRichText(latest.page, "담당교사")),
+      examTitle: latest.examTitle,
+      teachers: latest.teachers,
       textbook: labelsOf(latest.data, "교과서").join(", "),
       supplementary: labelsOf(latest.data, "부교재").join(", "),
       schoolPrint: schoolPrintOf(latest.data),
     },
-    examTitleOptions: uniq(parsed.map((p) => getRichText(p.page, "시험명"))),
-    textbookOptions: uniq(parsed.flatMap((p) => labelsOf(p.data, "교과서"))),
-    supplementaryOptions: uniq(parsed.flatMap((p) => labelsOf(p.data, "부교재"))),
-    schoolPrintOptions: uniq(parsed.map((p) => schoolPrintOf(p.data))),
-    schoolPrintItemLabels: uniq(parsed.flatMap((p) => labelsOf(p.data, "학교프린트"))),
+    examTitleOptions: uniq(matches.map((m) => m.examTitle)),
+    textbookOptions: uniq(matches.flatMap((m) => labelsOf(m.data, "교과서"))),
+    supplementaryOptions: uniq(matches.flatMap((m) => labelsOf(m.data, "부교재"))),
+    schoolPrintOptions: uniq(matches.map((m) => schoolPrintOf(m.data))),
+    schoolPrintItemLabels: uniq(matches.flatMap((m) => labelsOf(m.data, "학교프린트"))),
   };
 }
 
@@ -4866,7 +5006,47 @@ function parseSchoolExamRangeEntry(page: any): SchoolExamRangeEntry {
   };
 }
 
+// Notion 속성 이름(교과서명/교과서단원 등)과 1:1로 이미 설계된 기존
+// school_exam_ranges 컬럼(textbook_name/textbook_units 등) — 새 컬럼 없이
+// 카테고리 한글 라벨만 컬럼 접두사로 매핑하면 된다(staff.md PART 15).
+const CATEGORY_COLUMN_PREFIX: Record<TextCategory, string> = {
+  교과서: "textbook",
+  부교재: "supplementary",
+  모의고사: "mock",
+  학교프린트: "print",
+};
+
+function mapPgSchoolExamRangeRow(row: Record<string, unknown>): SchoolExamRangeEntry {
+  const units = {} as Record<TextCategory, CategoryUnits>;
+  for (const cat of TEXT_CATEGORIES) {
+    const prefix = CATEGORY_COLUMN_PREFIX[cat];
+    const name = (row[`${prefix}_name`] as string | null) ?? "";
+    const unitsRaw = (row[`${prefix}_units`] as string | null) ?? "";
+    units[cat] = { name, units: unitsRaw.split(",").map((u) => u.trim()).filter(Boolean) };
+  }
+  return {
+    id: (row.notion_id as string | null) ?? (row.id as string),
+    school: (row.school as string) ?? "",
+    grade: (row.grade as string) ?? "",
+    examTitle: (row.exam_title as string) ?? "",
+    examRange: (row.exam_range as string) ?? "",
+    examStartDate: (row.exam_start as string | null) ?? null,
+    examEndDate: (row.exam_end as string | null) ?? null,
+    units,
+    updatedAt: (row.updated_on as string | null) ?? null,
+  };
+}
+
 async function getSchoolExamRangeEntriesFor(school: string, grade?: string): Promise<SchoolExamRangeEntry[]> {
+  if (getDbProvider() === "postgres") {
+    const filters = [`school=eq.${encodeURIComponent(school)}`];
+    if (grade) filters.push(`grade=eq.${encodeURIComponent(grade)}`);
+    const rows = await pgQueryRaw("SCHOOL_EXAM_RANGE", filters.join("&"));
+    return rows
+      .filter(pgNotArchived)
+      .map(mapPgSchoolExamRangeRow)
+      .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+  }
   const filters: any[] = [{ property: "학교", rich_text: { equals: school } }];
   if (grade) filters.push({ property: "학년", select: { equals: grade } });
   const results = await queryAllPages({
@@ -4892,11 +5072,23 @@ export async function getSchoolExamRangeHistory(school: string, grade: string): 
 // 현황판/진도표가 학생마다 따로 조회하지 않도록, 학교+학년별 "현재" 값을
 // 한 번에 맵으로 만들어준다.
 export async function getSchoolExamRangeLatestMap(): Promise<Map<string, SchoolExamRangeEntry>> {
+  const map = new Map<string, SchoolExamRangeEntry>();
+  if (getDbProvider() === "postgres") {
+    const rows = await pgQueryRaw("SCHOOL_EXAM_RANGE", "select=*");
+    const entries = rows
+      .filter(pgNotArchived)
+      .map(mapPgSchoolExamRangeRow)
+      .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+    for (const entry of entries) {
+      const key = `${entry.school}|${entry.grade}`;
+      if (!map.has(key)) map.set(key, entry);
+    }
+    return map;
+  }
   const results = await queryAllPages({
     data_source_id: DB.SCHOOL_EXAM_RANGE,
     sorts: [{ property: "갱신일", direction: "descending" }],
   });
-  const map = new Map<string, SchoolExamRangeEntry>();
   for (const page of results as any[]) {
     const entry = parseSchoolExamRangeEntry(page);
     const key = `${entry.school}|${entry.grade}`;
@@ -4922,6 +5114,77 @@ export async function upsertSchoolExamRange(input: {
     (e) => e.examTitle === input.examTitle
   );
   const updatedAt = todayKST();
+
+  if (getDbProvider() === "postgres") {
+    const cleanUnits = {} as Record<TextCategory, CategoryUnits>;
+    const patch: Record<string, unknown> = {
+      title: `${input.school} ${input.grade} ${input.examTitle}`,
+      school: input.school,
+      grade: input.grade,
+      exam_title: input.examTitle,
+      exam_range: input.examRange,
+      exam_start: input.examStartDate,
+      exam_end: input.examEndDate,
+      updated_on: updatedAt,
+    };
+    for (const cat of TEXT_CATEGORIES) {
+      const raw = input.units[cat] ?? { name: "", units: [] };
+      const cleanedList = cat === "모의고사" ? parseNumberRange(raw.units.join(",")) : raw.units.map((u) => u.trim()).filter(Boolean);
+      cleanUnits[cat] = { name: raw.name, units: cleanedList };
+      const prefix = CATEGORY_COLUMN_PREFIX[cat];
+      patch[`${prefix}_name`] = raw.name;
+      patch[`${prefix}_units`] = cleanedList.join(", ");
+    }
+    const resultBase = {
+      school: input.school,
+      grade: input.grade,
+      examTitle: input.examTitle,
+      examRange: input.examRange,
+      examStartDate: input.examStartDate,
+      examEndDate: input.examEndDate,
+      units: cleanUnits,
+      updatedAt,
+    };
+
+    const buildNotionProps = () => {
+      const properties: any = {
+        학교: { rich_text: [{ text: { content: input.school } }] },
+        학년: { select: { name: input.grade } },
+        시험명: { rich_text: [{ text: { content: input.examTitle } }] },
+        시험범위: { rich_text: chunkRichText(input.examRange) },
+        시험시작일: input.examStartDate ? { date: { start: input.examStartDate } } : { date: null },
+        시험종료일: input.examEndDate ? { date: { start: input.examEndDate } } : { date: null },
+        갱신일: { date: { start: updatedAt } },
+      };
+      for (const cat of TEXT_CATEGORIES) {
+        const props = CATEGORY_PROPS[cat];
+        properties[props.name] = { rich_text: [{ text: { content: cleanUnits[cat].name } }] };
+        properties[props.units] = { rich_text: chunkRichText(cleanUnits[cat].units.join(", ")) };
+      }
+      return properties;
+    };
+
+    if (existing) {
+      await pgPatchByNotionId("SCHOOL_EXAM_RANGE", existing.id, patch);
+      fireAndForget("notion:upsertSchoolExamRange", async () => {
+        const row = await pgGetByNotionId("SCHOOL_EXAM_RANGE", existing.id);
+        const notionId = row?.notion_id as string | undefined;
+        if (!notionId) return; // 아직 미러 전인 postgres-only 행 — best-effort라 그냥 건너뜀
+        const updated = await notion.pages.update({ page_id: notionId, properties: buildNotionProps() });
+        await dualWriteEntity("SCHOOL_EXAM_RANGE", updated);
+      });
+      return { ...resultBase, id: existing.id };
+    }
+    const row = await pgInsertRow("SCHOOL_EXAM_RANGE", patch);
+    fireAndForget("notion:upsertSchoolExamRange", async () => {
+      const page = await notion.pages.create({
+        parent: { data_source_id: DB.SCHOOL_EXAM_RANGE } as any,
+        properties: { 제목: { title: [{ text: { content: `${input.school} ${input.grade} ${input.examTitle}` } }] }, ...buildNotionProps() } as any,
+      });
+      await pgSetNotionId("SCHOOL_EXAM_RANGE", row.id, page.id);
+    });
+    return { ...resultBase, id: row.id };
+  }
   const cleanUnits = {} as Record<TextCategory, CategoryUnits>;
   const properties: any = {
     학교: { rich_text: [{ text: { content: input.school } }] },
@@ -5045,14 +5308,14 @@ export async function broadcastTextSourceSteps(input: {
       e.student.school === input.school &&
       e.student.grade === input.grade &&
       !!input.staffName &&
-      splitTeachers(getRichText(e.page, "담당교사")).includes(input.staffName)
+      e.teachers.includes(input.staffName)
   );
   const doneByLabel = new Map(input.steps.map((s) => [s.label, s.done]));
+  const isPostgres = getDbProvider() === "postgres";
 
   const results = await Promise.all(
     targets.map(async (e) => {
-      const level = (getSelect(e.page, "학교급") as SchoolLevel | null) ?? "중등";
-      const data = parseExamPrepData(getRichText(e.page, "데이터"), level);
+      const data = e.data;
       const sources = data.level === "중등" ? data.middle.textSources : data.high.textSources;
       const idx = sources.findIndex((t) => t.category === input.category && t.label === input.label);
       if (idx === -1) return null; // 이 단원이 없는 학생은 건드리지 않음
@@ -5067,14 +5330,29 @@ export async function broadcastTextSourceSteps(input: {
           ? { level: "중등", middle: { ...data.middle, textSources: nextSources } }
           : { level: "고등", high: { ...data.high, textSources: nextSources } };
 
-      await notion.pages.update({
-        page_id: e.page.id,
-        properties: {
-          데이터: { rich_text: chunkRichText(JSON.stringify(nextData)) },
-          진행률: { number: computeProgress(nextData) },
-          갱신일: { date: { start: todayKST() } },
-        },
-      });
+      if (isPostgres) {
+        await pgPatchByNotionId("EXAM_PREP", e.id, { exam_data: nextData, progress: computeProgress(nextData), updated_on: todayKST() });
+        fireAndForget("notion:broadcastTextSourceSteps", () =>
+          notion.pages.update({
+            page_id: e.id,
+            properties: {
+              데이터: { rich_text: chunkRichText(JSON.stringify(nextData)) },
+              진행률: { number: computeProgress(nextData) },
+              갱신일: { date: { start: todayKST() } },
+            },
+          })
+        );
+      } else {
+        const updatedPage = await notion.pages.update({
+          page_id: e.id,
+          properties: {
+            데이터: { rich_text: chunkRichText(JSON.stringify(nextData)) },
+            진행률: { number: computeProgress(nextData) },
+            갱신일: { date: { start: todayKST() } },
+          },
+        });
+        await dualWriteEntity("EXAM_PREP", updatedPage);
+      }
       return { studentId: e.student.id, studentName: e.student.name };
     })
   );

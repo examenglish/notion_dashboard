@@ -4,7 +4,26 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (**PART 14 신규 — 클리닉 기록 READ를
+마지막 업데이트: 2026-09-19 (**PART 15 신규 — 시험대비(EXAM_PREP)/학교별
+시험범위(SCHOOL_EXAM_RANGE) 전체를 Notion-only → PostgreSQL-primary로
+전환.** 9개 함수(`getSchoolExamRange`/`getSchoolExamRangeHistory`/
+`getSchoolExamRangeLatestMap`/`upsertSchoolExamRange`/`getExamPrepSheet`/
+`saveExamPrepSheet`/`listExamPrepOverview`/`getExamPrepTemplate`/
+`pushSchoolUnitsToStudents`/`broadcastTextSourceSteps`, 총 10개) 전부
+전환 — **새 schema 없이** `school_exam_ranges`의 기존 flat 컬럼
+(textbook_name/textbook_units 등, Notion 속성 이름과 이미 1:1 대응하게
+설계돼 있었음)과 `exam_preps.exam_data`(jsonb, 기존 chunked rich_text
+직렬화보다 오히려 더 나음 — 2000자 청킹 자체가 불필요해짐)를 그대로
+재사용. 공용 헬퍼 `getAllExamPrepEntries()`를 Notion page 직접 참조 대신
+provider-무관 `ExamPrepEntry` shape을 반환하도록 리팩터해서, 이걸 쓰는
+4개 함수가 전부 한 번에 깨끗해짐(`getSelect`/`getRichText` 반복 없이).
+`parseExamPrepData`(스키마 마이그레이션/back-compat 로직 포함)는
+Postgres/Notion 양쪽에서 그대로 재사용(JSON.stringify 왕복으로 로직
+중복 안 함). 테스트 9건 신규(`lib/examPrep.postgres.test.ts`), 70/70
+통과, tsc/build 통과. PART 14(클리닉 READ)까지 완료 처리는 유지. 아래
+"PART 15" 먼저 확인)
+
+이전 업데이트: 2026-09-19 (**PART 14 — 클리닉 기록 READ를
 Notion-only → PostgreSQL-primary로 전환.** WRITE(`createClinicRecord`/
 `updateClinicRecord`/`deleteClinicRecord`)는 이미 이전 세션에서
 postgres-primary였다(이번에 확인만 함) — READ 3종(`getClinicRecordsByDate`/
@@ -72,6 +91,79 @@ gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
 PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
 004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
+
+---
+
+## PART 15 — 시험대비/학교별 시험범위 Notion-only → PostgreSQL-primary 전환 (2026-09-19)
+
+### 배경
+PART 14(클리닉 READ) 다음 순서로 원장이 지정한 gap. 대상: `pushSchoolUnitsToStudents`/
+`saveExamPrepSheet`/`upsertSchoolExamRange`/`broadcastTextSourceSteps`(원래
+로드맵의 WRITE 목록) + 이들과 강하게 얽힌 READ(`getExamPrepSheet`/
+`listExamPrepOverview`/`getExamPrepTemplate`/`getSchoolExamRange*`) 전체 —
+따로 떼서 반쪽만 전환하면 의미가 없어 통째로 했다.
+
+### 1) 데이터 모델 — 여기도 새 schema 불필요
+- `school_exam_ranges`: `textbook_name/textbook_units/supplementary_name/
+  supplementary_units/mock_name/mock_units/print_name/print_units` 8개
+  컬럼이 Notion 속성(교과서명/교과서단원/부교재명/부교재단원/모의고사명/
+  모의고사단원/학교프린트명/학교프린트단원)과 이미 정확히 1:1 대응하게
+  설계돼 있었다 — `CATEGORY_COLUMN_PREFIX`(한글 카테고리→컬럼 접두사)
+  매핑 하나만 추가.
+- `exam_preps.exam_data jsonb`: 기존 Notion "데이터" 속성은 `JSON.stringify`
+  후 2000자씩 chunked rich_text로 쪼개 저장했었다(Notion 제약 회피용
+  땜빵) — Postgres는 jsonb라 그 청킹 자체가 필요 없다. `parseExamPrepData`
+  (버전 마이그레이션/손상 데이터 폴백 로직 포함)는 그대로 재사용 —
+  `JSON.stringify(row.exam_data)`로 되돌려서 넘기는 것만으로 Notion/
+  Postgres 두 경로가 완전히 같은 파싱 로직을 탄다(로직 중복 없음).
+
+### 2) 공용 헬퍼 리팩터: `getAllExamPrepEntries()`
+`listExamPrepOverview`/`getExamPrepTemplate`/`pushSchoolUnitsToStudents`/
+`broadcastTextSourceSteps` 4개 함수가 전부 이 헬퍼 하나를 공유한다. 원래는
+`{page, student}`(Notion page 객체 직접 노출)를 돌려줘서 호출부마다
+`getSelect(page,...)`/`getRichText(page,...)`를 반복했다 — provider가
+둘로 늘어나면 그 반복이 8군데로 늘어날 상황이라, 헬퍼 안에서 한 번만
+Notion/Postgres 분기하고 밖으로는 provider-무관 `ExamPrepEntry`
+(`id`(dual)/`studentId`/`student`/`level`/`data`/`examTitle`/`teachers`/
+`progress`/`weakPoints`/`updatedAt`)를 돌려주도록 바꿨다. 4개 호출부는
+이제 provider를 전혀 몰라도 된다(WRITE 2개만 자기 안에서 다시
+`getDbProvider()` 분기 — `pgPatchByNotionId`로 저장).
+
+### 3) 전환한 함수 (전부 `getDbProvider()==="postgres"` 분기 + Notion 폴백 유지)
+- `getSchoolExamRangeEntriesFor`(내부, `getSchoolExamRange`/
+  `getSchoolExamRangeHistory`가 공유) / `getSchoolExamRangeLatestMap` /
+  `upsertSchoolExamRange`.
+- `getAllExamPrepEntries`(내부 공용 헬퍼) / `getExamPrepSheet` /
+  `saveExamPrepSheet` / `listExamPrepOverview` / `getExamPrepTemplate` /
+  `pushSchoolUnitsToStudents` / `broadcastTextSourceSteps`.
+- 덤으로 발견/수정: `pushSchoolUnitsToStudents`/`saveExamPrepSheet`의
+  기존 Notion-primary 분기가 `dualWriteEntity` 호출이 아예 빠져 있었다
+  (원래 Postgres 미러가 전혀 안 되던 기존 gap) — 프로덕션은 항상
+  `ACADEMY_DB_PROVIDER=postgres`라 실질 영향은 없었지만, 다른 함수들과
+  통일성을 맞춰 같이 고쳤다.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(70/70, 신규 9건 — 시트 없음 기본값,
+신규 저장 후 재조회, 기존 시트 patch, branch isolation, Notion mirror
+실패해도 저장 유지, 학교시험범위 카테고리 컬럼 왕복, 같은 학교+학년+
+시험명 upsert 중복 방지, 단원 push 시 기존 것 안 건드림, 템플릿 자동완성
+옵션 취합)/`npm run build` 전부 통과.
+
+### ⬜ 미완료 — 다음 세션(또는 원장)이 확인할 것
+브라우저로 로그인해서 (1) 시험대비 시트 저장/재조회, (2) "학교 찾기"
+화면에서 학교별 시험범위 저장 후 관련 학생 시트에 단원이 자동으로
+채워지는지, (3) 담당교사가 워크북 단계를 다른 학생들에게 일괄 반영하는
+기능이 정상 동작하는지 — 실제 운영 데이터를 만들지 말라는 지시에 따라
+이번 세션은 코드/테스트 레벨 검증까지만 했다.
+
+### 신규/변경 파일
+`lib/notion.ts`(`CATEGORY_COLUMN_PREFIX`/`mapPgSchoolExamRangeRow`/
+`ExamPrepEntry` 신규, `getSchoolExamRangeEntriesFor`/
+`getSchoolExamRangeLatestMap`/`upsertSchoolExamRange`/
+`getAllExamPrepEntries`/`getExamPrepSheet`/`saveExamPrepSheet`/
+`listExamPrepOverview`/`getExamPrepTemplate`/`pushSchoolUnitsToStudents`/
+`broadcastTextSourceSteps`에 postgres 분기), `lib/examPrep.postgres.test.ts`
+(신규, 9건).
 
 ---
 
