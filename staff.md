@@ -13,12 +13,41 @@
 
 ## PART 6 — relation resolver dual-id 지원 + 학생/직원/반 생성 postgres-primary + manual_steps 결정 (2026-09-19)
 
-### 상태: 🟢 코드+테스트+build 완료. PART 5의 PIN 전환은 원장이 production에서
-직접 4종 reconciliation curl(student-read-check/write-smoke-test/
-backfill-pin-hash/retry-failures, 사직/금정 둘 다 0 mismatch·failed=0)과
-브라우저 로그인까지 검증 완료. **이번 PART 6 변경분(관계 resolver, 학생/직원/
-반 postgres-primary 생성)은 코드 리뷰 시점까지 완료 — production 배포는
-아래 "배포 전 확인" 순서 확인 후 진행.**
+### 상태: 🟢 **Phase 1 완료 — 코드+테스트+build+production 배포+스모크테스트까지 전부 끝남.**
+PART 5의 PIN 전환은 원장이 production에서 직접 4종 reconciliation curl
+(student-read-check/write-smoke-test/backfill-pin-hash/retry-failures,
+사직/금정 둘 다 0 mismatch·failed=0)과 브라우저 로그인까지 검증 완료.
+이번 PART 6 변경분(관계 resolver, 학생/직원/반 postgres-primary 생성)도
+아래 "배포 결과"까지 전부 끝났다. **다음 세션 작업은 PART 3(자연어 입력
+속도) 재개 — 이 문서 맨 아래 "다음 작업(Phase 2)" 참고.**
+
+### commit
+- `96acc38` — dual-id resolver + postgres-primary 학생/직원/반 생성 + manual_steps
+  결정(SQL 작성, 미적용) + vitest 테스트 인프라(이 저장소 최초)
+- `eaa2769` — `@types/node` 버전 충돌 수정(아래 "배포 결과" 1번 참고)
+- 둘 다 origin/main에 push 완료(`git log --oneline -5`로 확인 가능)
+
+### 배포 결과
+1. **1차 배포 시도 실패 → 원인 파악 → 수정 → 재배포 성공.** vitest 추가로
+   `package.json`의 `@types/node`(`^20.14.9`)가 vitest의 peerOptional
+   요구(`^22 || >=24`)와 충돌 — 로컬에서는 `--legacy-peer-deps`로 설치해서
+   못 알아챘는데, Vercel 빌드는 플레인 `npm install`을 돌려서 그대로
+   `deploy_failed`(`npm install` exit 1)가 났다. `@types/node`를 `^24.0.0`으로
+   올리고 로컬에서 `--legacy-peer-deps` 없이 `npm install`이 깨끗하게
+   되는 것까지 확인한 뒤(`eaa2769`) 재배포 성공.
+2. **금정**(`notion-dashboard-geumjeong`), **사직**(`notion-dashboard`) 둘 다
+   production 배포 완료. `staff.examenglishsj.co.kr`→금정, `staffsj.
+   examenglishsj.co.kr`→사직 최신 배포에 정상 연결(둘 다 `vercel deploy --prod`의
+   자동 alias로 확인).
+3. **스모크테스트 결과**: `/login` 사직/금정 둘 다 200. 공개 엔드포인트
+   `/api/staff`로 실제 조회 — 사직/금정이 서로 다른 실제 직원 명단을 정상
+   반환(지점 간 데이터 안 섞임, branch isolation 확인). `/api/classes`,
+   `/api/manuals`는 인증 필요라 401(정상, 크래시 아님).
+   **직접 확인 못 한 것**: 이번에 postgres-primary로 바꾼 신규 생성 경로
+   (학생/직원/반 create) 자체는 로그인 계정 정보가 없어 실제 API 호출로는
+   검증 못 했다 — 유닛테스트(아래)로 로직만 검증됨. **원장이 실제 화면에서
+   테스트 계정/반/학생을 하나 만들어 목록에 정상 표시되는지 + 신규
+   직원이면 바로 로그인되는지 한 번 확인 필요.**
 
 ### 이번 세션에서 한 일
 1. **`lib/supabaseRepo.ts`의 relation resolver를 notion_id/postgres id 겸용으로
@@ -81,21 +110,61 @@ backfill-pin-hash/retry-failures, 사직/금정 둘 다 0 mismatch·failed=0)과
 7. **검증 결과**: `npx tsc --noEmit` 통과, `npx vitest run` 13/13 통과,
    `npm run build` 통과.
 
-### ⬜ 배포 전 확인 — production 배포는 이 순서로
-1. 위 4번 SQL(`004_manual_steps_title.sql`)은 **이번 배포와 무관**(manual_steps
-   쓰기 경로는 아직 아무도 안 씀 — NOTION_DB_MANUAL 계열 env가 여전히
-   미설정). 배포를 막을 필요는 없지만, PART 1의 "매뉴얼 DB 설정" 버튼을
-   누르기 **전에는** 반드시 먼저 적용해야 한다(안 하면 매뉴얼 스텝 생성이
-   500 에러).
-2. 나머지 변경(relation resolver, 학생/직원/반 생성)은 기존 데이터를 전혀
-   건드리지 않고(읽기 쿼리에 OR 조건 하나 추가, 쓰기 경로는 신규 생성
-   함수만 분기 추가) 순수 추가적이라 스키마 마이그레이션 필요 없음 —
-   바로 배포 가능.
-3. 배포 후 스모크테스트로 반드시 확인할 것: (a) 기존 학생/직원/반 조회·수정이
-   여전히 정상(= notion_id 있는 행 경로가 안 깨졌는지), (b) 신규 직원 등록
-   1건 → 즉시 목록에 정상 표시되는지(= id가 null로 안 뜨는지) → 그 직원으로
-   로그인까지 되는지(pin_hash 즉시 반영 확인), (c) 신규 반 생성 1건 → 목록
-   표시 확인, (d) 사직/금정 각각 자기 지점 데이터만 보이는지(branch isolation).
+### ⬜ 미완료 — 다음 세션(또는 원장)이 할 것
+1. **`supabase/schema/004_manual_steps_title.sql` 미적용 — 원장이 Supabase에서
+   직접 실행 필요.** `alter table manual_steps add column if not exists title text;`
+   한 줄짜리 안전한 마이그레이션(NOT NULL 안 검). PART 1의 "매뉴얼 DB 설정"
+   버튼을 누르기 **전에** 반드시 먼저 적용할 것 — 안 하면 매뉴얼 스텝 생성이
+   500 에러로 실패한다(원인은 이번 세션에서 코드 근거로 확정, PART 6 위쪽
+   "이번 세션에서 한 일" 4번 참고).
+2. 위 "배포 결과" 3번의 "직접 확인 못 한 것" — 신규 학생/직원/반 생성 실제
+   테스트 (원장이 브라우저에서 1건씩).
+3. Notion READ가 아직 남은 영역(아래 목록) → Postgres read-side 설계/구현.
+4. Notion WRITE가 아직 남은 영역(아래 목록) → 3번이 끝나야 순서대로 전환 가능한
+   것들이 대부분(예: createTasks는 "전체 미완료 업무" 조회가 Postgres로
+   먼저 옮겨져야 함).
+
+### 아직 Notion에 남아 있는 READ (전체 목록, 이번 세션 기준)
+- 시험대비(EXAM_PREP), 학교시험범위(SCHOOL_EXAM_RANGE) — 전체
+- 클리닉 기록 조회(`getClinicRecordsByDate`/`getRecentClinicRecords`/
+  `getAssistantClinicRecordsByDate`), 학생 일일기록 상세(`getStudentDailyRecords`),
+  반별 진도 gap 조회(`findClassRecordGaps`)
+- 매뉴얼 스텝(`listManualSteps`/`listPublishedStepsByPath`) — `listManuals`
+  (목록)만 Postgres로 이미 전환돼 있음
+- ADMIN_INBOX/COUNSELING 개별 조회(`getUrgentCounselingRequests` 등)
+- `createTasks` 내부의 "전체 미완료 업무" 조회(`existingOpen`)
+- 자료제작(MATERIAL)/Slack 기록 조회는 이번 세션에서 직접 재확인 못 함 —
+  다음 세션에서 실제 코드 확인 필요(추측 금지, PART 6 작성자 메모)
+
+### 아직 Notion에 남아 있는 WRITE (전체 목록, 이번 세션 기준)
+- `createTasks`/업무 자동배정(routeTask) — fanout + 위 READ의 `existingOpen`
+  Notion-only 조회에 의존
+- `createClassProgress`/`updateClassProgress`/`saveClassRecordScores`/
+  `checkInAttendance` — 다중 엔티티 fanout(반 하나당 학생 N명 daily_record 생성)
+- `pushSchoolUnitsToStudents`/`saveExamPrepSheet`/`upsertSchoolExamRange`/
+  `broadcastTextSourceSteps` — 읽기 자체가 전부 Notion뿐이라 WRITE만 옮겨도
+  반쪽짜리 전환
+- `createFileUploadDraft`/`createMaterialTask` — Notion 파일저장소
+  (`fileUploads.create`) 의존, Supabase Storage로 옮기는 별도 설계 필요
+- `createManualDraft`/`createManualSteps`/`updateManualStep`/`deleteManualStep`
+  — 스키마 문제는 이번에 해결책(SQL) 마련했지만 아직 미적용 상태라 여전히
+  위험, 함수 자체를 postgres-primary로 바꾸는 건 이번 범위 밖
+- PIN 로그인은 postgres-primary로 전환 완료(PART 5) — 다만 `pin_hash`가
+  없는(백필 전) 극소수 계정을 위한 Notion **폴백**은 아직 남아 있음(설계상
+  의도된 안전장치, "미완료"가 아님)
+
+### 다음 작업(Phase 2) — 자연어 업무 입력 속도 계측/최적화
+PART 3에 이미 코드 경로 추적 + 임시 `[nl-timing]` 계측이 배포돼 있다(제거
+안 됨, 아직 유효). 다음 세션은 여기서 이어간다:
+1. 실제 요청 1건을 넣고 `vercel logs`로 `[nl-timing]` 로그를 모아 stage별
+   delta를 계산 — 지금까지 실측이 한 번도 없었다(PART 3 상태 그대로).
+2. 병목을 LLM/Notion/Postgres/sequential API/중복 조회/dual-write/Slack 중
+   어디인지 실측 근거로 구분(추측 금지).
+3. PART 6에서 Notion 호출이 꽤 줄었으므로(getNlRoster의 students 조회 경로 등)
+   이전 실측이 없어 "개선 폭" 비교는 못 하지만, 지금 시점 절대값 자체를
+   먼저 재는 것부터 시작.
+4. 개선 적용 후 다시 계측해서 before/after 기록, 임시 계측 코드는 그 다음에
+   정리.
 
 ### 신규/변경 파일
 `lib/supabaseRepo.ts`(dual-id resolver), `lib/supabasePgRead.ts`(`displayId()` +
