@@ -50,6 +50,7 @@ import {
   type NewTaskInput,
 } from "./tasks";
 import { routeTask, type StaffCandidate, type ClassInfo } from "./task-routing";
+import { hashPin, verifyPin } from "./pinAuth";
 import {
   dualWriteEntity,
   dualDeleteEntity,
@@ -301,9 +302,37 @@ export async function updateStaffSchedule(staffId: string, workHours: WorkHours)
 }
 
 export async function findStaffByNameAndPin(name: string, pin: string) {
+  if (branchCode()) {
+    try {
+      const row = await pgFindByExactColumn("STAFF", "name", name);
+      if (row && !row.resigned && row.pin_hash) {
+        const ok = await verifyPin(pin, row.pin_hash as string);
+        if (!ok) return null;
+        return {
+          id: row.notion_id as string,
+          name: row.name as string,
+          role: row.role as string,
+          mustChangePin: !!row.must_change_password,
+        };
+      }
+    } catch (err) {
+      console.error("findStaffByNameAndPin: postgres lookup failed, falling back to Notion", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // pin_hash가 아직 backfill 안 된 계정(또는 postgres 조회 실패) — 기존
+  // Notion 평문 경로로 확인한다. 여기서 검증에 성공했다는 건 방금 입력한
+  // pin이 정답이라는 뜻이므로, 이 값을 그대로(추측 아님) 해시해 Postgres에
+  // 즉시 채워 넣는다 — 다음 로그인부터는 이 계정도 Postgres만으로 확인된다.
   const all = await getCachedStaffList();
   const staff = all.find((s) => s.name === name);
   if (!staff || staff.pin !== pin || staff.resigned) return null;
+  if (branchCode()) {
+    fireAndForget("pin-hash:lazy-backfill", async () => {
+      const hash = await hashPin(pin);
+      await pgPatchByNotionId("STAFF", staff.id, { pin_hash: hash });
+    });
+  }
   return {
     id: staff.id,
     name: staff.name,
@@ -345,6 +374,14 @@ export async function updateStaffPin(staffId: string, newPin: string) {
   // dual-write에서도 PIN은 STAFF T() 매핑에 없으니(payload에도 STAFF는 PIN 제외)
   // 안전하다 — 그대로 재사용.
   await dualWriteEntity("STAFF", updated);
+  // pin_hash는 T() 매핑 밖이라 위 dualWriteEntity가 건드리지 않는다 — 여기서
+  // 직접 채워야 Postgres 로그인 경로가 이번에 바뀐 새 PIN을 즉시 알 수 있다.
+  if (branchCode()) {
+    fireAndForget("pin-hash:update", async () => {
+      const hash = await hashPin(newPin);
+      await pgPatchByNotionId("STAFF", staffId, { pin_hash: hash });
+    });
+  }
 }
 
 // 강사/조교 계정 등록. 이름 중복(동명이인 오인/중복 로그인 계정 방지)을
@@ -367,6 +404,12 @@ export async function createStaff(name: string, role: "강사" | "조교" | "행
   });
   revalidateTag(STAFF_CACHE_TAG);
   await dualWriteEntity("STAFF", created);
+  if (branchCode()) {
+    fireAndForget("pin-hash:create", async () => {
+      const hash = await hashPin(pin);
+      await pgPatchByNotionId("STAFF", created.id, { pin_hash: hash });
+    });
+  }
   return created.id;
 }
 

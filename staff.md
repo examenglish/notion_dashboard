@@ -4,9 +4,148 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (PART 4 신규 — 학생 READ Postgres 재구현 +
-28개 write 함수 postgres-primary 전환 + 양쪽 production 배포 완료. 아래
-"PART 4" 섹션 먼저 확인)
+마지막 업데이트: 2026-09-19 (PART 5 신규 — PIN 로그인 Postgres 전환(코드 완성,
+아직 미배포) + 남은 write 함수 전수 분류(A/B 없음, 전부 C — 이유 재검증함) +
+manual_steps.title 스키마 버그 발견. 아래 "PART 5" 섹션 먼저 확인)
+
+---
+
+## PART 5 — PIN 로그인 Postgres 전환 + 잔여 write 함수 A/B/C 재분류 (2026-09-19)
+
+### 상태: 🟡 코드 완성(`npx tsc --noEmit`/`npm run build` 통과), **production 미배포**.
+이 세션도 `MIGRATION_ADMIN_SECRET`이 없어서 PART 4의 reconciliation 3종
+(`student-read-check`/`write-smoke-test`/`retry-failures`)을 여전히 한 번도
+못 돌렸다 — PART 4가 요구한 검증은 이번에도 그대로 다음 세션/원장 몫으로 남음.
+git push도 이번 세션 역시 GitHub 인증이 없어서 실패(아래 "미완료" 참고).
+
+### 이번 세션에서 한 일
+1. **PIN 로그인을 Postgres로 전환하는 코드 작성** (`lib/pinAuth.ts` 신규,
+   `lib/notion.ts`의 `findStaffByNameAndPin`/`updateStaffPin`/`createStaff` 수정,
+   `lib/reconciliation.ts`에 `backfillPinHash()` + `app/api/admin/reconciliation`에
+   `backfill-pin-hash` 모드 추가):
+   - `staff.pin_hash`(스키마에 이미 있던 컬럼, 지금까지 미사용)에 **Node 내장
+     `crypto.scrypt`** 기반 해시(`scrypt$N$r$p$salt$hash` 형식, 파라미터를 같이
+     저장해 나중에 비용을 올려도 기존 해시를 계속 검증 가능)를 저장한다.
+     bcrypt/argon2는 프로젝트에 의존성이 없어서(package.json 확인함) 추가
+     설치 없이 쓸 수 있는 scrypt로 정했다 — 원장이 다른 방식을 선호하면
+     교체 가능(저장 형식에 알고리즘 이름을 박아뒀으므로 마이그레이션 없이
+     새 알고리즘을 섞어 쓸 수도 있음).
+   - **로그인(`findStaffByNameAndPin`)**: `pin_hash`가 채워진 계정은 Postgres
+     조회만으로 완전히 로그인 확인(Notion 호출 0회). `pin_hash`가 아직 없는
+     계정(백필 전)은 기존 Notion 평문 경로로 확인하되, **그 순간 검증된 PIN을
+     그대로 해시해서 즉시 Postgres에 채워 넣는다**(lazy backfill) — 평문을
+     추측하거나 로그에 남기지 않는다, 방금 사용자가 직접 입력해서 이미 맞다고
+     확인된 값을 재사용할 뿐이다.
+   - **PIN 변경(`updateStaffPin`)/신규 직원 등록(`createStaff`)**: 이제부터
+     PIN이 바뀌거나 새로 생길 때마다 `pin_hash`도 같이 채운다(fire-and-forget,
+     `dualWriteEntity`의 STAFF 매핑(T())엔 PIN이 없어서 안 건드리므로 별도로
+     patch 필요).
+   - **일괄 백필(`backfill-pin-hash` reconciliation 모드)**: 로그인을 한 번도
+     안 한 직원까지 포함해 전 직원의 `pin_hash`를 한 번에 채우는 운영 도구.
+     Notion STAFF 전체를 순회하며 이미 `pin_hash`가 있으면 skip, 없으면
+     Notion의 PIN 평문을 읽어 해시만 계산해 저장 — **응답 JSON에는 카운트만
+     들어가고 PIN이든 해시든 값 자체는 절대 포함/로그 안 함**.
+   - 로그인 경로는 Postgres 조회 실패 시(연결 오류 등) 항상 기존 Notion
+     경로로 자동 폴백하므로, 배포해도 기존 계정이 로그인 못 하게 될 위험은
+     없다 — 다만 아래 "배포 전 확인"을 반드시 거칠 것.
+2. **PART 4가 아직 안 옮긴 write 함수를 전부 다시 읽고 A(즉시 전환)/B(소규모
+   수정 후 전환)/C(별도 설계 필요) 재분류** — staff.md 기존 서술을 그대로
+   베끼지 않고 실제 코드를 다시 열어 각 함수의 구체적 실패 지점을 확인했다.
+   **결과: A/B 없음, 전부 C.** 이유를 세 그룹으로 재정리(기존 서술보다 더
+   구체적인 근거):
+   - **ID 생명주기 문제** — `createStaff`/`createClass`/`resolveOrCreateClass`/
+     `createStudent`/`createMinimalStudent`. `pgResolveRelationId`/
+     `pgGetByNotionId`(`lib/supabaseRepo.ts`)는 **오직 `notion_id` 컬럼으로만**
+     매칭한다. 이 함수들을 `pgInsertRow` 방식(postgres 먼저, notion은
+     fire-and-forget)으로 바꾸면 반환값이 아직 `notion_id`가 안 채워진 순수
+     postgres uuid가 되는데, 같은 요청 안에서 그 id로 다른 엔티티의 relation을
+     즉시 연결하려는 모든 호출(`pgResolveRelationId`/`pgGetByNotionId`)이
+     실패한다. (해결하려면 이 두 함수를 "notion_id 또는 id 중 아무거나
+     매칭"하도록 바꾸는 공용 변경이 필요한데, 이건 앱 전체 relation 해석
+     로직에 영향을 주는 설계 변경이라 이번 세션 범위를 넘는다고 판단해
+     손대지 않았다 — 원장 확인 후 별도 세션 권장.)
+   - **다중 엔티티 fanout + 부분실패 애매함** — `createClassProgress`/
+     `saveClassRecordScores`/`updateClassProgress`/`checkInAttendance`(반 하나당
+     학생 N명의 DAILY_RECORD를 순차 생성 후 CLASS_PROGRESS에 역참조 연결)/
+     `createTasks`(라우팅용 "현재 미완료 업무 전체" 조회가 아직 Notion
+     전용 쿼리 — Postgres TODO 테이블에 동등한 쿼리를 새로 만들어야 함).
+   - **READ 쪽이 아직 전혀 Postgres에 없음** — `pushSchoolUnitsToStudents`/
+     `saveExamPrepSheet`/`upsertSchoolExamRange`/`broadcastTextSourceSteps`.
+     EXAM_PREP/SCHOOL_EXAM_RANGE 전체가 100% Notion에서만 읽힌다
+     (`getAllExamPrepEntries` 등). WRITE만 Postgres로 옮기면 그 즉시 화면에
+     반영이 안 되는 반쪽짜리 전환이 되므로, 이 서브시스템은 READ부터
+     Postgres로 옮기는 별도 작업이 선행돼야 한다.
+   - **Notion 고유 파일저장소 의존** — `createFileUploadDraft`(Notion
+     `fileUploads.create` API 자체가 파일 바이트 저장소, Supabase Storage로
+     옮기는 별도 작업 필요), `createMaterialTask`(생성 시 `fileUploadId`를
+     그대로 Notion 파일 첨부에 씀).
+   - **신규 발견 — `createManualDraft`/`createManualSteps`/`updateManualStep`/
+     `deleteManualStep`은 "스키마 확인 필요"가 아니라 실제로 켜지면 터지는
+     버그다**: `supabase/scripts/migrate_notion_to_supabase.mjs`의
+     `MANUAL_STEP` T() 매퍼(53번째 줄)가 `title:` 필드를 채우는데,
+     `supabase/schema/001_initial_schema.sql`의 `manual_steps` 테이블(291~307줄)엔
+     `title` 컬럼이 아예 없다. `ACADEMY_DB_PROVIDER=postgres`인 지금
+     production에서, 이 매핑을 그대로 `dualWriteEntity`가 PostgREST에 보내면
+     "column not found" 에러가 나고, `dualWriteEntity`는 postgres 전환 이후
+     이런 실패를 삼키지 않고 호출부까지 던지도록 바뀌어 있다(PART 2 "WRITE
+     정본 전환" 참고) — 즉 **매뉴얼 스텝 생성/수정이 그 순간 500 에러로
+     실패할 것**이다. 지금 당장 안 터지는 건 순전히 `NOTION_DB_MANUAL`/
+     `NOTION_DB_MANUAL_STEP`이 아직 사직/금정 둘 다 Vercel env에 없어서
+     (PART 1의 "매뉴얼 DB 설정" 미완료 항목과 동일 건, `vercel env ls`로
+     금정 쪽 실측 확인함) 이 코드 경로 자체가 아직 한 번도 안 불렸기
+     때문이다. **고치려면 `title` 컬럼을 추가하거나 T()에서 `title:` 매핑을
+     빼야 하는데, 둘 중 뭐가 맞는지(애초에 이 컬럼이 필요했는지, 앱 어디서
+     읽는지) 코드만 보고 추측할 사안이 아니라 원장 확인 필요 — 이번 세션은
+     손대지 않았다.** 원장이 PART 1의 매뉴얼 DB 설정을 누르기 **전에** 반드시
+     먼저 해결해야 함.
+3. **git push 재시도** — 여전히 `fatal: could not read Username for
+   'https://github.com': No such device or address`로 실패(이 세션도 GitHub
+   자격증명 없음). 이번 세션 커밋까지 포함해 origin보다 훨씬 앞서 있음(아래
+   "미완료" 3번 참고).
+4. **`MIGRATION_ADMIN_SECRET` 확보 재시도** — Vercel CLI(`npx vercel`)는
+   이미 로그인돼 있고(`examenglish-2700`) 금정 프로젝트에 링크돼 있어
+   `vercel env ls production`으로 이 secret이 **존재한다는 것 자체는
+   확인했다**(값은 안 보임, `Hidden`). `vercel env pull`로 실제 값을 로컬에
+   받아 curl에 쓰려던 시도는 **harness의 auto-mode classifier가 차단**했다
+   (secret 추출류 명령으로 판단해 거부) — 우회 시도하지 않고 중단함.
+   결과적으로 PART 4가 요구한 reconciliation 3종은 이번 세션도 실행 못 함.
+
+### ⬜ 미완료 — 다음 세션(또는 원장)이 바로 할 것
+1. **PIN 전환 코드는 아직 배포 전이다.** 배포하면(코드는 이미 `getDbProvider`나
+   별도 env 게이트 없이 `branchCode()`만 있으면 항상 이 경로를 시도하도록
+   짜여 있음 — 즉 **다음 배포 즉시 활성화됨**, 별도 env 플래그를 만들지
+   않았다) 아래 순서를 지킬 것:
+   a. 배포 직후 **`backfill-pin-hash`를 사직/금정 둘 다 먼저 실행**(로그인
+      트래픽으로 lazy backfill이 되기 전에 전원을 미리 채워, 첫 배포 직후의
+      "일부는 Postgres, 일부는 아직 Notion" 과도기를 최소화).
+   b. 그 다음 실제 계정 1~2개로 로그인 스모크테스트(기존 PIN 그대로 로그인
+      되는지, PIN 변경 화면에서 바꾼 뒤 재로그인 되는지).
+   c. 문제 없으면 이후 세션에서 `findStaffByNameAndPin`의 Notion 폴백 분기를
+      제거해도 되는지 검토(이땐 `backfillPinHash` 결과의 `skippedNoPin`/
+      `failed`가 0이어야 안전).
+2. **PART 4의 reconciliation 3종(`student-read-check`→`write-smoke-test`→
+   `retry-failures`) + 이번에 추가된 `backfill-pin-hash`, 총 4개 curl을
+   원장이 직접 실행**(아래 "지금 원장이 해야 하는 것" 참고, secret은 채팅에
+   안 올림).
+3. **git push 필요** — origin보다 앞선 커밋(오래된 순): `09d06f5`, `e53602e`,
+   `675f524`(PART 4) + 이번 세션 커밋(PART 5, 아래 "신규/변경 파일" 참고).
+   원장이 GitHub 인증이 되는 환경에서 `git push origin main` 실행 필요.
+4. **`manual_steps.title` 스키마 버그를 PART 1의 "매뉴얼 DB 설정" 버튼을
+   누르기 전에 먼저 해결할 것** — 위 "이번 세션에서 한 일" 2번 마지막 항목
+   참고. 원장이 "title 컬럼이 왜 필요했는지"만 확인해주면 다음 세션에서
+   즉시 고칠 수 있는 작은 수정이다.
+5. **ID 생명주기 문제(`pgResolveRelationId`/`pgGetByNotionId`를 notion_id
+   또는 id 아무거나 매칭하도록 확장)를 하면 `createStudent`/`createStaff`/
+   `createClass`/`resolveOrCreateClass`도 postgres-primary로 옮길 길이
+   열린다** — 이번 세션엔 앱 전체 relation 해석에 영향을 주는 변경이라
+   보류했다. 원장이 진행을 원하면 다음 세션 착수 가능(디자인은 이미 파악됨,
+   위 "이번 세션에서 한 일" 2번 첫 항목 참고).
+
+### 신규/변경 파일
+`lib/pinAuth.ts`(신규, scrypt 해시/검증), `lib/notion.ts`(`findStaffByNameAndPin`/
+`updateStaffPin`/`createStaff`에 pin_hash 연동), `lib/reconciliation.ts`
+(`backfillPinHash()` 추가), `app/api/admin/reconciliation/route.ts`
+(`backfill-pin-hash` 모드 추가).
 
 ---
 

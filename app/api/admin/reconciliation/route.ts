@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runReconciliation, retryDualWriteFailures, shadowReadCompare, planOrProvisionGeumjeongDatabases, writeSmokeTest, studentReadCompare } from "@/lib/reconciliation";
+import { runReconciliation, retryDualWriteFailures, shadowReadCompare, planOrProvisionGeumjeongDatabases, writeSmokeTest, studentReadCompare, backfillPinHash } from "@/lib/reconciliation";
 import { notion } from "@/lib/notion";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +32,7 @@ export async function POST(req: NextRequest) {
     "provision-geumjeong-dbs",
     "write-smoke-test",
     "student-read-check",
+    "backfill-pin-hash",
   ].includes(body?.mode)
     ? body.mode
     : "report";
@@ -51,6 +52,10 @@ export async function POST(req: NextRequest) {
     }
     if (mode === "student-read-check") {
       const result = await studentReadCompare();
+      return NextResponse.json({ ok: true, mode, ...result });
+    }
+    if (mode === "backfill-pin-hash") {
+      const result = await backfillPinHash();
       return NextResponse.json({ ok: true, mode, ...result });
     }
     if (mode === "provision-geumjeong-dbs") {

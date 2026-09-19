@@ -1,9 +1,10 @@
 // Notion(정본) <-> Supabase(미러) 실시간 대조 도구. dual-write(lib/supabaseRepo.ts)가
 // 계속 정상 동작하는지 운영 중에 주기적으로 확인하고, 실패 큐(dual_write_failures)를
 // 재처리하는 영구 운영 도구다 — 마이그레이션 1회성 러너와 달리 계속 남아있는다.
-import { notion, DB, listClasses, listStaff, listPoolTasks, listManuals, searchStudents } from "./notion";
+import { notion, DB, listClasses, listStaff, listPoolTasks, listManuals, searchStudents, getRichText } from "./notion";
 import { SOURCES, OPTIONAL_SOURCES, TABLE, makeT, payload, rel } from "@/supabase/scripts/migrate_notion_to_supabase.mjs";
-import { dualWriteEntity, branchCode } from "./supabaseRepo";
+import { dualWriteEntity, branchCode, pgGetByNotionId, pgPatchByNotionId } from "./supabaseRepo";
+import { hashPin } from "./pinAuth";
 
 // listClasses/listStaff/listPoolTasks/listManuals는 내부적으로
 // getDbProvider()(ACADEMY_DB_PROVIDER env)를 보고 Notion/Postgres 중 하나를
@@ -463,6 +464,59 @@ export async function writeSmokeTest() {
     crossBranchLeak,
     cleanedUp: true,
   };
+}
+
+/**
+ * PIN 로그인을 Notion 없이 Postgres만으로 확인할 수 있게 하는 1회성 배치
+ * 백필 — 로그인을 아직 한 번도 안 한 직원(lazy backfill이 안 걸린 계정)도
+ * 전부 채운다. Notion STAFF의 PIN(평문) 값 자체는 절대 응답/로그에 담지
+ * 않는다 — 여기서 계산한 hash만 Postgres에 저장하고, 카운트만 반환한다.
+ */
+export async function backfillPinHash(): Promise<{
+  total: number;
+  alreadyHashed: number;
+  backfilled: number;
+  skippedNoPin: number;
+  skippedNotMigrated: number;
+  failed: number;
+}> {
+  let total = 0,
+    alreadyHashed = 0,
+    backfilled = 0,
+    skippedNoPin = 0,
+    skippedNotMigrated = 0,
+    failed = 0;
+  let cursor: string | undefined;
+  do {
+    const res: any = await notion.dataSources.query({ data_source_id: DB.STAFF, page_size: 100, start_cursor: cursor });
+    for (const p of res.results as any[]) {
+      total++;
+      try {
+        const existing = await pgGetByNotionId("STAFF", p.id);
+        if (!existing) {
+          skippedNotMigrated++;
+          continue;
+        }
+        if (existing.pin_hash) {
+          alreadyHashed++;
+          continue;
+        }
+        const pin = getRichText(p, "PIN");
+        if (!pin) {
+          skippedNoPin++;
+          continue;
+        }
+        const hash = await hashPin(pin);
+        await pgPatchByNotionId("STAFF", p.id, { pin_hash: hash });
+        backfilled++;
+      } catch (err) {
+        failed++;
+        console.error("backfillPinHash: failed for one staff row (id omitted)", err instanceof Error ? err.message : String(err));
+      }
+    }
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+  return { total, alreadyHashed, backfilled, skippedNoPin, skippedNotMigrated, failed };
 }
 
 export async function retryDualWriteFailures(limit = 50): Promise<{ retried: number; resolved: number; stillFailing: number }> {
