@@ -34,6 +34,17 @@ export function getDbProvider(): "notion" | "postgres" {
   return process.env.ACADEMY_DB_PROVIDER === "postgres" ? "postgres" : "notion";
 }
 
+/**
+ * 학생 목록/상세만 별도로 게이팅한다 — 나머지 READ/WRITE는 이미 검증된
+ * ACADEMY_DB_PROVIDER를 그대로 따르지만, 학생 쪽은 Notion rollup(누적출석률
+ * 등)을 daily_records 집계로 재구현한 새 코드라 reconciliation으로 0건
+ * 불일치를 확인하기 전까지는 기존 ACADEMY_DB_PROVIDER=postgres 배포에서도
+ * 자동으로 켜지면 안 된다. 검증 후 이 값만 별도로 "postgres"로 올린다.
+ */
+export function getStudentReadProvider(): "notion" | "postgres" {
+  return process.env.ACADEMY_STUDENT_READ_PROVIDER === "postgres" ? "postgres" : "notion";
+}
+
 function authHeaders(key: string) {
   return { apikey: key, Authorization: `Bearer ${key}` };
 }
@@ -203,4 +214,168 @@ export async function dualDeleteEntity(entityKey: EntityKey, notionId: string): 
   } catch (err) {
     await recordFailure(`${entityKey}:delete`, notionId, err);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Postgres-primary write path (WRITE 정본 전환, PART 2 STEP 2).
+//
+// 위 dualWriteEntity/dualDeleteEntity는 "Notion을 먼저 쓰고 그 결과 페이지를
+// Postgres에 미러링"하는 기존 경로용이다. 아래 primitive들은 반대 방향 —
+// "Postgres를 먼저(그리고 유일하게 성공/실패를 가르는 기준으로) 쓰고, Notion은
+// 그 이후에 best-effort로 미러링"하는 새 경로용이다. 이 경로를 쓰는 호출부는
+// Notion이 완전히 죽어있어도(토큰 만료/장애) 정상 응답한다.
+//
+// 사용 패턴(각 write 함수에서):
+//   if (getDbProvider() === "postgres") {
+//     await pgPatchByNotionId("COUNSELING", id, { counselor, record_date, ... }); // 실패하면 throw — 이게 성공기준
+//     fireAndForget("notion:updateCounselingEntry", () => notion.pages.update({...})); // 실패해도 응답에 영향 없음
+//     return;
+//   }
+//   // 기존 Notion-first 경로 그대로 (provider가 아직 postgres가 아닌 배포 대비)
+// ---------------------------------------------------------------------------
+
+/** 실패해도 호출부를 막지 않는 백그라운드 작업. 실패는 로그로만 남긴다(Notion이 정본이 아니게 된 이후엔 재시도 큐가 없어도 된다 — 참고용 미러이기 때문). */
+export function fireAndForget(label: string, fn: () => Promise<unknown>): void {
+  fn().catch((err) => {
+    console.error("postgres-primary: background Notion mirror failed", {
+      label,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
+
+async function requireEnvAndBranch(): Promise<{ env: { url: string; key: string }; branchId: string }> {
+  const env = supabaseEnv();
+  const branchId = await resolveBranchId();
+  if (!env || !branchId) throw new Error("Postgres write requested but Supabase/branch is not configured.");
+  return { env, branchId };
+}
+
+/** notion_id로 특정 행의 컬럼을 직접 갱신한다. 정본 경로이므로 실패 시 throw한다. */
+export async function pgPatchByNotionId(entityKey: EntityKey, notionId: string, patch: Record<string, unknown>): Promise<void> {
+  const { env, branchId } = await requireEnvAndBranch();
+  const r = await fetch(
+    `${env.url}/rest/v1/${TABLE[entityKey]}?notion_id=eq.${encodeURIComponent(notionId)}&branch_id=eq.${branchId}`,
+    { method: "PATCH", headers: { ...authHeaders(env.key), "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(patch) }
+  );
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    throw new Error(`Postgres patch ${entityKey} failed (${r.status}): ${body.slice(0, 300)}`);
+  }
+}
+
+/** id(uuid)로 특정 행의 컬럼을 직접 갱신한다(아직 notion_id가 없는, Postgres에서 생성된 신규 행용). */
+export async function pgPatchById(entityKey: EntityKey, id: string, patch: Record<string, unknown>): Promise<void> {
+  const { env, branchId } = await requireEnvAndBranch();
+  const r = await fetch(
+    `${env.url}/rest/v1/${TABLE[entityKey]}?id=eq.${encodeURIComponent(id)}&branch_id=eq.${branchId}`,
+    { method: "PATCH", headers: { ...authHeaders(env.key), "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(patch) }
+  );
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    throw new Error(`Postgres patch ${entityKey} failed (${r.status}): ${body.slice(0, 300)}`);
+  }
+}
+
+/**
+ * 새 행을 Postgres에 직접 만든다(Notion 없이). notion_id는 비워두고 반환된
+ * id(uuid)를 호출부가 즉시 "id"로 쓸 수 있다 — 이후 Notion 미러가 성공하면
+ * pgSetNotionId로 notion_id를 채워 넣는다(선택, 실패해도 기능엔 지장 없음).
+ */
+export async function pgInsertRow(entityKey: EntityKey, row: Record<string, unknown>): Promise<{ id: string; notion_id: string | null }> {
+  const { env, branchId } = await requireEnvAndBranch();
+  const r = await fetch(`${env.url}/rest/v1/${TABLE[entityKey]}`, {
+    method: "POST",
+    headers: { ...authHeaders(env.key), "Content-Type": "application/json", Prefer: "return=representation" },
+    body: JSON.stringify([{ branch_id: branchId, notion_id: null, ...row }]),
+  });
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    throw new Error(`Postgres insert ${entityKey} failed (${r.status}): ${body.slice(0, 300)}`);
+  }
+  const rows = (await r.json()) as { id: string; notion_id: string | null }[];
+  return rows[0];
+}
+
+/** Notion 미러 생성이 나중에 성공했을 때만 호출하는 best-effort 보강 — 실패해도 throw하지 않는다. */
+export async function pgSetNotionId(entityKey: EntityKey, pgId: string, notionId: string): Promise<void> {
+  try {
+    await pgPatchById(entityKey, pgId, { notion_id: notionId });
+  } catch (err) {
+    console.error("postgres-primary: failed to backfill notion_id", { entityKey, pgId, message: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/** notion_id 하나를 다른 엔티티 테이블의 실제 Postgres id(uuid)로 변환한다. 못 찾으면 null. */
+export async function pgResolveRelationId(targetEntity: EntityKey, notionId: string | null | undefined): Promise<string | null> {
+  if (!notionId) return null;
+  const { env, branchId } = await requireEnvAndBranch();
+  const map = await resolveRelationIds(TABLE[targetEntity], [notionId], branchId, env.key, env.url);
+  return map.get(notionId) ?? null;
+}
+
+/** notion_id로 행 하나를 통째로 읽는다(notion.pages.retrieve 대체용). 없으면 null. */
+export async function pgGetByNotionId(entityKey: EntityKey, notionId: string): Promise<Record<string, unknown> | null> {
+  const { env, branchId } = await requireEnvAndBranch();
+  const r = await fetch(
+    `${env.url}/rest/v1/${TABLE[entityKey]}?notion_id=eq.${encodeURIComponent(notionId)}&branch_id=eq.${branchId}&select=*`,
+    { headers: authHeaders(env.key) }
+  );
+  if (!r.ok) throw new Error(`Postgres read ${entityKey} failed (${r.status})`);
+  const rows = (await r.json()) as Record<string, unknown>[];
+  return rows[0] ?? null;
+}
+
+/** 여러 컬럼을 정확히 일치(eq)로 조합해 찾는다 — Notion filter.and 조합 조회를 대체한다. */
+export async function pgQuery(entityKey: EntityKey, filters: Record<string, string>): Promise<Record<string, unknown>[]> {
+  const { env, branchId } = await requireEnvAndBranch();
+  const qs = Object.entries(filters)
+    .map(([k, v]) => `${k}=eq.${encodeURIComponent(v)}`)
+    .join("&");
+  const r = await fetch(`${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${qs}&select=*`, {
+    headers: authHeaders(env.key),
+  });
+  if (!r.ok) throw new Error(`Postgres read ${entityKey} failed (${r.status})`);
+  return (await r.json()) as Record<string, unknown>[];
+}
+
+/** eq 외의 PostgREST 연산자(cs 배열포함 등)가 필요할 때 — filterExpr은 호출부가 이미 인코딩까지 끝낸 쿼리스트링 조각이어야 한다. */
+export async function pgQueryRaw(entityKey: EntityKey, filterExpr: string): Promise<Record<string, unknown>[]> {
+  const { env, branchId } = await requireEnvAndBranch();
+  const r = await fetch(`${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${filterExpr}&select=*`, {
+    headers: authHeaders(env.key),
+  });
+  if (!r.ok) throw new Error(`Postgres read ${entityKey} failed (${r.status})`);
+  return (await r.json()) as Record<string, unknown>[];
+}
+
+/** 컬럼 하나를 정확히 일치(대소문자 구분)로 찾는다 — 동명이인 dedup 체크용(findStudentByName 등). */
+export async function pgFindByExactColumn(entityKey: EntityKey, column: string, value: string): Promise<Record<string, unknown> | null> {
+  const { env, branchId } = await requireEnvAndBranch();
+  const r = await fetch(
+    `${env.url}/rest/v1/${TABLE[entityKey]}?${column}=eq.${encodeURIComponent(value)}&branch_id=eq.${branchId}&select=*&limit=1`,
+    { headers: authHeaders(env.key) }
+  );
+  if (!r.ok) throw new Error(`Postgres read ${entityKey} failed (${r.status})`);
+  const rows = (await r.json()) as Record<string, unknown>[];
+  return rows[0] ?? null;
+}
+
+/**
+ * "삭제"를 archive로 표현하는 기존 관행(payload().archived, notArchived() 필터,
+ * supabasePgRead.ts 참고)과 동일하게, source_payload.archived=true를 병합한다.
+ * 행을 실제로 지우지 않는 이유는 기존 Notion-first 경로가 이미 그렇게
+ * 동작해왔고(archived page도 dualWriteEntity가 upsert), READ 쪽 필터가 이미
+ * 그 규약을 전제하기 때문 — 규약을 이원화하지 않는다.
+ */
+export async function pgArchiveByNotionId(entityKey: EntityKey, notionId: string): Promise<void> {
+  const { env, branchId } = await requireEnvAndBranch();
+  const getRes = await fetch(
+    `${env.url}/rest/v1/${TABLE[entityKey]}?notion_id=eq.${encodeURIComponent(notionId)}&branch_id=eq.${branchId}&select=source_payload`,
+    { headers: authHeaders(env.key) }
+  );
+  if (!getRes.ok) throw new Error(`Postgres read ${entityKey} failed (${getRes.status})`);
+  const rows = (await getRes.json()) as { source_payload: Record<string, unknown> | null }[];
+  const merged = { ...(rows[0]?.source_payload ?? {}), archived: true };
+  await pgPatchByNotionId(entityKey, notionId, { source_payload: merged });
 }

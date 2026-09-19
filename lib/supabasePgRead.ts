@@ -5,13 +5,18 @@
 // 호출하므로, READ만 먼저 전환된 과도기에도 "목록에서 고른 항목을 수정"이
 // 그대로 동작해야 하기 때문이다.
 //
-// 주의: Notion의 rollup 속성(학생 누적출석률/숙제제출률/단어테스트통과율
-// 등)은 Supabase에 미러링되지 않는다(Notion 서버가 relation을 따라 실시간
-// 집계하는 값이라 우리 T() 매핑 대상이 아님) — 그래서 학생 목록/상세처럼
-// 그 값을 쓰는 화면은 이 파일에 아직 옮기지 않았다. 여기 있는 함수들은
-// 전부 그 문제와 무관한(순수 저장 필드만 쓰는) 목록들이다.
+// 학생 누적출석률/숙제제출률/단어테스트통과율은 원래 Notion rollup이었다
+// (Notion 서버가 relation을 따라 실시간 집계하는 값이라 Supabase에 그대로
+// 미러링되지 않음). 아래 pgSearchStudents/pgGetStudent는 그 rollup을 그대로
+// 베끼는 대신, daily_records를 직접 집계해 재구현한다 — 집계 규칙은 이미
+// lib/notion.ts의 getStudentPeriodReport/getMonthlyStudentMetrics가 같은
+// 화면 계열(누적 지표)에 쓰고 있던 것과 동일하게 맞춘다: 전체 일일기록
+// 중 "출결≠결석"이면 출석, "과제여부" 체크박스, "단어테스트결과=통과"
+// 비율 — 분모는 그 학생의 전체 일일기록 수(기간 제한 없음, "누적"이므로).
 import { branchCode } from "./supabaseRepo";
 import { taskTypeFromLabel } from "./tasks";
+import { todayKST } from "./date";
+import { stripClassSuffix } from "./format";
 
 function supabaseEnv(): { url: string; key: string } | null {
   const url = process.env.SUPABASE_URL?.replace(/\/$/, "");
@@ -159,6 +164,124 @@ export async function pgListPoolTasks(studentNames: Map<string, string>, staffNa
     .filter(notArchived)
     .filter((r) => !r.staff_notion_ids || r.staff_notion_ids.length === 0)
     .map((r) => mapPgTask(r, studentNames, staffNames));
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+// lib/notion.ts의 isWithinDays와 동일한 규칙(서버 로컬 타임존이 아니라
+// 항상 KST 달력일 기준 Y/M/D 비교) — 별도 export가 없어 여기서 그대로 재구현한다.
+function isWithinDays(dateStr: string | null, days: number): boolean {
+  if (!dateStr) return false;
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const [ty, tm, td] = todayKST().split("-").map(Number);
+  const diff = Date.UTC(ty, tm - 1, td) - Date.UTC(y, m - 1, d);
+  return diff >= 0 && diff <= days * DAY_MS;
+}
+
+type DailyAgg = { total: number; present: number; hwDone: number; vocabPass: number };
+
+async function studentDailyAggMap(): Promise<Map<string, DailyAgg>> {
+  const rows = await pgFetch("daily_records", "select=student_notion_ids,attendance,homework_done,vocab_result");
+  const map = new Map<string, DailyAgg>();
+  for (const r of rows) {
+    const sid = (r.student_notion_ids as string[] | null)?.[0];
+    if (!sid) continue;
+    const cur = map.get(sid) ?? { total: 0, present: 0, hwDone: 0, vocabPass: 0 };
+    cur.total += 1;
+    if (r.attendance !== "결석") cur.present += 1;
+    if (r.homework_done) cur.hwDone += 1;
+    if (r.vocab_result === "통과") cur.vocabPass += 1;
+    map.set(sid, cur);
+  }
+  return map;
+}
+
+type LatestExam = { date: string; score: number | null; subject: string | null; examName: string };
+
+async function studentLatestExamMap(): Promise<Map<string, LatestExam>> {
+  const rows = await pgFetch("exam_scores", "select=student_notion_ids,exam_date,score,subject,exam_name");
+  const map = new Map<string, LatestExam>();
+  for (const r of rows) {
+    const sid = (r.student_notion_ids as string[] | null)?.[0];
+    const date = r.exam_date as string | null;
+    if (!sid || !date) continue;
+    const existing = map.get(sid);
+    if (!existing || date > existing.date) {
+      map.set(sid, { date, score: (r.score as number | null) ?? null, subject: (r.subject as string | null) ?? null, examName: (r.exam_name as string) ?? "" });
+    }
+  }
+  return map;
+}
+
+async function classNamePgMap(): Promise<Map<string, string>> {
+  const rows = await pgFetch("classes", "select=notion_id,name,source_payload");
+  return new Map(
+    rows.filter(notArchived).map((r) => [r.notion_id as string, stripClassSuffix((r.name as string) ?? "")])
+  );
+}
+
+export type PgStudentRecord = ReturnType<typeof mapPgStudent>;
+
+function mapPgStudent(
+  r: Record<string, unknown>,
+  aggMap: Map<string, DailyAgg>,
+  examMap: Map<string, LatestExam>,
+  classNames: Map<string, string>
+) {
+  const notionId = r.notion_id as string;
+  const classIds = (r.class_notion_ids as string[]) ?? [];
+  const agg = aggMap.get(notionId);
+  const enrolledAt = (r.attendance_started_on as string | null) ?? null;
+  const levelLv = r.level_lv;
+  return {
+    id: notionId,
+    name: r.name as string,
+    school: (r.school as string) ?? "",
+    grade: (r.grade as string | null) ?? null,
+    status: (r.status as string | null) ?? null,
+    phone: (r.phone as string | null) ?? null,
+    parentPhone: (r.guardian_phone as string | null) ?? null,
+    classIds,
+    classNames: classIds.map((id) => classNames.get(id) ?? "알수없음"),
+    attendanceRate: agg && agg.total > 0 ? agg.present / agg.total : null,
+    homeworkRate: agg && agg.total > 0 ? agg.hwDone / agg.total : null,
+    vocabPassRate: agg && agg.total > 0 ? agg.vocabPass / agg.total : null,
+    registeredAt: (r.enrolled_on as string | null) ?? null,
+    enrolledAt,
+    isNew: isWithinDays(enrolledAt, 30),
+    tuitionDay: (r.fee_day as number | null) ?? null,
+    learningLevel: (r.learning_level as string) ?? "",
+    levelOverride: levelLv === null || levelLv === undefined || levelLv === "" ? null : Number(levelLv),
+    memo: (r.memo as string) ?? "",
+    action: (r.action as string) ?? "",
+    actionOwner: (r.action_assignee_text as string) ?? "",
+    actionAlarmDate: (r.action_alarm_on as string | null) ?? null,
+    latestExam: examMap.get(notionId) ?? null,
+  };
+}
+
+export async function pgSearchStudents(query: string, classId?: string, includeInactive = false) {
+  const [rows, aggMap, examMap, classNames] = await Promise.all([
+    pgFetch("students", "select=*"),
+    studentDailyAggMap(),
+    studentLatestExamMap(),
+    classNamePgMap(),
+  ]);
+  let mapped = rows.filter(notArchived).map((r) => mapPgStudent(r, aggMap, examMap, classNames));
+  if (query) mapped = mapped.filter((s) => s.name.includes(query));
+  if (!includeInactive) mapped = mapped.filter((s) => s.status !== "퇴원" && s.status !== "휴원");
+  if (classId) mapped = mapped.filter((s) => s.classIds.includes(classId));
+  return mapped;
+}
+
+export async function pgGetStudent(id: string): Promise<PgStudentRecord | null> {
+  const [rows, aggMap, examMap, classNames] = await Promise.all([
+    pgFetch("students", `notion_id=eq.${encodeURIComponent(id)}&select=*`),
+    studentDailyAggMap(),
+    studentLatestExamMap(),
+    classNamePgMap(),
+  ]);
+  const row = rows[0];
+  return row ? mapPgStudent(row, aggMap, examMap, classNames) : null;
 }
 
 export async function pgListManuals(opts: { status?: string } = {}) {
