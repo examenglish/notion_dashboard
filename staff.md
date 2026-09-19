@@ -4,8 +4,119 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-18 야간 (PART 2: WRITE 정본 Postgres 전환 완료. PART 3 신규 —
-자연어 입력 속도 조사 시작, 실측 대기 중)
+마지막 업데이트: 2026-09-19 (PART 4 신규 — 학생 READ Postgres 재구현 +
+28개 write 함수 postgres-primary 전환 + 양쪽 production 배포 완료. 아래
+"PART 4" 섹션 먼저 확인)
+
+---
+
+## PART 4 — 학생 READ Postgres 전환 + WRITE 공통 postgres-primary 경로 (2026-09-19)
+
+### 상태: 🟡 코드 완성 + 배포 완료. **production 검증(reconciliation/write-smoke-test)은
+MIGRATION_ADMIN_SECRET이 이 세션에 없어서 미실행** — 다음 세션 또는 원장이 직접 해야 함.
+
+### 이번 세션에서 한 일
+1. **`lib/supabaseRepo.ts`에 postgres-primary write primitive 추가**: `pgPatchByNotionId`/
+   `pgPatchById`/`pgInsertRow`/`pgSetNotionId`/`pgResolveRelationId`/`pgGetByNotionId`/
+   `pgFindByExactColumn`/`pgQuery`/`pgQueryRaw`/`pgArchiveByNotionId`/`fireAndForget`.
+   기존 `dualWriteEntity`(Notion 먼저 → Postgres 미러)와 반대 방향 — Postgres를 먼저(그리고
+   유일한 성공기준으로) 쓰고 Notion은 그 이후 best-effort 백그라운드 미러.
+2. **28개 write 함수를 이 경로로 전환**(`getDbProvider()==='postgres'`일 때만, 아니면 기존
+   Notion-first 경로 그대로): 상담일지/행정실 입력 생성·수정·삭제, 클리닉 기록 생성·수정·삭제,
+   보강/재시/개인할일 등 TODO 일정 생성·수정·완료·삭제, 조치사항 알람 삭제, 결석→지각 정정,
+   시험점수 등록, 직원 근무시간표/퇴사처리, 반 정보수정·삭제·조교배정, 학생정보수정(간단/전체),
+   자료제작 수정, 매뉴얼 수정, 업무 완료·원장확인·가져가기(claimTask). `findStudentByName`/
+   `findStaffIdByName`/`findMakeupRequestForAbsence`도 Notion 쿼리 대신 Postgres 조회로 바꿔서
+   (동명이인 dedup, 담당자 이름 검색, 보강요청 중복확인이 Notion 없이도 항상 정확하게 동작).
+3. **학생 목록/상세를 Postgres로 재구현**(`lib/supabasePgRead.ts`의 `pgSearchStudents`/
+   `pgGetStudent`) — Notion의 누적출석률/숙제제출률/단어테스트통과율 rollup을 그대로 베끼지
+   않고, `daily_records`를 직접 집계해서 만들었다: 학생별 **전체(all-time) 일일기록** 중
+   "출결≠결석" 비율 = 출석률, "과제여부" 체크 비율 = 숙제제출률, "단어테스트결과=통과" 비율 =
+   단어테스트통과율(미응시 제외 안 함). 이 공식은 추측이 아니라 `getStudentPeriodReport`/
+   `getMonthlyStudentMetrics`가 이미 코드에 명시적으로 "누적 지표와 같은 기준"이라고 써둔
+   규칙을 그대로 재사용한 것이다 — 다만 **실제 Notion rollup 결과와 숫자 대조는 아직 안 했다**
+   (아래 "미완료" 참고).
+4. **`ACADEMY_STUDENT_READ_PROVIDER` 신규 env(별도 게이트)**: 학생 READ는 기존
+   `ACADEMY_DB_PROVIDER`(이미 production에서 postgres로 켜져 있음)에 얹지 않고 별도 플래그로
+   뺐다 — reconciliation으로 실측 대조하기 전까지 production에서 자동으로 켜지면 안 되기
+   때문. 지금은 미설정 상태 = 학생 READ는 여전히 Notion(안전한 기본값).
+5. **reconciliation에 `student-read-check` 모드 추가**(`app/api/admin/reconciliation/route.ts`,
+   `lib/reconciliation.ts`) — Notion 경로와 새 Postgres 경로로 각각 `searchStudents("")`를
+   불러서 필드 단위로 대조. 0건 불일치 확인 전까지 위 4번 env를 켜지 말 것.
+6. **사직/금정 production 배포 완료**(코드는 배포됐고, 위 4번 게이트 덕분에 학생 READ
+   동작은 이번 배포로 안 바뀜 — 기존 Notion 경로 그대로). WRITE 쪽은 `ACADEMY_DB_PROVIDER`가
+   이미 postgres라 이번 배포로 즉시 postgres-primary 전환됨(아래 "검증 필요" 참고).
+7. **로그인 페이지 200 확인**(`staffsj.examenglishsj.co.kr`, `staff.examenglishsj.co.kr`)
+   — 배포 자체가 깨지지 않았다는 것만 확인, 로그인/실제 기능 스모크테스트는 못 함(계정 정보 없음).
+
+### 코드 리뷰(직접 재확인한 것)
+- 새로 쓴 모든 Postgres 컬럼명은 `supabase/scripts/migrate_notion_to_supabase.mjs`의 `T()`
+  매핑과 한 줄씩 대조 완료(STUDENT/STAFF/CLASS/TODO/COUNSELING/ADMIN_INBOX/CLINIC/MATERIAL/
+  EXAM_SCORE/MANUAL) — 전부 일치.
+- `git diff` 기준으로 지워진 줄과 추가된 줄을 대조해 relation 속성이 리팩터 중 실수로
+  빠지지 않았는지 확인 — `createClinicRecord`의 "관련업무"(TODO relation)가 postgres-primary
+  경로에서 누락됐던 걸 발견해 즉시 수정(`675f524` 커밋). 다른 함수는 이상 없음.
+- `npx tsc --noEmit`, `npm run build` 둘 다 통과.
+- **주의**: `MANUAL_STEP`(manual_steps 테이블)의 `title` 컬럼은 `T()`가 값을 넣지만
+  `supabase/schema/001_initial_schema.sql`엔 그 컬럼이 안 보인다(수동 ALTER로 나중에
+  추가됐을 가능성 — 확인 못 함). 그래서 `createManualSteps`/`updateManualStep`/
+  `deleteManualStep`은 이번에 건드리지 않고 Category C로 남겼다. 실제 스키마 확인 후 처리.
+
+### ⬜ 미완료 — 다음 세션(또는 원장)이 바로 할 것
+1. **MIGRATION_ADMIN_SECRET이 이 세션에 없었다** — production reconciliation 엔드포인트를
+   한 번도 호출 못 했다. 다음 중 하나 필요:
+   - 원장이 직접 아래 3개 curl을 실행하고 결과를 다음 세션에 붙여넣기, 또는
+   - 원장이 secret을 다음 세션에 알려줘서 Claude가 대신 실행.
+   ```
+   # 1) 학생 READ 대조 — 이게 0건 불일치가 나와야 ACADEMY_STUDENT_READ_PROVIDER를 켠다
+   curl -X POST https://staffsj.examenglishsj.co.kr/api/admin/reconciliation \
+     -H "X-Migration-Secret: <사직 SECRET>" -H "Content-Type: application/json" \
+     -d '{"mode":"student-read-check"}'
+   # (금정도 동일하게 https://staff.examenglishsj.co.kr 로)
+
+   # 2) 이번에 바꾼 write 경로 실제 검증 — 안전한 테스트 레코드로
+   curl -X POST https://staffsj.examenglishsj.co.kr/api/admin/reconciliation \
+     -H "X-Migration-Secret: <사직 SECRET>" -H "Content-Type: application/json" \
+     -d '{"mode":"write-smoke-test"}'
+
+   # 3) 혹시 실패가 쌓였으면
+   curl -X POST https://staffsj.examenglishsj.co.kr/api/admin/reconciliation \
+     -H "X-Migration-Secret: <사직 SECRET>" -H "Content-Type: application/json" \
+     -d '{"mode":"retry-failures"}'
+   ```
+2. **1번의 student-read-check가 0건 불일치면** Vercel production env에 사직/금정 둘 다
+   `ACADEMY_STUDENT_READ_PROVIDER=postgres` 추가 → 재배포 없이 즉시 적용(Next.js가 매
+   요청마다 `process.env` 읽음, 코드는 이미 배포돼 있음). 불일치가 있으면 그 필드를 보고
+   `lib/supabasePgRead.ts`의 집계식을 수정.
+3. **자연어 입력 속도 실측(PART 3 원안 그대로, 아직 안 함)** — 원장이 실제 입력 1건을
+   넣은 뒤 `vercel logs <배포url>`로 `[nl-timing]` 로그를 모아 stage별 delta 계산. Notion
+   호출이 이번 세션에서 상당수 사라졌으니(getNlRoster의 students 조회, findStaffIdByName
+   등) 이전 실측과 비교하면 개선 폭도 같이 보일 것.
+4. **Category C(오늘 안 건드림, Notion-first 그대로)**: `createStudent`/`createMinimalStudent`/
+   `createStaff`/`createClass`(새 relation-target ID 발급 문제 — Notion 없이 새 학생/반/직원을
+   만들면 다른 엔티티가 참조할 안정적인 id가 없음, 이 부분은 canonical id를 Postgres uuid로
+   완전히 옮기는 더 큰 설계 결정이 필요), `createTasks`/`routeTask`/`hasPriorFailure`(업무
+   자동배정 로직), `createClassProgress`/`updateClassProgress`/`saveClassRecordScores`/
+   `checkInAttendance`(여러 엔티티에 동시에 쓰는 fanout 로직), 시험대비 시트 관련 함수 전체,
+   `upsertSchoolExamRange`/`pushSchoolUnitsToStudents`, `broadcastTextSourceSteps`,
+   `createFileUploadDraft`/`uploadMaterialFile`/`createMaterialTask`(Notion 파일업로드
+   API 자체가 파일 저장소라 대체 불가, Supabase Storage로 옮기는 별도 작업 필요),
+   `createManualDraft`/`createManualSteps`/`updateManualStep`/`deleteManualStep`(위 스키마
+   불확실 + id 순서 의존성), **PIN 로그인**(`updateStaffPin`/`findStaffByNameAndPin`) — PIN은
+   설계상 Postgres에 평문 미러링 안 함(`pin_hash` 컬럼은 있지만 해시 방식 미정, schema
+   주석에 "확인 필요"로 명시돼 있음). **로그인 자체가 여전히 Notion에 의존하는 유일한
+   핵심 기능**이라는 뜻 — Notion 장애 시 로그인이 안 될 수 있음. 이 부분을 풀려면 먼저
+   PIN 해시 방식을 원장이 결정해야 한다(추측으로 정할 사안이 아님).
+5. **git push 실패** — 이 세션은 GitHub 자격증명이 없어 `git push origin main`을 못 했다
+   (`vercel deploy --prod`는 git push와 무관하게 정상 동작해 배포 자체는 완료됨). 로컬
+   커밋 3개(`09d06f5`, `e53602e`, `675f524`)가 origin에 안 올라가 있으니 다음 세션/원장이
+   push 필요.
+
+### 신규/변경 파일
+`lib/supabaseRepo.ts`(postgres-primary write primitive 추가), `lib/supabasePgRead.ts`
+(`pgSearchStudents`/`pgGetStudent` 추가), `lib/notion.ts`(28개 write 함수 전환 +
+`searchStudents`/`getStudent` provider 분기), `lib/reconciliation.ts` + `app/api/admin/
+reconciliation/route.ts`(`student-read-check` 모드).
 
 ---
 
