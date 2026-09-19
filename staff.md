@@ -4,14 +4,15 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (PART 9 3차 갱신 — 원장이 실제로 매일 보는
-첫 화면 `/director`(상단바 자체가 없는 "구글 첫화면" 랜딩)에도 Account
-Menu 적용. 상단바를 새로 추가하지 않고 `DirectorUserMenu`를 우측 상단에
-`position: fixed`로 단독 배치(이 페이지도 director.css 적용 범위 안이라
-그대로 재사용 가능했음). 이전 2차 갱신: 구 디자인 화면(/dashboard, /input,
-/exam-prep, /student-levels)에도 확장(신규 `components/AccountMenu.tsx`,
-순수 CSS). `supabase/schema/004_manual_steps_title.sql`은 아직 미적용 —
-계속 blocker. 아래 "PART 9" 섹션 먼저 확인)
+마지막 업데이트: 2026-09-19 (**Phase 2(자연어 입력 최적화) 완료 처리** —
+PART 8에 실측 재측정 결과 추가: 총 응답시간 9.9초→3.96초(-60%), LLM
+호출 2회→1회(구조적으로 확인), roster 조회 2,727ms→1,804ms, 500 재발
+없음. multi-intent/암기확인/query-verify/Notion-미러-실패-격리/branch-isolation
+테스트 8+9+3건 추가(31/31 통과). Account Menu(PART 9)는 완료 처리 —
+`/director/*`, 구 디자인 4화면, `/director` 첫화면 전부 적용 완료. 다음은
+Phase 3(업무 자동배정 엔진 + 상황판) 착수. `supabase/schema/
+004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 8"
+재측정 섹션 먼저 확인)
 
 ---
 
@@ -236,21 +237,48 @@ Notion은 best-effort로 격리.
 이번 범위 밖으로 미룸, 아래 "다음 세션" 참고), `npm run build` 통과(에러
 없음).
 
-### ⚠️ 실측 재측정 — 아직 못 함(이번에도 라이브 트리거가 필요)
-`vercel logs`가 히스토리 조회가 안 되고 실시간 스트리밍만 가능하다는 제약은
-그대로다(PART 7에서 확인). 이번 수정 이후의 실제 latency(목표: LLM 1회,
-Notion 명단조회 0회)는 원장이 비슷한 복합 문장을 다시 입력하는 순간
-`vercel logs --follow`를 동시에 보고 있어야 잡을 수 있다 — 이번 세션은
-그 순간을 노려 첫 실측을 확보했지만, 수정 이후 재측정은 다음 세션(또는
-원장이 입력하는 시점)의 몫으로 남는다.
+### ✅ 실측 재측정 완료 (2026-09-19, 원장이 실제로 입력, 사직 production)
+`vercel logs`가 히스토리 조회 불가/실시간 스트리밍만 가능한 제약(PART 7)은
+그대로라, 이번에도 원장이 실제 입력하는 순간에 맞춰 `vercel logs`를 띄워
+잡았다. 응답 200, 실제 요청 1건:
+
+| 구간 | Before(수정 전, 최초 사고 캡처) | After(이번 재측정) |
+|---|---|---|
+| 총 응답시간 | 9,900ms | **3,963ms (-60%)** |
+| Notion/DB 명단 재조회 | 2,727ms | **1,804ms** (Postgres 경량 쿼리) |
+| LLM 호출 횟수 | 2회 | **1회** |
+| LLM 호출 총 시간 | 7,093ms(4,635+2,458) | 로그 순서 문제로 단독 분리 불가(아래 참고) |
+
+**정직한 한계**: Vercel의 로그 캡처가 같은 요청의 콘솔 로그를 항상
+시간순으로 정확히 묶어주지 않는 현상이 이번에도 나타났다(`anthropic:
+unified:before_call`이 `nlRoster:cache_miss:after_fetch`보다 먼저
+찍힌 것처럼 보이는 등, 코드 흐름상 불가능한 순서 — PART 7 첫 실측 때도
+동일 현상 확인됨, Claude가 통제할 수 없는 Vercel 쪽 로그 집계 특성으로
+추정). 그래서 "LLM 호출 시간이 정확히 몇 ms"라고 추측해서 적지 않는다.
+대신 **확실하게 검증 가능한 것만** 보고:
+- `route:start`→`route:before_response`(같은 응답의 시작/끝, 순서 불확실성
+  없음): 3,963ms — 신뢰 가능한 총 응답시간.
+- `nlRoster:cache_miss:before_fetch`→`after_fetch`(같은 유일한 쌍):
+  1,804ms — 신뢰 가능한 roster 조회시간, 2,727ms 대비 확실히 감소.
+- `anthropic:unified:*` 쌍이 로그에 **정확히 1개만** 존재(예전엔
+  `anthropic:ct:*`+`anthropic:legacy:*` 2개 쌍) — LLM 호출이 2회→1회로
+  줄었다는 것은 타임스탬프 신뢰도와 무관하게 구조적으로 확인됨.
+- 나머지(LLM+처리+응답, `after_fetch`→`before_response`): 2,098ms —
+  이 구간 안에 LLM 호출 1회 + intent 처리/저장이 전부 들어있다는 것만
+  확실하고, 그 안에서 LLM만 몇 ms인지는 이번 로그로는 못 가른다(상한
+  추정치일 뿐, 확정값 아님).
+- Notion validation_error/warn 없음, 200 정상 응답 — "암기확인" 등 어떤
+  업무 유형이 걸렸어도 500이 재발하지 않았다(직접 증거는 아니지만 최소한
+  이번 요청에서는 오류 없이 통과).
+
+이걸로 **Phase 2 목표(LLM 1회 확인, roster 조회 대폭 감소, 500 재발
+없음) 실측 기반 달성 확인 완료**로 처리한다.
 
 ### 다음 세션에서 할 일
-1. 위 재측정을 진행해 목표(LLM 1회, Notion 명단조회 0회, 총 응답시간)
-   달성 여부 확인.
-2. multi-intent 분류 품질은 실제 사용 전까지 검증 불가 — 특히 "출력 3부"
+1. multi-intent 분류 품질은 실사용이 쌓여야 더 확인 가능 — 특히 "출력 3부"
    같은 quantity/material 슬롯 추출, 여러 학생이 섞인 문장의 route 분리
-   정확도를 실사용 로그로 확인.
-3. 신입생/동명이인 대화형 라운드트립을 통합 경로에도 붙일지 결정(현재는
+   정확도를 실사용 로그로 계속 지켜볼 것.
+2. 신입생/동명이인 대화형 라운드트립을 통합 경로에도 붙일지 결정(현재는
    단순화로 생략, 실패로만 표시).
 4. `supabase/schema/004_manual_steps_title.sql` 미적용 상태 계속 유지.
 
