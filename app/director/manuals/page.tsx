@@ -32,6 +32,7 @@ export default async function ManualsListPage() {
         <DirectorTopbar
           staffName={session.name}
           role={session.role ?? ""}
+          branchName={branchName}
           dateLabel={formatDateLabel(todayKST())}
           greetingTitle="매뉴얼"
           greetingText="업무 화면 사용법을 확인하거나, 화면녹화로 새 매뉴얼을 만드세요."

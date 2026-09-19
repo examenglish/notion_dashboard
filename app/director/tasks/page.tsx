@@ -53,6 +53,7 @@ export default async function DirectorTasksPage() {
         <DirectorTopbar
           staffName={session.name}
           role={session.role ?? ""}
+          branchName={branchName}
           dateLabel={formatDateLabel(today)}
           greetingTitle="내 업무"
           greetingText="지금 할 일부터 확인하세요."

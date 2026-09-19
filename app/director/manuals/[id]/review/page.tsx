@@ -25,6 +25,7 @@ export default async function ManualReviewPage({ params }: { params: { id: strin
         <DirectorTopbar
           staffName={session.name}
           role={session.role ?? ""}
+          branchName={branchName}
           dateLabel={formatDateLabel(todayKST())}
           greetingTitle="매뉴얼 검토"
           greetingText={manual.title}

@@ -87,7 +87,7 @@ export default function PreviewTestPage() {
     <div className="director-shell flex h-screen bg-background text-foreground">
       <DirectorSidebar branchName="이그잼영어학원 · 금정" />
       <div className="flex min-w-0 flex-1 flex-col">
-        <DirectorTopbar staffName="김원장" role="원장" dateLabel="8월 14일(금)" />
+        <DirectorTopbar staffName="김원장" role="원장" branchName="이그잼영어학원 · 금정" dateLabel="8월 14일(금)" />
 
         <main className="flex-1 overflow-y-auto bg-muted/50 px-6 py-6">
           <div className="mb-5">

@@ -19,6 +19,7 @@ export default async function DirectorExamPrepPage() {
         <DirectorTopbar
           staffName={session.name}
           role={session.role ?? ""}
+          branchName={branchName}
           dateLabel={formatDateLabel(todayKST())}
           greetingTitle="시험대비"
           greetingText="학교·학년·학생으로 찾아 시험대비 시트를 작성하세요."

@@ -18,7 +18,7 @@ export default async function DirectorStudentsPage() {
     <div className="director-shell flex h-screen bg-background text-foreground">
       <DirectorSidebar branchName={branchName} role={session.role ?? ""} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <DirectorTopbar staffName={session.name} role={session.role ?? ""} dateLabel={formatDateLabel(todayKST())} />
+        <DirectorTopbar staffName={session.name} role={session.role ?? ""} branchName={branchName} dateLabel={formatDateLabel(todayKST())} />
 
         <main className="flex-1 overflow-y-auto bg-muted/50 px-6 py-6">
           <div className="mb-5">

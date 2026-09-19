@@ -19,6 +19,7 @@ export default async function ManualUploadPage() {
         <DirectorTopbar
           staffName={session.name}
           role={session.role ?? ""}
+          branchName={branchName}
           dateLabel={formatDateLabel(todayKST())}
           greetingTitle="화면녹화로 만들기"
           greetingText="영상을 올리면 AI가 단계별 매뉴얼 초안을 만듭니다."

@@ -4,12 +4,81 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (PART 8 신규 — 실사고("암기확인" Notion select
-옵션 누락으로 500) 원인 파악 후 구조적 수정: createTasks postgres-primary
-전환 + Notion best-effort 격리, 자연어 통합 입력 LLM 1회로 병합(multi-intent),
-결석확인 등 조회 intent 신설, nl-roster 2.7초 병목(daily_records/exam_scores
-전체스캔) 제거. `supabase/schema/004_manual_steps_title.sql`은 아직 미적용 —
-계속 blocker. 아래 "PART 8" 섹션 먼저 확인)
+마지막 업데이트: 2026-09-19 (PART 9 신규 — 우측 상단 Account Menu: 로그인
+사용자/역할/지점 상시 표시 + 비밀번호 변경/로그아웃. 새 컴포넌트 아님 —
+이미 있던 `DirectorUserMenu`/`DirectorTopbar`를 확장. PART 8: 실사고("암기확인"
+Notion select 옵션 누락으로 500) 원인 파악 후 구조적 수정 — createTasks
+postgres-primary 전환 + Notion best-effort 격리, 자연어 통합 입력 LLM 1회로
+병합(multi-intent), 결석확인 등 조회 intent 신설, nl-roster 2.7초 병목
+제거. `supabase/schema/004_manual_steps_title.sql`은 아직 미적용 — 계속
+blocker. 아래 "PART 9" 섹션 먼저 확인)
+
+---
+
+## PART 9 — 우측 상단 Account Menu: 로그인 사용자/역할/지점 표시 + 비밀번호 변경/로그아웃 (2026-09-19)
+
+### 배경
+원장 지시: 계정/지점 착각 방지를 위해 주요 화면 우측 상단에 로그인 사용자
+정보 확인 + 로그아웃 UI 필요. 새 인증/DB/헤더를 만들지 말고 기존 것을
+재사용하라는 명시적 지시.
+
+### 확인한 사실 — 새로 만들 필요가 없었다
+`/director/*` 전체 페이지(대시보드/내업무/학생관리/시험대비/학생레벨/
+매뉴얼/입력/리포트, preview-test 포함, 총 11곳)가 이미 공통
+`DirectorTopbar`(`components/director/DirectorTopbar.tsx`)를 쓰고 있고,
+그 안에 로그인 사용자 이름+역할+로그아웃을 보여주는 `DirectorUserMenu`
+드롭다운이 **이미 존재**했다(아바타 이니셜, shadcn 드롭다운). 지점 표시와
+비밀번호 변경만 빠져 있었다 — 그래서 새 컴포넌트를 만들지 않고 이 둘을
+확장했다("중복 header 생성 금지" 지시와도 일치).
+
+### 변경 내용
+1. `DirectorUserMenu.tsx`: `branchName` prop 추가. 데스크톱 트리거를
+   `[이니셜] 이름 / 역할 · 지점` 2줄 레이아웃으로 변경(요청한 mockup과
+   동일). 드롭다운 내용에 지점 줄 추가 + "비밀번호 변경"(`/change-pin`으로
+   이동, 기존 페이지 재사용) 메뉴 항목 신설. 로그아웃은 기존 로직
+   그대로(`/api/logout` POST → `/login`).
+2. `DirectorTopbar.tsx`: `branchName?: string` prop 추가해 `DirectorUserMenu`로
+   그대로 전달.
+3. 위 두 컴포넌트를 쓰는 11개 `/director/*` `page.tsx` 전부에
+   `branchName={branchName}` 한 줄씩 추가 — 이 변수는 이미 모든 페이지가
+   `DirectorSidebar`용으로 계산해두고 있던 것과 **완전히 같은 값**
+   (`NEXT_PUBLIC_BRANCH_NAME`)을 그대로 재사용한 것이라, 지점 판별 로직을
+   새로 만들지 않았고 사이드바가 보여주는 지점과 항상 일치한다(같은
+   env var 재사용이므로 불일치 가능성 없음).
+4. 모바일: 트리거의 이름/역할/지점 텍스트는 원래도 `sm:` 브레이크포인트
+   미만에서 숨겨져 아바타만 보이던 구조(기존 동작, 안 건드림) — 드롭다운을
+   탭하면 이름/역할/지점/비밀번호변경/로그아웃이 모두 보인다(이번에 추가한
+   지점+비밀번호변경도 데스크톱/모바일 드롭다운 콘텐츠가 같은 컴포넌트라
+   자동으로 양쪽 다 적용됨). 별도 모바일 전용 컴포넌트를 만들지 않았다.
+
+### 보안/구조 준수
+- `branch_id` 멀티테넌트 구조, 로그인/세션 로직(`lib/session.ts`,
+  `middleware.ts`) 전혀 안 건드림 — 화면에 이미 있던 값을 한 군데 더
+  보여주기만 함.
+- 지점 표시는 그 배포(사직 또는 금정)의 `NEXT_PUBLIC_BRANCH_NAME` 하나뿐 —
+  다른 지점 값을 참조하거나 선택할 수 있는 경로 자체가 없음(단일 배포당
+  단일 env 값).
+- 새 인증 시스템/DB 테이블 없음.
+
+### 검증
+`npx tsc --noEmit` 통과, `npx vitest run` 13/13 통과(UI 변경이라 기존
+테스트에 영향 없음, 신규 테스트는 추가 안 함 — 렌더링/드롭다운 상호작용은
+브라우저 확인이 필요한 영역이라 이번 세션에서 직접 클릭 테스트는 못 함),
+`npm run build` 통과(11개 `/director/*` 페이지 전부 빌드 성공).
+
+### ⬜ 미완료 — 다음 세션(또는 원장)이 확인할 것
+브라우저로 실제 로그인해서: (1) 데스크톱에서 우측 상단에 `이름 / 역할 ·
+지점` 2줄이 정확히 뜨는지, (2) 드롭다운에서 "비밀번호 변경" 클릭 시
+`/change-pin`으로 정상 이동하는지, (3) 모바일 폭에서 아바타만 보이고
+탭하면 전체 정보가 뜨는지 — 이번 세션은 로그인 세션이 없어 이 세 가지를
+직접 브라우저로 확인하지 못했다(코드/타입/빌드 검증까지만 완료).
+
+### 신규/변경 파일
+`components/director/DirectorUserMenu.tsx`(branchName prop, 2줄 레이아웃,
+비밀번호 변경 메뉴), `components/director/DirectorTopbar.tsx`(branchName
+전달), `app/director/{dashboard,tasks,students,exam-prep,student-levels,
+manuals,manuals/upload,manuals/[id]/review,input,reports,preview-test,
+students/preview-test}/page.tsx`(DirectorTopbar 호출에 branchName 추가).
 
 ---
 
