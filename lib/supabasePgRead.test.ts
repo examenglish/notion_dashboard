@@ -450,3 +450,130 @@ describe("pgListAllOpenTasks — 관리자 담당자별 현황용 전체 미완�
     expect(ids).not.toContain("t-sajik-done");
   });
 });
+
+describe("클리닉 기록 READ postgres 전환 (staff.md PART 14) — pgGetClinicRecordsByDate/pgGetAssistantClinicRecordsByDate/pgGetRecentClinicRecords", () => {
+  let tables: Record<string, Row[]>;
+
+  beforeEach(() => {
+    tables = {
+      clinic_records: [
+        {
+          id: "clinic-1",
+          notion_id: "notion-clinic-1",
+          branch_id: "branch-sajik",
+          assistant_notion_ids: ["staff-a"],
+          teacher_notion_ids: ["staff-t"],
+          student_notion_ids: ["student-1"],
+          record_date: "2026-09-20",
+          content: "단어 20개 확인",
+          next_preparation: "다음주 문법",
+          confirmed: false,
+          created_at: "2026-09-20T10:00:00Z",
+        },
+        {
+          id: "clinic-2",
+          notion_id: null,
+          branch_id: "branch-sajik",
+          assistant_notion_ids: ["staff-a"],
+          teacher_notion_ids: [],
+          student_notion_ids: ["student-2"],
+          record_date: "2026-09-19",
+          content: "숙제 점검",
+          next_preparation: "",
+          confirmed: true,
+          created_at: "2026-09-19T10:00:00Z",
+        },
+        // 최신 기록(created_at 더 늦음) — 정렬 검증용.
+        {
+          id: "clinic-3",
+          notion_id: null,
+          branch_id: "branch-sajik",
+          assistant_notion_ids: ["staff-a"],
+          teacher_notion_ids: [],
+          student_notion_ids: ["student-1"],
+          record_date: "2026-09-20",
+          content: "재시험 준비",
+          next_preparation: "",
+          confirmed: false,
+          created_at: "2026-09-20T15:00:00Z",
+        },
+        // 다른 지점 기록(교차 오염 테스트).
+        {
+          id: "clinic-geumjeong",
+          notion_id: null,
+          branch_id: "branch-geumjeong",
+          assistant_notion_ids: ["staff-a"],
+          teacher_notion_ids: [],
+          student_notion_ids: ["student-geumjeong"],
+          record_date: "2026-09-20",
+          content: "금정 기록",
+          next_preparation: "",
+          confirmed: false,
+          created_at: "2026-09-20T09:00:00Z",
+        },
+      ],
+    };
+    process.env.SUPABASE_URL = "https://fake.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-key";
+    process.env.ACADEMY_BRANCH_ID = "sajik";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    delete process.env.ACADEMY_BRANCH_ID;
+  });
+
+  const staffNames = new Map([
+    ["staff-a", "김조교"],
+    ["staff-t", "박선생"],
+  ]);
+  const studentNames = new Map([
+    ["student-1", "학생일"],
+    ["student-2", "학생이"],
+  ]);
+
+  it("pgGetClinicRecordsByDate: 날짜로 필터링하고 담당자/담당학생 이름까지 채워준다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgGetClinicRecordsByDate } = await import("./supabasePgRead");
+
+    const records = await pgGetClinicRecordsByDate("2026-09-20", studentNames, staffNames);
+    expect(records.map((r) => r.id).sort()).toEqual(["clinic-3", "notion-clinic-1"].sort());
+    const r1 = records.find((r) => r.id === "notion-clinic-1");
+    expect(r1?.assistantName).toBe("김조교");
+    expect(r1?.teacherName).toBe("박선생");
+    expect(r1?.studentNames).toEqual(["학생일"]);
+  });
+
+  it("pgGetClinicRecordsByDate: created_at 내림차순으로 정렬된다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgGetClinicRecordsByDate } = await import("./supabasePgRead");
+
+    const records = await pgGetClinicRecordsByDate("2026-09-20", studentNames, staffNames);
+    expect(records[0].id).toBe("clinic-3"); // 15:00, clinic-1은 10:00
+  });
+
+  it("pgGetAssistantClinicRecordsByDate: 조교+날짜 둘 다로 좁힌다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgGetAssistantClinicRecordsByDate } = await import("./supabasePgRead");
+
+    const records = await pgGetAssistantClinicRecordsByDate("staff-a", "2026-09-19", studentNames, staffNames);
+    expect(records).toHaveLength(1);
+    expect(records[0].id).toBe("clinic-2");
+    expect(records[0].checked).toBe(true);
+  });
+
+  it("pgGetRecentClinicRecords: branch isolation — 금정 기록은 절대 섞이지 않는다", async () => {
+    vi.stubGlobal("fetch", makeFakeFetch(tables));
+    vi.resetModules();
+    const { pgGetRecentClinicRecords } = await import("./supabasePgRead");
+
+    const records = await pgGetRecentClinicRecords(studentNames, staffNames);
+    expect(records.map((r) => r.id)).not.toContain("clinic-geumjeong");
+    expect(records).toHaveLength(3);
+  });
+});

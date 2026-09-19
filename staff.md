@@ -4,7 +4,24 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (**PART 13 신규 — 일일 수업진도/출결 입력을
+마지막 업데이트: 2026-09-19 (**PART 14 신규 — 클리닉 기록 READ를
+Notion-only → PostgreSQL-primary로 전환.** WRITE(`createClinicRecord`/
+`updateClinicRecord`/`deleteClinicRecord`)는 이미 이전 세션에서
+postgres-primary였다(이번에 확인만 함) — READ 3종(`getClinicRecordsByDate`/
+`getRecentClinicRecords`/`getAssistantClinicRecordsByDate`)만 100% Notion
+전용으로 남아있던 걸 전환. `clinic_records.assistant_notion_ids`/
+`teacher_notion_ids`/`student_notion_ids`(전부 기존 dual-id 배열, WRITE가
+이미 정확히 채워두고 있음)를 `cs.`(포함) 연산자로 직접 필터링 — 새 컬럼/
+쿼리 설계 없이 `pgListMyTasks` 등과 완전히 같은 패턴. `getAssistantBrief`
+(오늘 할 일+최근 클리닉 다음준비사항 조합 함수)의 클리닉 조회 부분도 같이
+전환(TODO 조회 부분은 범위 밖, 그대로 유지). `getClinicCompliance`/
+`getClinicCoverageGaps`는 CLINIC+TODO(+STUDENT 전체스캔) 여러 도메인이
+섞인 관리자 분석 함수라 "클리닉 기록 READ" 범위에서 제외하고 남은 gap으로
+보고만 함. 테스트 4건 신규(`lib/supabasePgRead.test.ts`, 날짜/조교 필터,
+정렬, branch isolation), 61/61 통과, tsc/build 통과. PART 13(수업진도/
+출결 postgres 전환) 완료 처리는 유지. 아래 "PART 14" 먼저 확인)
+
+이전 업데이트: 2026-09-19 (**PART 13 — 일일 수업진도/출결 입력을
 Notion-only → PostgreSQL-primary로 전환.** `createClassProgress`/
 `updateClassProgress`/`checkInAttendance`/`saveClassRecordScores`(강사가
 매 교시 쓰는 핵심 입력 경로) 전부 postgres write 성공 = 요청 성공, Notion은
@@ -55,6 +72,68 @@ gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
 PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
 004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
+
+---
+
+## PART 14 — 클리닉 기록 READ Notion-only → PostgreSQL-primary 전환 (2026-09-19)
+
+### 배경
+PART 13(수업진도/출결) 완료 후 원장이 지정한 순서대로 다음 gap: 클리닉
+기록 READ. WRITE(`createClinicRecord`/`updateClinicRecord`/
+`deleteClinicRecord`)는 확인해보니 이미 postgres-primary였다(이전 세션
+어딘가에서 전환됨, staff.md에 별도 PART로 기록은 안 남아있었지만 코드에
+`getDbProvider()==="postgres"` 분기가 이미 있었음) — `clinic_records.
+student_ids uuid[]`(네이티브, 배열 FK)/`assistant_id`/`teacher_id`/
+`task_id`(전부 네이티브 FK) + `*_notion_ids`(dual-id 배열) 둘 다 이미
+정확히 채워지고 있었다. READ 3개 함수만 여전히 100% Notion.
+
+### 전환한 함수
+- `getClinicRecordsByDate(date)` — 특정 날짜 전체 조교 클리닉(원장 대시보드).
+- `getRecentClinicRecords()` — 전체 이력(담당강사/원장 확인용).
+- `getAssistantClinicRecordsByDate(assistantId, date)` — 조교 본인 기록 검색.
+- `getAssistantBrief`의 클리닉 조회 부분("다음 준비사항" 학생별 최신값) —
+  같은 함수의 TODO(오늘 할 일) 조회 부분은 클리닉 도메인이 아니라 범위
+  밖으로 남김.
+
+`lib/supabasePgRead.ts`에 `pgGetClinicRecordsByDate`/
+`pgGetRecentClinicRecords`/`pgGetAssistantClinicRecordsByDate` 신규 —
+`assistant_notion_ids`/`student_notion_ids`(dual-id 배열, WRITE가 이미
+정확히 채워둠)를 `cs.`(포함) 연산자로 직접 필터링한다. 네이티브 FK로
+재조회하지 않는 이유: `pgListMyTasks`(staff_notion_ids 배열을 그대로
+씀) 등 기존 모든 postgres read 함수가 이 패턴이라 새 규약을 만들지 않고
+그대로 따랐다 — 불필요한 라운드트립도 없음. 정렬(`created_time` desc)은
+PostgREST order 파라미터 대신 클라이언트에서 `created_at` 내림차순으로
+처리(기존 다른 함수들도 이미 이 방식).
+
+### 범위 밖(이번에 안 건드림, 다음 gap 후보로 보고)
+- `getClinicCompliance`(지시한 클리닉이 실제 이행됐는지 확인) —
+  TODO(유형=클리닉)를 기준으로 클리닉보고 relation을 따라가는 구조라
+  CLINIC 단독이 아니라 TODO 도메인이 주(主)다. TODO 읽기 자체는 이미
+  Phase 3에서 대부분 전환됐지만 이 함수는 그 경로를 안 타는 별도 쿼리라
+  아직 Notion.
+- `getClinicCoverageGaps`(재원생 중 최근 N일 케어 공백 찾기) — CLINIC +
+  TODO + **재원생 전체 STUDENT 스캔**까지 섞인 더 큰 함수라 클리닉
+  READ만 바꿔서는 절반만 전환되는 상태가 돼 오히려 혼란스러울 수 있어
+  제외.
+둘 다 "클리닉 기록 READ" 자체는 아니고 다른 도메인(TODO/STUDENT)과
+엮인 관리자 분석 함수라, 이번 범위에서 명시적으로 뺐다.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(61/61, 신규 4건 — 날짜 필터+이름
+채움, 정렬, 조교+날짜 동시 필터, branch isolation)/`npm run build` 전부
+통과.
+
+### ⬜ 미완료 — 다음 세션(또는 원장)이 확인할 것
+브라우저로 로그인해서 원장 대시보드의 "조교 클리닉" 카드와 조교 화면의
+클리닉 검색이 실제로 뜨는지 — 실제 운영 데이터를 만들지 말라는 지시에
+따라 이번 세션은 코드/테스트 레벨 검증까지만 했다.
+
+### 신규/변경 파일
+`lib/supabasePgRead.ts`(`pgGetClinicRecordsByDate`/`pgGetRecentClinicRecords`/
+`pgGetAssistantClinicRecordsByDate`/`mapPgClinic` 신규), `lib/notion.ts`
+(`getClinicRecordsByDate`/`getRecentClinicRecords`/
+`getAssistantClinicRecordsByDate`/`getAssistantBrief`에 postgres 분기),
+`lib/supabasePgRead.test.ts`(4건 추가).
 
 ---
 

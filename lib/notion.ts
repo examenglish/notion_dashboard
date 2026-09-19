@@ -88,6 +88,9 @@ import {
   pgGetStudent,
   pgListNlRosterStudents,
   classNamePgMap,
+  pgGetAssistantClinicRecordsByDate,
+  pgGetClinicRecordsByDate,
+  pgGetRecentClinicRecords,
   type NlRosterStudent,
 } from "./supabasePgRead";
 import { mark } from "./timing";
@@ -3981,11 +3984,17 @@ export async function getAssistantBrief(assistantId: string, date: string) {
         ],
       },
     }),
-    queryAllPages({
-      data_source_id: DB.CLINIC,
-      filter: { property: "조교", relation: { contains: assistantId } },
-      sorts: [{ timestamp: "created_time", direction: "descending" }],
-    }),
+    getDbProvider() === "postgres"
+      ? pgQueryRaw("CLINIC", `assistant_notion_ids=cs.{${encodeURIComponent(assistantId)}}`).then((rows) =>
+          rows
+            .filter((r) => (r.source_payload as { archived?: boolean } | null)?.archived !== true)
+            .sort((a, b) => ((b.created_at as string) ?? "").localeCompare((a.created_at as string) ?? ""))
+        )
+      : queryAllPages({
+          data_source_id: DB.CLINIC,
+          filter: { property: "조교", relation: { contains: assistantId } },
+          sorts: [{ timestamp: "created_time", direction: "descending" }],
+        }),
     studentNameMap(),
     listClasses(),
   ]);
@@ -4011,12 +4020,14 @@ export async function getAssistantBrief(assistantId: string, date: string) {
     }))
     .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
 
+  const isPostgres = getDbProvider() === "postgres";
   const prepByStudent = new Map<string, { studentName: string; date: string | null; content: string }>();
   for (const p of recentClinicRecords as any[]) {
-    const nextPrep = getRichText(p, "다음준비사항");
+    const nextPrep = isPostgres ? ((p.next_preparation as string | null) ?? "") : getRichText(p, "다음준비사항");
     if (!nextPrep) continue;
-    const recordDate = getDate(p, "날짜");
-    for (const sid of getRelationIds(p, "담당학생")) {
+    const recordDate = isPostgres ? ((p.record_date as string | null) ?? null) : getDate(p, "날짜");
+    const studentIds: string[] = isPostgres ? (p.student_notion_ids as string[]) ?? [] : getRelationIds(p, "담당학생");
+    for (const sid of studentIds) {
       if (prepByStudent.has(sid)) continue; // sorted desc, so first hit per student is the latest
       prepByStudent.set(sid, { studentName: names.get(sid) ?? "-", date: recordDate, content: nextPrep });
     }
@@ -4039,6 +4050,10 @@ export async function getAssistantBrief(assistantId: string, date: string) {
 // 조교 본인의 클리닉 기록을 날짜로 검색 — getAssistantBrief의 "최근 5건"에는
 // 없는 지나간 날짜의 기록도 조교 스스로 찾아서 고칠 수 있게 한다.
 export async function getAssistantClinicRecordsByDate(assistantId: string, date: string) {
+  if (getDbProvider() === "postgres") {
+    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
+    return pgGetAssistantClinicRecordsByDate(assistantId, date, names, staffMap);
+  }
   const [records, names] = await Promise.all([
     queryAllPages({
       data_source_id: DB.CLINIC,
@@ -4066,6 +4081,10 @@ export async function getAssistantClinicRecordsByDate(assistantId: string, date:
 // getAssistantClinicRecordsByDate와 달리 조교 한 명으로 필터하지 않고,
 // getRecentClinicRecords와 달리 날짜로 걸러서 전체 이력을 다 훑지 않는다.
 export async function getClinicRecordsByDate(date: string) {
+  if (getDbProvider() === "postgres") {
+    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
+    return pgGetClinicRecordsByDate(date, names, staffMap);
+  }
   const [records, staffMap, names] = await Promise.all([
     queryAllPages({
       data_source_id: DB.CLINIC,
@@ -4088,6 +4107,10 @@ export async function getClinicRecordsByDate(date: string) {
 
 // 담당강사/원장/행정이 조교들의 클리닉 활동 전체를 훑어보고 확인 체크하는 용도.
 export async function getRecentClinicRecords() {
+  if (getDbProvider() === "postgres") {
+    const [names, staffMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap()]);
+    return pgGetRecentClinicRecords(names, staffMap);
+  }
   const [results, staffMap, studentNames] = await Promise.all([
     queryAllPages({
       data_source_id: DB.CLINIC,

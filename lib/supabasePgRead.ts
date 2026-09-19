@@ -451,6 +451,74 @@ export async function pgGetStudent(id: string): Promise<PgStudentRecord | null> 
   return row ? mapPgStudent(row, aggMap, examMap, classNames) : null;
 }
 
+// getAssistantClinicRecordsByDate/getClinicRecordsByDate/getRecentClinicRecords
+// (lib/notion.ts)의 postgres 버전 — 조교 클리닉 기록 READ(staff.md PART 14).
+// WRITE(createClinicRecord/updateClinicRecord)는 이미 postgres-primary라
+// student_notion_ids/assistant_notion_ids/teacher_notion_ids(dual-id 배열)가
+// 항상 정확하다 — pgListMyTasks 등과 동일하게 그 배열을 cs.(포함) 연산자로
+// 직접 필터링하고, 네이티브 FK로 별도 재조회하지 않는다(불필요한 라운드
+// 트립 방지, 기존 관례 그대로).
+type PgClinicRow = {
+  id: string;
+  notion_id: string | null;
+  assistant_notion_ids: string[];
+  teacher_notion_ids: string[];
+  student_notion_ids: string[];
+  record_date: string | null;
+  content: string | null;
+  next_preparation: string | null;
+  confirmed: boolean | null;
+  created_at: string;
+  source_payload: any;
+};
+
+function mapPgClinic(r: PgClinicRow, studentNames: Map<string, string>, staffNames: Map<string, string>) {
+  return {
+    id: displayId(r),
+    date: r.record_date,
+    assistantName: r.assistant_notion_ids?.[0] ? staffNames.get(r.assistant_notion_ids[0]) ?? "-" : "-",
+    teacherName: r.teacher_notion_ids?.[0] ? staffNames.get(r.teacher_notion_ids[0]) ?? "-" : "-",
+    studentNames: (r.student_notion_ids ?? []).map((id) => studentNames.get(id) ?? "-"),
+    content: r.content ?? "",
+    nextPrep: r.next_preparation ?? "",
+    checked: !!r.confirmed,
+  };
+}
+
+function byCreatedAtDesc(a: { created_at: string }, b: { created_at: string }): number {
+  return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+}
+
+export async function pgGetAssistantClinicRecordsByDate(
+  assistantId: string,
+  date: string,
+  studentNames: Map<string, string>,
+  staffNames: Map<string, string>
+) {
+  const enc = encodeURIComponent(assistantId);
+  const rows = (await pgFetch("clinic_records", `select=*&assistant_notion_ids=cs.{${enc}}&record_date=eq.${date}`)) as PgClinicRow[];
+  return rows
+    .filter(notArchived)
+    .sort(byCreatedAtDesc)
+    .map((r) => mapPgClinic(r, studentNames, staffNames));
+}
+
+export async function pgGetClinicRecordsByDate(date: string, studentNames: Map<string, string>, staffNames: Map<string, string>) {
+  const rows = (await pgFetch("clinic_records", `select=*&record_date=eq.${date}`)) as PgClinicRow[];
+  return rows
+    .filter(notArchived)
+    .sort(byCreatedAtDesc)
+    .map((r) => mapPgClinic(r, studentNames, staffNames));
+}
+
+export async function pgGetRecentClinicRecords(studentNames: Map<string, string>, staffNames: Map<string, string>) {
+  const rows = (await pgFetch("clinic_records", "select=*")) as PgClinicRow[];
+  return rows
+    .filter(notArchived)
+    .sort(byCreatedAtDesc)
+    .map((r) => mapPgClinic(r, studentNames, staffNames));
+}
+
 export async function pgListManuals(opts: { status?: string } = {}) {
   const rows = await pgFetch("manuals", opts.status ? `select=*&status=eq.${encodeURIComponent(opts.status)}` : "select=*");
   return rows.filter(notArchived).map((r) => ({
