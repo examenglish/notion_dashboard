@@ -899,6 +899,183 @@ export async function getStudentDailyRecords(studentId: string) {
 // class-level DB③ progress page each daily record points back to), 보강
 // history, and 상담 history — for the "전체기록 보기" print-friendly popup.
 export async function getStudentFullHistory(studentId: string) {
+  if (getDbProvider() === "postgres") {
+    const encStudent = encodeURIComponent(studentId);
+    const [dailyRows, makeupRows, actionRows, reviewRows, clinicTaskRows, counselingRows, inboxRows, clinicRows, slackRows, staffMap, examPrepSheet] =
+      await Promise.all([
+        pgQueryRaw("DAILY_RECORD", `student_notion_ids=cs.{${encStudent}}`),
+        pgQueryRaw("TODO", `type=eq.${encodeURIComponent("보강")}&student_notion_ids=cs.{${encStudent}}`),
+        pgQueryRaw("TODO", `type=eq.${encodeURIComponent("조치사항")}&student_notion_ids=cs.{${encStudent}}`),
+        pgQueryRaw("TODO", `type=eq.${encodeURIComponent("복습")}&student_notion_ids=cs.{${encStudent}}`),
+        pgQueryRaw("TODO", `type=eq.${encodeURIComponent("클리닉")}&student_notion_ids=cs.{${encStudent}}`),
+        pgQueryRaw("COUNSELING", `student_notion_ids=cs.{${encStudent}}`),
+        pgQueryRaw("ADMIN_INBOX", `student_notion_ids=cs.{${encStudent}}`),
+        pgQueryRaw("CLINIC", `student_notion_ids=cs.{${encStudent}}`),
+        pgQueryRaw("SLACK_RECORDS", `student_notion_ids=cs.{${encStudent}}`),
+        pgStaffNameMap(),
+        getExamPrepSheet(studentId),
+      ]);
+
+    const dailyFiltered = dailyRows
+      .filter(pgNotArchived)
+      .sort((a, b) => ((a.record_date as string) ?? "").localeCompare((b.record_date as string) ?? ""));
+    const progressPageIds = Array.from(
+      new Set(dailyFiltered.map((r) => (r.class_progress_notion_ids as string[] | undefined)?.[0]).filter((v): v is string => !!v))
+    );
+    const progressRows =
+      progressPageIds.length > 0
+        ? await pgQueryRaw(
+            "CLASS_PROGRESS",
+            `or=(${progressPageIds.map((id) => `notion_id.eq.${encodeURIComponent(id)},id.eq.${encodeURIComponent(id)}`).join(",")})`
+          )
+        : [];
+    const homeworkByProgressId = new Map<string, string>();
+    for (const pr of progressRows) {
+      const homework = (pr.homework_content as string) ?? "";
+      if (pr.notion_id) homeworkByProgressId.set(pr.notion_id as string, homework);
+      if (pr.id) homeworkByProgressId.set(pr.id as string, homework);
+    }
+
+    const progress = dailyFiltered.map((r) => {
+      const progressPageId = (r.class_progress_notion_ids as string[] | undefined)?.[0] ?? null;
+      return {
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        date: (r.record_date as string | null) ?? null,
+        progress: (r.progress_content as string) ?? "",
+        homework: progressPageId ? homeworkByProgressId.get(progressPageId) ?? "" : "",
+        attendance: (r.attendance as string | null) ?? null,
+        homeworkDone: !!r.homework_done,
+      };
+    });
+
+    const makeup = makeupRows
+      .filter(pgNotArchived)
+      .map((r) => {
+        const ownerId = (r.staff_notion_ids as string[] | undefined)?.[0];
+        return {
+          id: (r.notion_id as string | null) ?? (r.id as string),
+          date: (r.due_date as string | null) ?? null,
+          time: (r.time_text as string) ?? "",
+          owner: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
+          done: !!r.complete,
+        };
+      })
+      .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+
+    const actions = actionRows
+      .filter(pgNotArchived)
+      .map((r) => {
+        const ownerId = (r.staff_notion_ids as string[] | undefined)?.[0];
+        return {
+          id: (r.notion_id as string | null) ?? (r.id as string),
+          date: (r.due_date as string | null) ?? null,
+          content: (r.title as string) ?? "",
+          owner: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
+        };
+      })
+      .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+
+    const counseling = counselingRows
+      .filter(pgNotArchived)
+      .map((r) => ({
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        date: (r.record_date as string | null) ?? null,
+        counselor: (r.counselor as string) ?? "",
+        content: (r.content as string) ?? "",
+        followUp: (r.follow_up as string) ?? "",
+        enteredBy: (r.entered_by as string) ?? "",
+      }))
+      .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+
+    const inquiries = inboxRows
+      .filter(pgNotArchived)
+      .map((r) => ({
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        date: (r.start_date as string | null) ?? null,
+        type: (r.input_type as string | null) ?? null,
+        content: (r.content as string) ?? "",
+        done: !!r.complete,
+        enteredBy: (r.entered_by as string) ?? "",
+      }))
+      .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+
+    const slack = slackRows
+      .filter(pgNotArchived)
+      .map((r) => ({
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        date: (r.written_at as string | null) ?? null,
+        content: (r.original as string) ?? "",
+        author: (r.author as string) ?? "",
+        permalink: (r.permalink as string) ?? "",
+        status: (r.status as string | null) ?? null,
+        linkStatus: (r.link_status as string | null) ?? null,
+      }))
+      .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+
+    const clinicFromRecords = clinicRows.filter(pgNotArchived).map((r) => {
+      const assistantId = (r.assistant_notion_ids as string[] | undefined)?.[0];
+      return {
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        date: (r.record_date as string | null) ?? null,
+        assistant: assistantId ? staffMap.get(assistantId) ?? "-" : "-",
+        content: (r.content as string) ?? "",
+        nextPrep: (r.next_preparation as string) ?? "",
+        source: "record" as const,
+      };
+    });
+    const clinicFromTasks = clinicTaskRows.filter(pgNotArchived).map((r) => {
+      const ownerId = (r.staff_notion_ids as string[] | undefined)?.[0];
+      return {
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        date: (r.due_date as string | null) ?? null,
+        assistant: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
+        content: (r.memo as string) ?? "",
+        nextPrep: "",
+        source: "task" as const,
+      };
+    });
+    const clinic = [...clinicFromRecords, ...clinicFromTasks].sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+
+    const review = reviewRows
+      .filter(pgNotArchived)
+      .map((r) => ({
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        date: (r.due_date as string | null) ?? null,
+        content: (r.memo as string) ?? "",
+        done: !!r.complete,
+      }))
+      .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+
+    const textSourcesRaw =
+      examPrepSheet.data.level === "고등" ? examPrepSheet.data.high.textSources : examPrepSheet.data.middle.textSources;
+    const textSources = textSourcesRaw.map((t) => ({
+      id: t.id,
+      category: t.category,
+      label: t.label,
+      detail: t.detail,
+      stepsDone: t.steps.filter((s) => s.done).length,
+      stepsTotal: t.steps.length,
+      vocabDone: t.vocab.filter((v) => v.done).length,
+      vocabTotal: t.vocab.length,
+    }));
+    const examPrep = examPrepSheet.id
+      ? {
+          level: examPrepSheet.level,
+          examTitle: examPrepSheet.examTitle,
+          examRange: examPrepSheet.examRange,
+          examDate: examPrepSheet.examDate,
+          teachers: examPrepSheet.teachers,
+          progress: examPrepSheet.progress,
+          weakPoints: examPrepSheet.weakPoints,
+          updatedAt: examPrepSheet.updatedAt,
+          categories: computeCategoryBreakdown(examPrepSheet.data),
+          textSources,
+        }
+      : null;
+
+    return { progress, makeup, actions, counseling, inquiries, clinic, review, slack, examPrep };
+  }
+
   const dailyRes = await notion.dataSources.query({
     data_source_id: DB.DAILY_RECORD,
     filter: { property: "학생", relation: { contains: studentId } },

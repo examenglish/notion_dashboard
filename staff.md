@@ -4,7 +4,19 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (**PART 19 신규 — Phase E/F/G(성능·PIN
+마지막 업데이트: 2026-09-19 (**PART 20 신규 — `getStudentFullHistory`
+("학생 전체기록 보기") Notion-only → PostgreSQL-primary 전환, Phase D의
+마지막 남은 대형 함수.** 일일기록(+반별진도 과제내용 병합, dual-id OR
+조회)/보강·조치사항·복습·클리닉 TODO 4종/상담/행정실/클리닉기록/Slack
+기록/시험대비(이미 PART 15에서 전환된 `getExamPrepSheet` 재사용) 총
+9개 엔티티를 새 스키마 없이 전환. 테스트 5건 신규, 99/99 통과,
+tsc/build 통과. 이걸로 PART 18에서 "순수 Notion 전용"으로 분류했던 것
+중 가장 컸던 항목이 없어졌고, 남은 건 `getClinicCompliance`/
+`getClinicCoverageGaps`(TODO+STUDENT 전체스캔 혼합 분석, 우선순위
+낮음)뿐이다. PART 19(로그인 dual-id 버그 수정)까지 완료 처리는 유지.
+아래 "PART 20" 먼저 확인)
+
+이전 업데이트: 2026-09-19 (**PART 19 — Phase E/F/G(성능·PIN
 fallback·운영 안정성) 점검, 로그인 관련 dual-id 버그 2건 수정(보안
 중요도 높음).** Phase E(hot path): 이미 이번 세션에서 tasks/class-record/
 clinic/exam-prep/manuals/materials가 전부 postgres-primary로 전환됐고,
@@ -163,6 +175,54 @@ gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
 PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
 004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
+
+---
+
+## PART 20 — getStudentFullHistory Notion-only → PostgreSQL-primary 전환 (2026-09-19)
+
+### 배경
+PART 18에서 Phase C 전수조사로 찾아낸 "순수 Notion 전용" 함수 중 가장
+큰 것(223줄, "학생 전체기록 보기" 팝업이 씀). 8개 서로 다른 엔티티를
+한 번에 합치는 대형 집계라 다음 세션 최우선 후보로 남겨뒀었는데, 같은
+세션 안에서 시간이 남아 바로 이어서 처리했다.
+
+### 전환 내용
+`Promise.all`로 병렬 조회하던 8개 쿼리를 각각 postgres 버전으로 교체:
+DAILY_RECORD(학생), TODO×4(유형=보강/조치사항/복습/클리닉 + 학생),
+COUNSELING(학생), ADMIN_INBOX(학생), CLINIC(학생), SLACK_RECORDS(학생) —
+전부 이번 세션에서 반복 사용한 `student_notion_ids=cs.{...}` dual-id
+배열 포함 패턴. 시험대비는 별도 쿼리 없이 이미 PART 15에서 전환된
+`getExamPrepSheet(studentId)`를 그대로 재호출(이 함수 안에서 이미
+`getDbProvider()` 분기가 되므로 또 분기할 필요 없음).
+
+**일일기록 ↔ 반별진도 과제내용 병합**(가장 까다로웠던 부분): 원본은
+Notion relation("반별진도원본")을 한 번 더 `pages.retrieve`해서 그 반의
+"과제내용"을 각 일일기록에 합쳐 보여준다. Postgres엔 이 관계에 네이티브
+FK가 없어(PART 13에서 daily_records↔class_progress 관계에 FK가 없다는
+걸 이미 확인함) `class_progress_notion_ids`(dual-id 배열)로 참조한다 —
+일일기록들이 참조하는 진도 id 집합을 모아 `class_progress`를 `or=(...)`
+로 한 번에 배치 조회하고, 결과를 notion_id/postgres id 양쪽 키로 맵에
+넣어(PART 13 `pgFindDailyRecordsForProgress`와 반대 방향의 조회지만
+같은 dual-id 원칙) 일일기록에서 어느 쪽 id로 참조했든 바로 찾을 수
+있게 했다.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(99/99, 신규 5건 — 일일기록+과제내용
+병합/다른학생 미혼입, 보강·조치사항·복습·클리닉 TODO 분류(클리닉은
+CLINIC 기록과 TODO 양쪽 소스가 합쳐지는 것까지 확인), 상담/행정실/Slack
+채워짐, 시험대비 없으면 null(지어내지 않음), branch isolation)/`npm run
+build` 전부 통과.
+
+### 남은 것
+Phase C에서 찾은 나머지 Notion 전용 함수는 `getClinicCompliance`/
+`getClinicCoverageGaps`(TODO+STUDENT 전체스캔 혼합 분석 — PART 14에서도
+이미 범위 밖으로 명시), `getPlannedAbsentStudentIds`(PART 13에서 안전망만
+추가, ADMIN_INBOX 도메인이라 범위 밖으로 명시)뿐이다. 우선순위 낮은
+관리자 분석 기능들이라 다음 세션으로 남김.
+
+### 신규/변경 파일
+`lib/notion.ts`(`getStudentFullHistory`에 postgres 분기),
+`lib/studentHistory.postgres.test.ts`(신규, 5건).
 
 ---
 
