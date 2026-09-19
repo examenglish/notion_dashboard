@@ -73,18 +73,40 @@ async function resolveBranchId(): Promise<string | null> {
   return id;
 }
 
-async function resolveRelationIds(table: string, notionIds: string[], branchId: string, key: string, url: string): Promise<Map<string, string>> {
+/**
+ * relation을 걸 때 넘어오는 식별자는 두 종류일 수 있다: 기존 Notion 페이지
+ * id(legacy, notion_id 컬럼과 매칭) 또는 postgres-primary 경로가 방금
+ * pgInsertRow로 만든 행의 고유 id(uuid, notion 미러가 아직 안 끝나
+ * notion_id가 비어있는 상태). 어느 쪽인지 호출부가 알 필요 없게, 두 컬럼을
+ * 모두 OR로 찾는다 — 두 값 공간(Notion page id / Postgres gen_random_uuid())은
+ * 서로 완전히 독립적으로 생성되므로 우연히 같은 값이 다른 의미로 겹칠 확률은
+ * 무시할 수 있다(기존 notion_id 전용 호출부 동작은 그대로 유지됨: 그 값은
+ * 어차피 어떤 행의 id와도 우연히 같을 수 없다). branch_id 조건은 OR 바깥에
+ * AND로 걸려 있어 다른 지점 행은 절대 섞이지 않는다.
+ */
+async function resolveRelationIds(table: string, rawIds: string[], branchId: string, key: string, url: string): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  const ids = [...new Set(notionIds.filter(Boolean))];
+  const ids = [...new Set(rawIds.filter(Boolean))];
   if (!ids.length) return map;
+  const idSet = new Set(ids);
   const inList = ids.map((id) => encodeURIComponent(id)).join(",");
-  const r = await fetch(`${url}/rest/v1/${table}?select=id,notion_id&notion_id=in.(${inList})&branch_id=eq.${branchId}`, {
-    headers: authHeaders(key),
-  });
+  const r = await fetch(
+    `${url}/rest/v1/${table}?select=id,notion_id&branch_id=eq.${branchId}&or=(notion_id.in.(${inList}),id.in.(${inList}))`,
+    { headers: authHeaders(key) }
+  );
   if (!r.ok) return map;
-  const rows = (await r.json()) as { id: string; notion_id: string }[];
-  for (const row of rows) map.set(row.notion_id, row.id);
+  const rows = (await r.json()) as { id: string; notion_id: string | null }[];
+  for (const row of rows) {
+    if (row.notion_id && idSet.has(row.notion_id)) map.set(row.notion_id, row.id);
+    if (idSet.has(row.id)) map.set(row.id, row.id);
+  }
   return map;
+}
+
+/** 단건 조회/패치용 OR 필터 조각 — notion_id 또는 postgres id(uuid) 아무 쪽으로나 매칭한다. 호출부가 반드시 branch_id=eq...를 같은 쿼리에 AND로 덧붙여야 한다. */
+function eitherIdFilter(id: string): string {
+  const enc = encodeURIComponent(id);
+  return `or=(notion_id.eq.${enc},id.eq.${enc})`;
 }
 
 async function upsertRow(table: string, row: Record<string, unknown>, env: { url: string; key: string }): Promise<void> {
@@ -251,11 +273,11 @@ async function requireEnvAndBranch(): Promise<{ env: { url: string; key: string 
   return { env, branchId };
 }
 
-/** notion_id로 특정 행의 컬럼을 직접 갱신한다. 정본 경로이므로 실패 시 throw한다. */
+/** notion_id 또는 postgres id(uuid) 중 아무 쪽으로 넘어와도 안전하게 특정 행의 컬럼을 갱신한다. 정본 경로이므로 실패 시 throw한다. */
 export async function pgPatchByNotionId(entityKey: EntityKey, notionId: string, patch: Record<string, unknown>): Promise<void> {
   const { env, branchId } = await requireEnvAndBranch();
   const r = await fetch(
-    `${env.url}/rest/v1/${TABLE[entityKey]}?notion_id=eq.${encodeURIComponent(notionId)}&branch_id=eq.${branchId}`,
+    `${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${eitherIdFilter(notionId)}`,
     { method: "PATCH", headers: { ...authHeaders(env.key), "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(patch) }
   );
   if (!r.ok) {
@@ -306,7 +328,12 @@ export async function pgSetNotionId(entityKey: EntityKey, pgId: string, notionId
   }
 }
 
-/** notion_id 하나를 다른 엔티티 테이블의 실제 Postgres id(uuid)로 변환한다. 못 찾으면 null. */
+/**
+ * notion_id(legacy) 또는 postgres id(uuid, 아직 Notion 미러가 안 끝난
+ * postgres-primary 신규 행)를 다른 엔티티 테이블의 실제 Postgres id(uuid)로
+ * 변환한다. 이미 postgres id라면 그대로 자기 자신이 반환된다(no-op 조회로
+ * 존재 확인 겸용). 못 찾으면 null.
+ */
 export async function pgResolveRelationId(targetEntity: EntityKey, notionId: string | null | undefined): Promise<string | null> {
   if (!notionId) return null;
   const { env, branchId } = await requireEnvAndBranch();
@@ -314,11 +341,11 @@ export async function pgResolveRelationId(targetEntity: EntityKey, notionId: str
   return map.get(notionId) ?? null;
 }
 
-/** notion_id로 행 하나를 통째로 읽는다(notion.pages.retrieve 대체용). 없으면 null. */
+/** notion_id 또는 postgres id(uuid)로 행 하나를 통째로 읽는다(notion.pages.retrieve 대체용). 없으면 null. */
 export async function pgGetByNotionId(entityKey: EntityKey, notionId: string): Promise<Record<string, unknown> | null> {
   const { env, branchId } = await requireEnvAndBranch();
   const r = await fetch(
-    `${env.url}/rest/v1/${TABLE[entityKey]}?notion_id=eq.${encodeURIComponent(notionId)}&branch_id=eq.${branchId}&select=*`,
+    `${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${eitherIdFilter(notionId)}&select=*`,
     { headers: authHeaders(env.key) }
   );
   if (!r.ok) throw new Error(`Postgres read ${entityKey} failed (${r.status})`);
@@ -371,7 +398,7 @@ export async function pgFindByExactColumn(entityKey: EntityKey, column: string, 
 export async function pgArchiveByNotionId(entityKey: EntityKey, notionId: string): Promise<void> {
   const { env, branchId } = await requireEnvAndBranch();
   const getRes = await fetch(
-    `${env.url}/rest/v1/${TABLE[entityKey]}?notion_id=eq.${encodeURIComponent(notionId)}&branch_id=eq.${branchId}&select=source_payload`,
+    `${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${eitherIdFilter(notionId)}&select=source_payload`,
     { headers: authHeaders(env.key) }
   );
   if (!getRes.ok) throw new Error(`Postgres read ${entityKey} failed (${getRes.status})`);

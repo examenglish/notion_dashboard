@@ -59,6 +59,7 @@ import {
   branchCode,
   fireAndForget,
   pgPatchByNotionId,
+  pgPatchById,
   pgInsertRow,
   pgSetNotionId,
   pgResolveRelationId,
@@ -388,7 +389,41 @@ export async function updateStaffPin(staffId: string, newPin: string) {
 // 막기 위해 캐시가 아니라 매번 최신 명단을 직접 조회해서 확인한다. 최초
 // 비밀번호는 그대로 PIN에 저장하고 "비번변경필요"를 켜서, 등록된 직원이
 // 처음 로그인할 때 반드시 자기 비밀번호로 바꾸도록 유도한다.
-export async function createStaff(name: string, role: "강사" | "조교" | "행정", pin: string) {
+export async function createStaff(name: string, role: "강사" | "조교" | "행정", pin: string): Promise<string> {
+  if (getDbProvider() === "postgres") {
+    const dup = await pgFindByExactColumn("STAFF", "name", name);
+    if (dup) throw new Error(`이미 "${name}" 이름의 계정이 있습니다.`);
+    const row = await pgInsertRow("STAFF", {
+      name,
+      role,
+      must_change_password: true,
+      resigned: false,
+      work_schedule: null,
+      work_days: [],
+    });
+    // pin_hash는 여기서 바로 채운다 — 방금 입력받은 평문이므로 추측이 아니고,
+    // Notion 미러(아래 fireAndForget)가 늦거나 실패해도 로그인이 즉시 된다.
+    const hash = await hashPin(pin);
+    await pgPatchById("STAFF", row.id, { pin_hash: hash });
+    revalidateTag(STAFF_CACHE_TAG);
+    fireAndForget("notion:createStaff", async () => {
+      const created = await notion.pages.create({
+        parent: { data_source_id: DB.STAFF } as any,
+        properties: {
+          이름: { title: [{ text: { content: name } }] },
+          역할: { select: { name: role } },
+          PIN: { rich_text: [{ text: { content: pin } }] },
+          비번변경필요: { checkbox: true },
+        } as any,
+      });
+      await pgSetNotionId("STAFF", row.id, created.id);
+    });
+    // 반환값은 postgres 고유 id일 수 있다(Notion 미러가 아직 안 끝난 경우) —
+    // lib/supabasePgRead.ts의 displayId() 폴백 덕분에 목록/상세 조회, 이후
+    // pgPatchByNotionId 등 relation 참조 모두 이 id로 정상 동작한다.
+    return row.id;
+  }
+
   const res: any = await notion.dataSources.query({ data_source_id: DB.STAFF, page_size: 100 });
   const dup = res.results.find((p: any) => getTitle(p, "이름") === name);
   if (dup) throw new Error(`이미 "${name}" 이름의 계정이 있습니다.`);
@@ -474,6 +509,42 @@ export async function createClass(input: {
   level?: string;
   type?: string;
 }): Promise<string> {
+  const category = input.type === "시험대비" ? "시험대비" : "정규";
+
+  if (getDbProvider() === "postgres") {
+    const row = await pgInsertRow("CLASS", {
+      name: input.name,
+      teachers: input.teachers && input.teachers.length > 0 ? joinTeachers(input.teachers) : null,
+      day_teachers: input.dayTeachers && Object.keys(input.dayTeachers).length > 0 ? serializeDayTeachers(input.dayTeachers) : null,
+      days: input.days ?? [],
+      time_text: input.time ?? null,
+      level: input.level ?? null,
+      category,
+      student_notion_ids: [],
+      assistant_notion_ids: [],
+    });
+    fireAndForget("notion:createClass", async () => {
+      const page = await notion.pages.create({
+        parent: { data_source_id: DB.CLASS } as any,
+        properties: {
+          반이름: { title: [{ text: { content: input.name } }] },
+          ...(input.teachers && input.teachers.length > 0
+            ? { 담당교사: { rich_text: [{ text: { content: joinTeachers(input.teachers) } }] } }
+            : {}),
+          ...(input.dayTeachers && Object.keys(input.dayTeachers).length > 0
+            ? { 요일별담당교사: { rich_text: [{ text: { content: serializeDayTeachers(input.dayTeachers) } }] } }
+            : {}),
+          ...(input.days && input.days.length > 0 ? { 요일: { multi_select: input.days.map((d) => ({ name: d })) } } : {}),
+          ...(input.time ? { 시간: { rich_text: [{ text: { content: input.time } }] } } : {}),
+          ...(input.level ? { 레벨: { select: { name: input.level } } } : {}),
+          구분: { select: { name: category } },
+        } as any,
+      });
+      await pgSetNotionId("CLASS", row.id, page.id);
+    });
+    return row.id;
+  }
+
   const page = await notion.pages.create({
     parent: { data_source_id: DB.CLASS } as any,
     properties: {
@@ -487,7 +558,7 @@ export async function createClass(input: {
       ...(input.days && input.days.length > 0 ? { 요일: { multi_select: input.days.map((d) => ({ name: d })) } } : {}),
       ...(input.time ? { 시간: { rich_text: [{ text: { content: input.time } }] } } : {}),
       ...(input.level ? { 레벨: { select: { name: input.level } } } : {}),
-      구분: { select: { name: input.type === "시험대비" ? "시험대비" : "정규" } },
+      구분: { select: { name: category } },
     } as any,
   });
   await dualWriteEntity("CLASS", page);
@@ -573,12 +644,27 @@ export async function resolveOrCreateClass(name: string): Promise<string> {
   const exact = classes.find((c) => c.name === trimmed || stripClassSuffix(c.name) === trimmed);
   if (exact) return exact.id;
 
+  if (getDbProvider() === "postgres") {
+    const row = await pgInsertRow("CLASS", { name: trimmed, days: [], student_notion_ids: [], assistant_notion_ids: [] });
+    fireAndForget("notion:resolveOrCreateClass", async () => {
+      const page = await notion.pages.create({
+        parent: { data_source_id: DB.CLASS } as any,
+        properties: { 반이름: { title: [{ text: { content: trimmed } }] } } as any,
+      });
+      await pgSetNotionId("CLASS", row.id, page.id);
+    });
+    return row.id;
+  }
+
   const page = await notion.pages.create({
     parent: { data_source_id: DB.CLASS } as any,
     properties: {
       반이름: { title: [{ text: { content: trimmed } }] },
     } as any,
   });
+  // (기존에는 여기서 dualWriteEntity 호출이 빠져 있었다 — Notion-first 배포에서
+  // resolveOrCreateClass로 만든 반이 Supabase 미러에 전혀 안 남는 결함이었다.)
+  await dualWriteEntity("CLASS", page);
   return page.id;
 }
 
@@ -2604,6 +2690,29 @@ export async function updateStudentInfo(input: {
 // the input text happened to mention it, otherwise left blank rather than
 // guessed at.
 export async function createMinimalStudent(name: string, school?: string): Promise<string> {
+  if (getDbProvider() === "postgres") {
+    const row = await pgInsertRow("STUDENT", {
+      name,
+      status: "재원",
+      attendance_started_on: todayKST(),
+      school: school ?? null,
+      class_notion_ids: [],
+    });
+    fireAndForget("notion:createMinimalStudent", async () => {
+      const page = await notion.pages.create({
+        parent: { data_source_id: DB.STUDENT } as any,
+        properties: {
+          이름: { title: [{ text: { content: name } }] },
+          상태: { select: { name: "재원" } },
+          등원일: { date: { start: todayKST() } },
+          ...(school ? { 학교: { rich_text: [{ text: { content: school } }] } } : {}),
+        } as any,
+      });
+      await pgSetNotionId("STUDENT", row.id, page.id);
+    });
+    return row.id;
+  }
+
   const page = await notion.pages.create({
     parent: { data_source_id: DB.STUDENT } as any,
     properties: {
@@ -2639,6 +2748,47 @@ export async function createStudent(input: {
   // 크론을 기다릴 필요 없이 바로 재원으로 저장한다.
   const effectiveStatus =
     input.status === "대기생" && input.enrolledAt && input.enrolledAt <= todayKST() ? "재원" : input.status;
+
+  if (getDbProvider() === "postgres") {
+    const row = await pgInsertRow("STUDENT", {
+      name: input.name,
+      status: effectiveStatus,
+      school: input.school ?? null,
+      grade: input.grade ?? null,
+      phone: input.phone ?? null,
+      guardian_phone: input.parentPhone ?? null,
+      enrolled_on: input.registeredAt ?? null,
+      attendance_started_on: input.enrolledAt ?? null,
+      fee_day: input.tuitionDay ?? null,
+      learning_level: input.learningLevel ?? null,
+      class_notion_ids: input.classIds ?? [],
+      memo: input.memo ?? null,
+    });
+    fireAndForget("notion:createStudent", async () => {
+      const page = await notion.pages.create({
+        parent: { data_source_id: DB.STUDENT } as any,
+        properties: {
+          이름: { title: [{ text: { content: input.name } }] },
+          상태: { select: { name: effectiveStatus } },
+          ...(input.school ? { 학교: { rich_text: [{ text: { content: input.school } }] } } : {}),
+          ...(input.grade ? { 학년: { select: { name: input.grade } } } : {}),
+          ...(input.phone ? { 연락처: { phone_number: input.phone } } : {}),
+          ...(input.parentPhone ? { 학부모연락처: { phone_number: input.parentPhone } } : {}),
+          ...(input.registeredAt ? { 등록일: { date: { start: input.registeredAt } } } : {}),
+          ...(input.enrolledAt ? { 등원일: { date: { start: input.enrolledAt } } } : {}),
+          ...(input.tuitionDay !== undefined ? { 회비일: { number: input.tuitionDay } } : {}),
+          ...(input.learningLevel ? { 학습레벨: { rich_text: [{ text: { content: input.learningLevel } }] } } : {}),
+          ...(input.classIds && input.classIds.length > 0
+            ? { 소속반: { relation: input.classIds.map((id) => ({ id })) } }
+            : {}),
+          ...(input.memo ? { 메모: { rich_text: [{ text: { content: input.memo } }] } } : {}),
+        } as any,
+      });
+      await pgSetNotionId("STUDENT", row.id, page.id);
+    });
+    return row.id;
+  }
+
   const page = await notion.pages.create({
     parent: { data_source_id: DB.STUDENT } as any,
     properties: {

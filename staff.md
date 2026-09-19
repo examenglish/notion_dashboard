@@ -4,9 +4,107 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (PART 5 신규 — PIN 로그인 Postgres 전환(코드 완성,
-아직 미배포) + 남은 write 함수 전수 분류(A/B 없음, 전부 C — 이유 재검증함) +
-manual_steps.title 스키마 버그 발견. 아래 "PART 5" 섹션 먼저 확인)
+마지막 업데이트: 2026-09-19 (PART 6 신규 — PART 5의 PIN 전환 실제 production
+배포+검증 완료(원장 확인) + pgResolveRelationId 등 dual-id 지원으로 확장 +
+학생/직원/반 생성 postgres-primary 전환 + manual_steps.title migration SQL
+작성(미적용) + vitest 테스트 인프라 추가. 아래 "PART 6" 섹션 먼저 확인)
+
+---
+
+## PART 6 — relation resolver dual-id 지원 + 학생/직원/반 생성 postgres-primary + manual_steps 결정 (2026-09-19)
+
+### 상태: 🟢 코드+테스트+build 완료. PART 5의 PIN 전환은 원장이 production에서
+직접 4종 reconciliation curl(student-read-check/write-smoke-test/
+backfill-pin-hash/retry-failures, 사직/금정 둘 다 0 mismatch·failed=0)과
+브라우저 로그인까지 검증 완료. **이번 PART 6 변경분(관계 resolver, 학생/직원/
+반 postgres-primary 생성)은 코드 리뷰 시점까지 완료 — production 배포는
+아래 "배포 전 확인" 순서 확인 후 진행.**
+
+### 이번 세션에서 한 일
+1. **`lib/supabaseRepo.ts`의 relation resolver를 notion_id/postgres id 겸용으로
+   확장**(`resolveRelationIds`/`pgResolveRelationId`/`pgGetByNotionId`/
+   `pgPatchByNotionId`/`pgArchiveByNotionId`). 기존엔 `notion_id` 컬럼만 봤는데,
+   이제 `or=(notion_id.eq.X,id.eq.X)`(단건)/`or=(notion_id.in.(...),id.in.(...))`
+   (배치)로 두 컬럼을 동시에 본다. **항상 `branch_id=eq.<branchId>`를 AND로
+   같이 걸어서** 다른 지점 행이 섞일 수 없게 했다. 기존 notion_id 전용 호출은
+   전혀 영향 없음(postgres uuid와 notion page id는 서로 다른 난수 공간이라
+   우연히 값이 겹칠 확률이 무시 가능).
+2. **`lib/supabasePgRead.ts`에 `displayId()` 추가**하고 STAFF/CLASS/STUDENT
+   READ 경로(`pgListStaff`/`pgListClassesRaw`/`pgStudentNameMap`/
+   `pgStaffNameMap`/`classNamePgMap`/`mapPgStudent`/`pgGetStudent`)에 전부
+   적용 — `notion_id`가 아직 null인(postgres-primary로 막 생성된) 행도
+   `id` 컬럼으로 정상 표시/조회되게 했다. **이게 없었으면 1번만으로는
+   부족했다** — 이 파일 헤더에 이미 "반환하는 id는 항상 notion_id"라고
+   명시돼 있었고 실제로 그렇게 짜여 있어서, resolver만 고치고 READ의
+   id 폴백을 안 넣으면 새로 만든 학생/직원/반이 목록에 `id: null`로 뜨는
+   문제가 그대로 남았을 것이다(Notion 미러가 끝날 때까지, 혹은 미러가
+   실패하면 영구히).
+3. **`createStaff`/`createClass`/`resolveOrCreateClass`/`createStudent`/
+   `createMinimalStudent`를 postgres-primary로 전환**(`getDbProvider()===
+   'postgres'`일 때만, 아니면 기존 Notion-first 경로 그대로 — PIN
+   해시(`hashPin`)는 STAFF 생성 시 그 자리에서 바로 채워 Notion 미러를
+   기다리지 않고도 즉시 로그인 가능). 각 함수의 Postgres 컬럼은
+   `supabase/scripts/migrate_notion_to_supabase.mjs`의 T() 매핑과 한 줄씩
+   대조 완료. STUDENT.class_notion_ids/CLASS.student_notion_ids·
+   assistant_notion_ids는 (기존 `assignClassAssistants`와 동일하게) notion_id/
+   postgres id를 그대로 원본 배열에 저장하는 방식이라 별도 relation 해석이
+   필요 없다는 것도 스키마로 확인했다(`class_students`/`class_staff` 파생
+   테이블은 dual-write 경로가 건드리지 않는 배치 마이그레이션 전용).
+   - 부수 발견 및 수정: `resolveOrCreateClass`의 기존 Notion-first 경로가
+     `dualWriteEntity` 호출이 아예 빠져 있어서(원래 있던 버그, 이번 작업과
+     무관) Notion에서 반을 만들어도 Supabase 미러에 전혀 안 남고 있었다 —
+     한 줄 추가해서 고쳤다.
+4. **`manual_steps.title` — 추측 없이 실제 사용처 추적 후 "컬럼 추가"로
+   결론**: `components/manuals/ManualUploadClient.tsx`("단계 제목" 입력),
+   `ManualReviewClient.tsx`, `lib/notion.ts`의 `ManualStepRecord`/
+   `createManualSteps`/`updateManualStep`이 전부 이 값을 실제 데이터로
+   읽고 쓴다 — 잘못된 매퍼가 아니라 `001_initial_schema.sql` 작성 당시
+   빠뜨린 컬럼이었다. **`supabase/schema/004_manual_steps_title.sql`
+   작성(`alter table manual_steps add column if not exists title text`,
+   NOT NULL 안 검, 기존 행 유무를 이 세션에서 확인할 수 없어서 항상 안전한
+   쪽으로 작성) — 지시대로 실제 적용은 하지 않음, 원장이 Supabase에서
+   직접 실행 필요.**
+5. **테스트 인프라 신규 추가**(이 저장소에 지금까지 테스트가 전혀 없었음—
+   `package.json`에 `test`/`typecheck` 스크립트도 없었다): `vitest` +
+   `vite`를 devDependency로 추가(`--legacy-peer-deps`로 설치, `@types/node`
+   버전 불일치 경고 — 기존 문제, 안 건드림), `vitest.config.mts`,
+   `lib/supabaseRepo.test.ts`(7개: legacy notion_id/native uuid/branch
+   isolation 4종/unresolvable id), `lib/supabasePgRead.test.ts`(6개:
+   `displayId` 2개 + `pgGetStudent` dual-id/branch isolation 4개) — 전부
+   실제 fetch 대신 가짜 PostgREST 파서로 branch_id 스코프까지 검증한다.
+   `npm run test`/`npm run typecheck` 스크립트 추가.
+6. **`npm run lint`은 이 저장소에 ESLint 설정 자체가 없어서(대화형 초기
+   설정 프롬프트만 뜸) 실행 불가 — 이번 세션이 만든 문제가 아니라 원래부터
+   없었다.** 새로 설정하면 기존 코드 전체에 처음 보는 규칙이 걸려 범위 밖의
+   큰 변경이 될 수 있어 손대지 않았다. `tsc --noEmit`/`vitest run`/
+   `next build`로 검증을 대체했다.
+7. **검증 결과**: `npx tsc --noEmit` 통과, `npx vitest run` 13/13 통과,
+   `npm run build` 통과.
+
+### ⬜ 배포 전 확인 — production 배포는 이 순서로
+1. 위 4번 SQL(`004_manual_steps_title.sql`)은 **이번 배포와 무관**(manual_steps
+   쓰기 경로는 아직 아무도 안 씀 — NOTION_DB_MANUAL 계열 env가 여전히
+   미설정). 배포를 막을 필요는 없지만, PART 1의 "매뉴얼 DB 설정" 버튼을
+   누르기 **전에는** 반드시 먼저 적용해야 한다(안 하면 매뉴얼 스텝 생성이
+   500 에러).
+2. 나머지 변경(relation resolver, 학생/직원/반 생성)은 기존 데이터를 전혀
+   건드리지 않고(읽기 쿼리에 OR 조건 하나 추가, 쓰기 경로는 신규 생성
+   함수만 분기 추가) 순수 추가적이라 스키마 마이그레이션 필요 없음 —
+   바로 배포 가능.
+3. 배포 후 스모크테스트로 반드시 확인할 것: (a) 기존 학생/직원/반 조회·수정이
+   여전히 정상(= notion_id 있는 행 경로가 안 깨졌는지), (b) 신규 직원 등록
+   1건 → 즉시 목록에 정상 표시되는지(= id가 null로 안 뜨는지) → 그 직원으로
+   로그인까지 되는지(pin_hash 즉시 반영 확인), (c) 신규 반 생성 1건 → 목록
+   표시 확인, (d) 사직/금정 각각 자기 지점 데이터만 보이는지(branch isolation).
+
+### 신규/변경 파일
+`lib/supabaseRepo.ts`(dual-id resolver), `lib/supabasePgRead.ts`(`displayId()` +
+전 READ 함수 적용), `lib/notion.ts`(`createStaff`/`createClass`/
+`resolveOrCreateClass`/`createStudent`/`createMinimalStudent` postgres-primary
+전환), `supabase/schema/004_manual_steps_title.sql`(신규, 미적용),
+`vitest.config.mts`/`lib/supabaseRepo.test.ts`/`lib/supabasePgRead.test.ts`
+(신규), `package.json`/`package-lock.json`(vitest/vite devDependency +
+test/typecheck 스크립트).
 
 ---
 
@@ -109,6 +207,13 @@ git push도 이번 세션 역시 GitHub 인증이 없어서 실패(아래 "미�
    받아 curl에 쓰려던 시도는 **harness의 auto-mode classifier가 차단**했다
    (secret 추출류 명령으로 판단해 거부) — 우회 시도하지 않고 중단함.
    결과적으로 PART 4가 요구한 reconciliation 3종은 이번 세션도 실행 못 함.
+
+### ✅ 후속 세션에서 완료 확인됨 (PART 6 참고)
+아래 "미완료" 1~2번은 실제로 배포·검증 완료됐다 — 사직/금정 둘 다
+`backfill-pin-hash`(15명/9명, failed=0), `student-read-check`(135/135,
+86/86 mismatch 0), `write-smoke-test`(verified, crossBranchLeak=false),
+`retry-failures`(0/0/0) 전부 정상, 실제 브라우저 로그인까지 원장이 직접
+확인함. 아래는 그 당시 작성된 원본 기록(참고용으로 남김).
 
 ### ⬜ 미완료 — 다음 세션(또는 원장)이 바로 할 것
 1. **PIN 전환 코드는 아직 배포 전이다.** 배포하면(코드는 이미 `getDbProvider`나

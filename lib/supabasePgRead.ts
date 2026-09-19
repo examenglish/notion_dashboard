@@ -66,13 +66,24 @@ function notArchived(row: any): boolean {
   return row?.source_payload?.archived !== true;
 }
 
+/**
+ * 화면/후속 요청에 노출할 "id"는 원래 항상 notion_id였다(위 파일 헤더 참고).
+ * postgres-primary 경로(STAFF/CLASS/STUDENT create)가 Notion 미러보다 먼저
+ * 끝나면 이 시점의 notion_id는 아직 null이다 — 그 경우에만 postgres 고유
+ * id(uuid)로 대체한다. notion_id가 채워진 행(기존 이전 데이터, 또는 미러가
+ * 이미 끝난 신규 행)은 지금까지와 동일하게 notion_id를 그대로 쓴다.
+ */
+export function displayId(row: Record<string, unknown>): string {
+  return (row.notion_id as string | null) ?? (row.id as string);
+}
+
 // teachers/day_teachers는 원본 텍스트 그대로 돌려준다 — splitTeachers/
 // parseDayTeachers(lib/format.ts)로 파싱하는 건 호출부(lib/notion.ts)가
 // Notion 경로와 동일하게 담당한다.
 export async function pgListClassesRaw() {
   const rows = await pgFetch("classes", "select=*");
   return rows.filter(notArchived).map((r) => ({
-    id: r.notion_id as string,
+    id: displayId(r),
     name: r.name as string,
     teachersRaw: (r.teachers as string) ?? "",
     dayTeachersRaw: (r.day_teachers as string) ?? "",
@@ -89,17 +100,17 @@ export async function pgListStaff() {
   const rows = await pgFetch("staff", "select=*");
   return rows
     .filter((r) => !r.resigned)
-    .map((r) => ({ id: r.notion_id, name: r.name, role: r.role, workHoursRaw: r.work_schedule ?? "" }));
+    .map((r) => ({ id: displayId(r), name: r.name, role: r.role, workHoursRaw: r.work_schedule ?? "" }));
 }
 
 export async function pgStudentNameMap(): Promise<Map<string, string>> {
-  const rows = await pgFetch("students", "select=notion_id,name");
-  return new Map(rows.map((r) => [r.notion_id, r.name]));
+  const rows = await pgFetch("students", "select=id,notion_id,name");
+  return new Map(rows.map((r) => [displayId(r), r.name]));
 }
 
 export async function pgStaffNameMap(): Promise<Map<string, string>> {
-  const rows = await pgFetch("staff", "select=notion_id,name");
-  return new Map(rows.map((r) => [r.notion_id, r.name]));
+  const rows = await pgFetch("staff", "select=id,notion_id,name");
+  return new Map(rows.map((r) => [displayId(r), r.name]));
 }
 
 type PgTaskRow = {
@@ -213,9 +224,9 @@ async function studentLatestExamMap(): Promise<Map<string, LatestExam>> {
 }
 
 async function classNamePgMap(): Promise<Map<string, string>> {
-  const rows = await pgFetch("classes", "select=notion_id,name,source_payload");
+  const rows = await pgFetch("classes", "select=id,notion_id,name,source_payload");
   return new Map(
-    rows.filter(notArchived).map((r) => [r.notion_id as string, stripClassSuffix((r.name as string) ?? "")])
+    rows.filter(notArchived).map((r) => [displayId(r), stripClassSuffix((r.name as string) ?? "")])
   );
 }
 
@@ -227,7 +238,7 @@ function mapPgStudent(
   examMap: Map<string, LatestExam>,
   classNames: Map<string, string>
 ) {
-  const notionId = r.notion_id as string;
+  const notionId = displayId(r);
   const classIds = (r.class_notion_ids as string[]) ?? [];
   const agg = aggMap.get(notionId);
   const enrolledAt = (r.attendance_started_on as string | null) ?? null;
@@ -274,8 +285,11 @@ export async function pgSearchStudents(query: string, classId?: string, includeI
 }
 
 export async function pgGetStudent(id: string): Promise<PgStudentRecord | null> {
+  // id는 notion_id(legacy)일 수도, postgres-primary가 방금 만든 자체 uuid일
+  // 수도 있다 — displayId()가 만드는 값과 대칭을 맞춰 둘 다 매칭한다.
+  const enc = encodeURIComponent(id);
   const [rows, aggMap, examMap, classNames] = await Promise.all([
-    pgFetch("students", `notion_id=eq.${encodeURIComponent(id)}&select=*`),
+    pgFetch("students", `or=(notion_id.eq.${enc},id.eq.${enc})&select=*`),
     studentDailyAggMap(),
     studentLatestExamMap(),
     classNamePgMap(),
