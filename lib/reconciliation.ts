@@ -1,7 +1,7 @@
 // Notion(정본) <-> Supabase(미러) 실시간 대조 도구. dual-write(lib/supabaseRepo.ts)가
 // 계속 정상 동작하는지 운영 중에 주기적으로 확인하고, 실패 큐(dual_write_failures)를
 // 재처리하는 영구 운영 도구다 — 마이그레이션 1회성 러너와 달리 계속 남아있는다.
-import { notion, DB, listClasses, listStaff, listPoolTasks, listManuals } from "./notion";
+import { notion, DB, listClasses, listStaff, listPoolTasks, listManuals, searchStudents } from "./notion";
 import { SOURCES, OPTIONAL_SOURCES, TABLE, makeT, payload, rel } from "@/supabase/scripts/migrate_notion_to_supabase.mjs";
 import { dualWriteEntity, branchCode } from "./supabaseRepo";
 
@@ -58,6 +58,28 @@ export async function shadowReadCompare() {
     compareDomain("manuals", () => listManuals()),
   ]);
   return { classes, staff, poolTasks, manuals };
+}
+
+async function withStudentProvider<T>(provider: "notion" | "postgres", fn: () => Promise<T>): Promise<T> {
+  const prev = process.env.ACADEMY_STUDENT_READ_PROVIDER;
+  process.env.ACADEMY_STUDENT_READ_PROVIDER = provider;
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env.ACADEMY_STUDENT_READ_PROVIDER;
+    else process.env.ACADEMY_STUDENT_READ_PROVIDER = prev;
+  }
+}
+
+/**
+ * 학생 목록(searchStudents(""))을 Notion 경로와 Postgres 경로(daily_records
+ * 재집계) 양쪽으로 각각 호출해 필드 단위로 대조한다 — student READ를
+ * ACADEMY_STUDENT_READ_PROVIDER=postgres로 실제 전환하기 전, "Notion rollup
+ * 결과를 그대로 베끼지 않고 Postgres 집계로 재구현"한 값이 실질적으로
+ * 같은지 확인하는 용도. 불일치가 0이 될 때까지는 전환하지 않는다.
+ */
+export async function studentReadCompare() {
+  return compareDomain("students", (provider) => withStudentProvider(provider, () => searchStudents("", undefined, true)));
 }
 
 type Env = { url: string; key: string };

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runReconciliation, retryDualWriteFailures, shadowReadCompare, planOrProvisionGeumjeongDatabases, writeSmokeTest } from "@/lib/reconciliation";
+import { runReconciliation, retryDualWriteFailures, shadowReadCompare, planOrProvisionGeumjeongDatabases, writeSmokeTest, studentReadCompare } from "@/lib/reconciliation";
 import { notion } from "@/lib/notion";
 
 export const dynamic = "force-dynamic";
@@ -25,9 +25,14 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => ({}));
-  const mode: string = ["retry-failures", "list-databases", "shadow-read", "provision-geumjeong-dbs", "write-smoke-test"].includes(
-    body?.mode
-  )
+  const mode: string = [
+    "retry-failures",
+    "list-databases",
+    "shadow-read",
+    "provision-geumjeong-dbs",
+    "write-smoke-test",
+    "student-read-check",
+  ].includes(body?.mode)
     ? body.mode
     : "report";
 
@@ -43,6 +48,10 @@ export async function POST(req: NextRequest) {
     if (mode === "write-smoke-test") {
       const result = await writeSmokeTest();
       return NextResponse.json({ mode, ...result });
+    }
+    if (mode === "student-read-check") {
+      const result = await studentReadCompare();
+      return NextResponse.json({ ok: true, mode, ...result });
     }
     if (mode === "provision-geumjeong-dbs") {
       const result = await planOrProvisionGeumjeongDatabases(body?.execute === true);
