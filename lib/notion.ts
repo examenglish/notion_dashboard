@@ -1358,6 +1358,63 @@ export async function getStudentPeriodReport(
   to: string,
   classById?: Map<string, string>
 ): Promise<StudentPeriodReport> {
+  if (getDbProvider() === "postgres") {
+    const encStudent = encodeURIComponent(studentId);
+    const [student, dailyRows, examRows, resolvedClassById] = await Promise.all([
+      getStudent(studentId),
+      pgQueryRaw("DAILY_RECORD", `student_notion_ids=cs.{${encStudent}}&record_date=gte.${from}&record_date=lte.${to}`),
+      pgQueryRaw("EXAM_SCORE", `student_notion_ids=cs.{${encStudent}}&exam_date=gte.${from}&exam_date=lte.${to}`),
+      classById ? Promise.resolve(classById) : classNamePgMap(),
+    ]);
+
+    const daily = dailyRows
+      .filter(pgNotArchived)
+      .map((r) => ({
+        date: (r.record_date as string) ?? "",
+        attendance: (r.attendance as string | null) ?? null,
+        homeworkDone: !!r.homework_done,
+        vocabResult: (r.vocab_result as string | null) ?? null,
+        progress: (r.progress_content as string) ?? "",
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    const loggedDays = daily.length;
+    // getMonthlyStudentMetrics와 동일한 기준("결석이 아니면 출석", 분모는
+    // 기록된 전체 일수) — 다른 화면 누적 지표와 학부모 리포트 수치가
+    // 어긋나 보이지 않게 그대로 재사용.
+    const attendanceRate = loggedDays === 0 ? null : daily.filter((d) => d.attendance !== "결석").length / loggedDays;
+    const homeworkRate = loggedDays === 0 ? null : daily.filter((d) => d.homeworkDone).length / loggedDays;
+    const vocabPassRate = loggedDays === 0 ? null : daily.filter((d) => d.vocabResult === "통과").length / loggedDays;
+    const progressLog = daily.filter((d) => d.progress.trim() !== "").map((d) => ({ date: d.date, progress: d.progress }));
+
+    const examScores = examRows
+      .filter(pgNotArchived)
+      .map((r) => ({
+        date: (r.exam_date as string) ?? "",
+        examName: (r.exam_name as string) ?? "",
+        subject: (r.subject as string | null) ?? null,
+        score: (r.score as number | null) ?? null,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    return {
+      studentId,
+      studentName: student.name,
+      school: student.school,
+      grade: student.grade,
+      classNames: student.classIds.map((id) => resolvedClassById.get(id) ?? "알수없음"),
+      parentPhone: student.parentPhone,
+      from,
+      to,
+      loggedDays,
+      attendanceRate,
+      homeworkRate,
+      vocabPassRate,
+      progressLog,
+      examScores,
+    };
+  }
+
   const dateFilter = {
     and: [
       { property: "학생", relation: { contains: studentId } },
@@ -1428,7 +1485,7 @@ export async function getStudentsPeriodReports(
   from: string,
   to: string
 ): Promise<StudentPeriodReport[]> {
-  const classById = await classNameMap();
+  const classById = getDbProvider() === "postgres" ? await classNamePgMap() : await classNameMap();
   return Promise.all(studentIds.map((id) => getStudentPeriodReport(id, from, to, classById)));
 }
 

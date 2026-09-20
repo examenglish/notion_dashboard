@@ -4,7 +4,16 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-19 (**PART 21 신규 — `getClinicCompliance`/
+마지막 업데이트: 2026-09-20 (**PART 22 신규 — `getStudentPeriodReport`
+(학부모 발송 학습현황 리포트) Notion-only → PostgreSQL-primary 전환.**
+Phase D 원래 목록의 "reports" 항목 — 기간 필터(`record_date gte/lte`)로
+`daily_records`/`exam_scores`를 직접 조회하고, 학생 기본정보는 이미
+provider-aware인 `getStudent()`를 재사용. `getStudentsPeriodReports`도
+postgres일 때 `classNamePgMap()`을 쓰도록 같이 정리(불필요한 Notion
+반 목록 재조회 제거). 테스트 2건 신규, 103/103 통과, tsc/build 통과.
+PART 21까지 완료 처리는 유지. 아래 "PART 22" 먼저 확인)
+
+이전 업데이트: 2026-09-19 (**PART 21 — `getClinicCompliance`/
 `getClinicCoverageGaps` 전환으로 Phase C가 찾은 "순수 Notion 전용" 함수
 목록이 사실상 소진됨.** 클리닉 지시 이행 확인(TODO 유형=클리닉 +
 `clinic_report_notion_ids`로 보고 연결)과 클리닉 케어 공백 학생 찾기
@@ -189,6 +198,35 @@ gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
 PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
 004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
+
+---
+
+## PART 22 — getStudentPeriodReport(학부모 리포트) Notion-only → PostgreSQL-primary 전환 (2026-09-20)
+
+### 배경
+전날 세션 보고 후 원장이 "다음은?"으로 이어서 진행 지시. 원래 Phase D
+지시에 있던 "reports" 항목이 아직 안 끝나있어(Phase C 분류에서
+"4:notion-only"로 남아있던 것) 이어서 처리.
+
+### 전환 내용
+`getStudentPeriodReport(studentId, from, to, classById?)` —
+`daily_records`/`exam_scores`를 `student_notion_ids cs.` + 날짜
+범위(`record_date`/`exam_date` gte/lte)로 직접 조회. 학생 기본정보
+(이름/학교/학년/반/학부모연락처)는 새로 조회 로직을 만들지 않고 이미
+provider-aware인 `getStudent()`를 그대로 재사용(다른 곳에서도 반복
+쓴 패턴). `getStudentsPeriodReports`(여러 학생 배치)도 postgres일 때
+`classNameMap()`(Notion) 대신 `classNamePgMap()`을 쓰도록 같이 정리 —
+불필요한 Notion 반 목록 재조회 제거.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(103/103, 신규 2건 — 기간 안
+기록만으로 출석/과제/단어통과율 계산 + 반이름/학부모연락처 채움, branch
+isolation)/`npm run build` 전부 통과.
+
+### 신규/변경 파일
+`lib/notion.ts`(`getStudentPeriodReport`에 postgres 분기,
+`getStudentsPeriodReports`가 postgres일 때 `classNamePgMap` 사용),
+`lib/studentReport.postgres.test.ts`(신규, 2건).
 
 ---
 
