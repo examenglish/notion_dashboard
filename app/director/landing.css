@@ -1,0 +1,218 @@
+@font-face {
+  font-family: "Black Han Sans";
+  src: url("/director/black-han-sans.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+.director-landing {
+  --landing-ink: #18323f;
+  --landing-muted: #74756f;
+  --landing-amber: #d9963a;
+  --landing-line: #e4dcce;
+  --landing-surface: #fffdf8;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  color: var(--landing-ink);
+  background: linear-gradient(120deg, #f4f0e8 3.64%, #fdfbf6 53.64%, #fffdf8 94.55%);
+  font-family: "Pretendard", "Noto Sans KR", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.director-landing * { box-sizing: border-box; }
+
+.landing-header {
+  width: 100%;
+  min-height: 96px;
+  padding: 0 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.landing-logo { display: inline-flex; align-items: center; width: 177px; height: 42px; flex: none; }
+.landing-logo img { display: block; width: 177px; height: auto; }
+.landing-actions { display: flex; align-items: center; gap: 10px; }
+.director-landing .landing-account-menu button {
+  min-height: 40px;
+  padding: 3px 10px;
+  color: var(--landing-ink);
+  background: var(--landing-surface);
+  border: 1px solid var(--landing-line);
+  border-radius: 999px;
+}
+.director-landing .landing-account-menu button:hover { background: #f5ebd6; }
+
+.director-landing .landing-action {
+  height: 40px;
+  padding: 0 17px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: none;
+}
+.director-landing .landing-action-primary { color: #fff; background: var(--landing-ink); }
+.director-landing .landing-action-primary:hover { color: #fff; background: #294b5b; }
+.director-landing .landing-action-outline { color: #2e2c28; background: var(--landing-surface); border-color: var(--landing-line); }
+.director-landing .landing-action-outline:hover { background: #f5ebd6; }
+
+.landing-hero {
+  flex: 1;
+  min-height: 600px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 64px max(32px, calc((100vw - 1200px) / 2));
+}
+.landing-content { display: flex; width: min(1040px, 100%); flex-direction: column; align-items: center; gap: 20px; }
+.landing-title-row { display: flex; align-items: center; justify-content: center; gap: 14px; }
+.landing-title-row h1 {
+  margin: 0;
+  color: var(--landing-ink);
+  font-family: "Black Han Sans", "Arial Black", "Pretendard", sans-serif;
+  font-size: 66px;
+  font-weight: 400;
+  line-height: 74px;
+  letter-spacing: -0.66px;
+  white-space: nowrap;
+}
+.landing-title-row img { display: block; width: 62px; height: 53px; object-fit: contain; }
+.landing-promise { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
+.landing-promise p { margin: 0; }
+.landing-promise-en { color: var(--landing-ink); font-size: 21px; line-height: 28px; font-weight: 700; letter-spacing: -0.1px; }
+.landing-promise-ko { color: var(--landing-muted); font-size: 14px; line-height: 22px; font-weight: 500; letter-spacing: -0.07px; }
+
+.landing-input-area { position: relative; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+.landing-search-wrap { position: relative; width: 100%; }
+.landing-search {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  height: 76px;
+  padding: 14px 18px;
+  border: 2px solid var(--landing-amber);
+  border-radius: 26px;
+  background: var(--landing-surface);
+  box-shadow: 0 4px 4px -1px rgba(12, 12, 13, 0.1), 0 4px 4px -1px rgba(12, 12, 13, 0.05);
+}
+.landing-search:focus-within { outline: 2px solid var(--landing-ink); outline-offset: 3px; }
+.landing-ai-icon { width: 42px; height: 42px; flex: none; display: grid; place-items: center; border-radius: 14px; background: #fcecce; }
+.landing-ai-icon img { display: block; width: 19px; height: 19px; }
+.director-landing .landing-search textarea {
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  color: var(--landing-ink);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  outline: none;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  resize: none;
+  overflow-y: auto;
+}
+.landing-search textarea::placeholder { color: var(--landing-ink); opacity: 1; }
+.director-landing .landing-enter {
+  flex: none;
+  padding: 7px 12px;
+  color: #38332b;
+  background: #f5ebd6;
+  border: 1px solid #e0c9ab;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 14px;
+  opacity: 1;
+}
+.director-landing .landing-enter:hover { background: #f2dfbc; }
+.director-landing .landing-enter:disabled { opacity: 1; cursor: default; }
+
+.landing-quick-examples { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; }
+.landing-quick-examples > span { color: var(--landing-amber); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.director-landing .landing-quick-examples button,
+.director-landing .landing-command-menu button,
+.director-landing .landing-candidates button {
+  padding: 7px 12px;
+  color: var(--landing-ink);
+  background: var(--landing-surface);
+  border: 1px solid var(--landing-line);
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 14px;
+  white-space: nowrap;
+}
+.director-landing .landing-quick-examples button:hover,
+.director-landing .landing-command-menu button:hover,
+.director-landing .landing-candidates button:hover { background: #fcecce; }
+.landing-command-menu {
+  position: absolute;
+  z-index: 2;
+  top: 84px;
+  left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 100%;
+  margin: 0;
+  padding: 12px;
+  background: var(--landing-surface);
+  border: 1px solid var(--landing-line);
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(24, 50, 63, 0.12);
+  list-style: none;
+}
+.landing-result ul { margin: 6px 0 0; padding-left: 18px; }
+.landing-result { max-width: 100%; margin: 0; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 20px; }
+.landing-result-success { color: #185a3d; background: #e7f5eb; }
+.landing-result-error { color: #853a2c; background: #fff0e9; }
+.landing-candidates { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.landing-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+.landing-footer {
+  min-height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px 56px;
+  border-top: 1px solid var(--landing-line);
+  font-size: 10px;
+  line-height: 16px;
+}
+.landing-footer p { margin: 0; color: var(--landing-muted); }
+.landing-footer > div { display: flex; flex-wrap: wrap; gap: 22px; color: var(--landing-ink); font-weight: 500; }
+
+@media (max-width: 700px) {
+  .landing-header { min-height: 80px; padding: 16px 22px; }
+  .landing-logo, .landing-logo img { width: 132px; }
+  .landing-actions { gap: 6px; }
+  .director-landing .landing-action { height: 34px; padding: 0 10px; font-size: 11px; }
+  .landing-hero { min-height: 520px; padding: 52px 22px; }
+  .landing-content { gap: 18px; }
+  .landing-title-row { gap: 8px; }
+  .landing-title-row h1 { font-size: clamp(40px, 11vw, 66px); line-height: 1.1; }
+  .landing-title-row img { width: 46px; height: 40px; }
+  .landing-promise-en { font-size: 18px; }
+  .landing-search { height: 66px; gap: 9px; padding: 10px 12px; border-radius: 22px; }
+  .landing-ai-icon { width: 38px; height: 38px; }
+  .director-landing .landing-search textarea { font-size: 12px; }
+  .director-landing .landing-enter { padding: 7px 8px; font-size: 10px; }
+  .director-landing .landing-account-menu button { min-height: 34px; padding: 2px 6px; }
+  .landing-footer { min-height: 100px; padding: 20px 22px; flex-direction: column; align-items: flex-start; gap: 12px; }
+  .landing-footer > div { gap: 14px; }
+}

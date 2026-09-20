@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import ManualHelpLink from "@/components/ManualHelpLink";
 import { SLASH_COMMAND_LIST } from "@/lib/slash-commands";
 
@@ -29,6 +30,14 @@ const ROLE_PLACEHOLDER: Record<string, string> = {
   행정: "연락 결과나 처리할 업무를 입력하세요",
 };
 
+const LANDING_COMMANDS = [
+  { label: "/학생 관리", href: "/director/students" },
+  { label: "/과제", href: "/director/input?tab=records" },
+  { label: "/재시험", command: "재시" },
+  { label: "/상담", command: "상담" },
+  { label: "/출력", href: "/director/reports" },
+] as const;
+
 // 대시보드의 유일한 AI 입력창(섹션2 "구글 첫페이지" 요청에 따라 전면 배치) —
 // 기존에 따로 있던 "업무 만들기"(AiTaskComposer)와 "학생기록 자연어 입력"
 // (NaturalLanguageInput)을 하나로 합쳤다. 백엔드는 두 로직을 그대로
@@ -37,13 +46,16 @@ export default function AiUnifiedInput({
   role,
   onSaved,
   fullScreen = false,
+  figma = false,
 }: {
   role: string;
   onSaved?: () => void;
   // true: 사이드바/상단바 없이 이 컴포넌트 혼자 화면 전체를 채우는 랜딩
   // (app/director/page.tsx). false: 다른 화면에 카드 형태로 얹는 경우용.
   fullScreen?: boolean;
+  figma?: boolean;
 }) {
+  const router = useRouter();
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -162,6 +174,90 @@ export default function AiUnifiedInput({
   }
 
   const placeholder = ROLE_PLACEHOLDER[role] ?? "무엇을 처리할까요?";
+
+  if (figma) {
+    return (
+      <div className="landing-input-area">
+        <div className="landing-search-wrap">
+          <form className="landing-search" onSubmit={handleSubmit} role="search">
+            <span className="landing-ai-icon"><Image src="/director/ai-icon.svg" alt="" width={19} height={19} /></span>
+            <label htmlFor="director-ai-prompt" className="landing-sr-only">이그잼 AI에게 요청하기</label>
+            <textarea
+              ref={textareaRef}
+              id="director-ai-prompt"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              placeholder="무엇을 함께 해결할까요?   ‘/’를 입력하면 빠른 명령이 열립니다."
+              rows={1}
+              disabled={saving}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  if (slashMatches.length > 0) pickSlashCommand(slashMatches[0].cmd);
+                  else handleSubmit(event);
+                }
+                if (event.key === "Escape") setText("");
+              }}
+            />
+            <button type="submit" className="landing-enter" disabled={saving || !text.trim()}>
+              {saving ? "처리 중" : "Enter ↵"}
+            </button>
+          </form>
+          {slashMatches.length > 0 && (
+            <ul className="landing-command-menu" aria-label="빠른 명령 선택">
+              {slashMatches.map((command) => (
+                <li key={command.cmd}>
+                  <button type="button" onClick={() => pickSlashCommand(command.cmd)} title={command.example}>
+                    /{command.cmd} · {command.description}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="landing-quick-examples" aria-label="빠른 명령">
+          <span>/ 빠른 명령</span>
+          {LANDING_COMMANDS.map((command) => (
+            <button
+              type="button"
+              key={command.label}
+              onClick={() => "href" in command ? router.push(command.href) : pickSlashCommand(command.command)}
+            >
+              {command.label}
+            </button>
+          ))}
+        </div>
+
+        {message && <p className={`landing-result ${message.ok ? "landing-result-success" : "landing-result-error"}`} role="status">{message.text}</p>}
+        {candidates && (
+          <div className="landing-candidates" aria-label="학생 선택">
+            {candidates.map((candidate) => (
+              <button type="button" key={candidate.id} disabled={saving} onClick={() => pickCandidate(candidate.id)}>{candidate.label}</button>
+            ))}
+            <button type="button" disabled={saving} onClick={registerAsNew}>새로운 학생으로 등록</button>
+          </div>
+        )}
+        {outcomes && (
+          <div className={`landing-result ${outcomes.every((outcome) => outcome.status === "완료") ? "landing-result-success" : "landing-result-error"}`} role="status">
+            요청 {outcomes.length}건 처리 결과
+            <ul>{outcomes.map((outcome, index) => <li key={index}>{outcome.message}</li>)}</ul>
+          </div>
+        )}
+        {createdTasks && (
+          <div className="landing-result landing-result-success" role="status">
+            업무 {createdTasks.length}건을 등록했습니다.
+            <ul>
+              {createdTasks.map((task) => (
+                <li key={task.id}>{task.typeLabel}{task.studentName ? ` · ${task.studentName}` : ""} — {task.ownerName ? `${task.ownerName} 배정` : task.pool ? "공용업무풀" : "미배정"}</li>
+              ))}
+            </ul>
+            {warnings.length > 0 && <ul>{warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className={fullScreen ? "ai-hero ai-hero-full" : "ai-hero"}>
