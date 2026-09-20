@@ -1,0 +1,334 @@
+[
+  {
+    "id": "school_exam_range-1",
+    "url": "https://example.invalid/SCHOOL_EXAM_RANGE/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "범위1",
+            "text": {
+              "content": "범위1"
+            }
+          }
+        ]
+      },
+      "학교": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상중",
+            "text": {
+              "content": "가상중"
+            }
+          }
+        ]
+      },
+      "학년": {
+        "type": "select",
+        "select": {
+          "name": "중2"
+        }
+      },
+      "시험명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "중간",
+            "text": {
+              "content": "중간"
+            }
+          }
+        ]
+      },
+      "시험범위": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "1-2과",
+            "text": {
+              "content": "1-2과"
+            }
+          }
+        ]
+      },
+      "시험시작일": {
+        "type": "date",
+        "date": {
+          "start": "2026-04-01"
+        }
+      },
+      "시험종료일": {
+        "type": "date",
+        "date": {
+          "start": "2026-04-02"
+        }
+      },
+      "교과서명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "교과서",
+            "text": {
+              "content": "교과서"
+            }
+          }
+        ]
+      },
+      "교과서단원": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "1과,2과",
+            "text": {
+              "content": "1과,2과"
+            }
+          }
+        ]
+      },
+      "부교재명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "부교재",
+            "text": {
+              "content": "부교재"
+            }
+          }
+        ]
+      },
+      "부교재단원": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "1단원",
+            "text": {
+              "content": "1단원"
+            }
+          }
+        ]
+      },
+      "모의고사명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "모의고사단원": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "학교프린트명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "학교프린트단원": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "갱신일": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-03"
+        }
+      }
+    }
+  },
+  {
+    "id": "school_exam_range-2",
+    "url": "https://example.invalid/SCHOOL_EXAM_RANGE/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "범위2",
+            "text": {
+              "content": "범위2"
+            }
+          }
+        ]
+      },
+      "학교": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상고",
+            "text": {
+              "content": "가상고"
+            }
+          }
+        ]
+      },
+      "학년": {
+        "type": "select",
+        "select": {
+          "name": "고1"
+        }
+      },
+      "시험명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "기말",
+            "text": {
+              "content": "기말"
+            }
+          }
+        ]
+      },
+      "시험범위": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "전범위",
+            "text": {
+              "content": "전범위"
+            }
+          }
+        ]
+      },
+      "시험시작일": {
+        "type": "date",
+        "date": {
+          "start": "2026-07-01"
+        }
+      },
+      "시험종료일": {
+        "type": "date",
+        "date": {
+          "start": "2026-07-02"
+        }
+      },
+      "교과서명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "교과서",
+            "text": {
+              "content": "교과서"
+            }
+          }
+        ]
+      },
+      "교과서단원": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "3과",
+            "text": {
+              "content": "3과"
+            }
+          }
+        ]
+      },
+      "부교재명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "부교재",
+            "text": {
+              "content": "부교재"
+            }
+          }
+        ]
+      },
+      "부교재단원": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "2단원",
+            "text": {
+              "content": "2단원"
+            }
+          }
+        ]
+      },
+      "모의고사명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "2606",
+            "text": {
+              "content": "2606"
+            }
+          }
+        ]
+      },
+      "모의고사단원": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "18-20",
+            "text": {
+              "content": "18-20"
+            }
+          }
+        ]
+      },
+      "학교프린트명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "프린트",
+            "text": {
+              "content": "프린트"
+            }
+          }
+        ]
+      },
+      "학교프린트단원": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "A",
+            "text": {
+              "content": "A"
+            }
+          }
+        ]
+      },
+      "갱신일": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-04"
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,150 @@
+[
+  {
+    "id": "material-1",
+    "url": "https://example.invalid/MATERIAL/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "자료1",
+            "text": {
+              "content": "자료1"
+            }
+          }
+        ]
+      },
+      "요청자": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "staff-1"
+          }
+        ]
+      },
+      "담당자": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "staff-2"
+          }
+        ]
+      },
+      "작업내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상 제작",
+            "text": {
+              "content": "가상 제작"
+            }
+          }
+        ]
+      },
+      "작업률": {
+        "type": "number",
+        "number": 30
+      },
+      "상태": {
+        "type": "select",
+        "select": {
+          "name": "작업중"
+        }
+      },
+      "마감일": {
+        "type": "date",
+        "date": {
+          "start": "2026-02-01"
+        }
+      },
+      "파일저장위치": {
+        "type": "url",
+        "url": "https://example.invalid/files/1"
+      },
+      "원본파일": {
+        "type": "files",
+        "files": [
+          {
+            "name": "sample.pdf",
+            "type": "external",
+            "external": {
+              "url": "https://example.invalid/sample.pdf"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "material-2",
+    "url": "https://example.invalid/MATERIAL/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "자료2",
+            "text": {
+              "content": "자료2"
+            }
+          }
+        ]
+      },
+      "요청자": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "staff-1"
+          }
+        ]
+      },
+      "담당자": {
+        "type": "relation",
+        "relation": []
+      },
+      "작업내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상 제작",
+            "text": {
+              "content": "가상 제작"
+            }
+          }
+        ]
+      },
+      "작업률": {
+        "type": "number",
+        "number": 0
+      },
+      "상태": {
+        "type": "select",
+        "select": {
+          "name": "요청됨"
+        }
+      },
+      "마감일": {
+        "type": "date",
+        "date": {
+          "start": "2026-02-02"
+        }
+      },
+      "파일저장위치": {
+        "type": "url",
+        "url": null
+      },
+      "원본파일": {
+        "type": "files",
+        "files": []
+      }
+    }
+  }
+]

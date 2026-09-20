@@ -1,0 +1,182 @@
+[
+  {
+    "id": "counseling-1",
+    "url": "https://example.invalid/COUNSELING/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "상담1",
+            "text": {
+              "content": "상담1"
+            }
+          }
+        ]
+      },
+      "학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-1"
+          }
+        ]
+      },
+      "날짜": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-03"
+        }
+      },
+      "상담자": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상강사",
+            "text": {
+              "content": "가상강사"
+            }
+          }
+        ]
+      },
+      "전사내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      },
+      "상담내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      },
+      "후속조치": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "없음",
+            "text": {
+              "content": "없음"
+            }
+          }
+        ]
+      },
+      "입력자": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "counseling-2",
+    "url": "https://example.invalid/COUNSELING/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "상담2",
+            "text": {
+              "content": "상담2"
+            }
+          }
+        ]
+      },
+      "학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-2"
+          }
+        ]
+      },
+      "날짜": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-04"
+        }
+      },
+      "상담자": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상강사",
+            "text": {
+              "content": "가상강사"
+            }
+          }
+        ]
+      },
+      "전사내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "상담내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      },
+      "후속조치": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "입력자": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      }
+    }
+  }
+]

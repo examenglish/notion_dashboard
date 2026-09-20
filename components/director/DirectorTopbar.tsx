@@ -2,19 +2,26 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Search, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { Search, Loader2, Sparkles } from "lucide-react";
 import DirectorUserMenu from "./DirectorUserMenu";
 import type { StudentRow } from "@/components/StudentTable";
 
 export default function DirectorTopbar({
   staffName,
   role,
+  branchName,
   dateLabel,
   greetingTitle,
   greetingText,
 }: {
   staffName: string;
   role: string;
+  // 계정 메뉴의 지점 표시용. 호출부(각 /director/*/page.tsx)가 이미
+  // DirectorSidebar에 넘기던 것과 같은 NEXT_PUBLIC_BRANCH_NAME 값을 그대로
+  // 재사용한다. 안 넘기면(과거 호출부) 지점 표시만 생략하고 나머지는
+  // 그대로 동작 — 기존 화면을 깨지 않기 위한 최소 기본값.
+  branchName?: string;
   dateLabel: string;
   // 검색창 우측에 놓는 페이지 제목/한줄 소개 — 대시보드에서만 넘긴다
   // (다른 /director 하위 페이지는 각자 본문에 자기 제목을 따로 둔다).
@@ -123,7 +130,15 @@ export default function DirectorTopbar({
         </div>
       )}
 
-      <DirectorUserMenu staffName={staffName} role={role} />
+      <Link
+        href="/director"
+        className="flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground no-underline hover:bg-muted/60"
+      >
+        <Sparkles className="size-3.5" />
+        이그잼 AI
+      </Link>
+
+      <DirectorUserMenu staffName={staffName} role={role} branchName={branchName ?? ""} />
     </header>
   );
 }

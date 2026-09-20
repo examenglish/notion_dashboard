@@ -1,0 +1,168 @@
+[
+  {
+    "id": "admin_inbox-1",
+    "url": "https://example.invalid/ADMIN_INBOX/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "문의1",
+            "text": {
+              "content": "문의1"
+            }
+          }
+        ]
+      },
+      "입력유형": {
+        "type": "select",
+        "select": {
+          "name": "결석예정"
+        }
+      },
+      "대상학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-1"
+          }
+        ]
+      },
+      "날짜": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-03"
+        }
+      },
+      "종료일": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-04"
+        }
+      },
+      "내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      },
+      "처리완료": {
+        "type": "checkbox",
+        "checkbox": false
+      },
+      "입력자": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      },
+      "담당자": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "admin_inbox-2",
+    "url": "https://example.invalid/ADMIN_INBOX/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "문의2",
+            "text": {
+              "content": "문의2"
+            }
+          }
+        ]
+      },
+      "입력유형": {
+        "type": "select",
+        "select": {
+          "name": "문의"
+        }
+      },
+      "대상학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-2"
+          }
+        ]
+      },
+      "날짜": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-04"
+        }
+      },
+      "종료일": {
+        "type": "date",
+        "date": null
+      },
+      "내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      },
+      "처리완료": {
+        "type": "checkbox",
+        "checkbox": true
+      },
+      "입력자": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      },
+      "담당자": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      }
+    }
+  }
+]

@@ -114,6 +114,7 @@ export default async function DirectorDashboardPage() {
         <DirectorTopbar
           staffName={session.name}
           role={session.role ?? ""}
+          branchName={branchName}
           dateLabel={formatDateLabel(today)}
           greetingTitle="전체 학원 현황"
           greetingText={`${session.name} ${session.role === "원장" ? "원장님" : "선생님"}, 오늘 하루 현황입니다.`}

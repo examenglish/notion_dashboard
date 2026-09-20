@@ -1,0 +1,137 @@
+#!/usr/bin/env node
+import {createHash,randomUUID} from 'node:crypto';
+import {readFile,readdir} from 'node:fs/promises';
+import {resolve} from 'node:path';
+
+// 이 파일은 두 가지 용도로 쓰인다:
+//  1) CLI/일괄 마이그레이션: runMigration() — 17개 소스 전체를 한 번에 읽어
+//     Supabase로 복사한다(사직/금정 실제 이전에 이미 사용, 검증 완료).
+//  2) 실시간 dual-write: lib/supabaseRepo.ts가 makeT()/TABLE/targets/rel 등
+//     아래 export를 그대로 재사용해 "방금 생성/수정된 Notion 페이지 1건"을
+//     같은 필드 매핑 규칙으로 Supabase에 반영한다. 필드 매핑 로직(SOURCES,
+//     TABLE, targets, T)은 두 경로에서 단 하나만 존재하고 절대 중복 정의하지
+//     않는다 — 스키마 매핑이 두 군데서 따로 놀면 dual-write와 일괄 이전
+//     결과가 조용히 어긋날 수 있기 때문이다.
+
+export const SOURCES=[['CLASS','NOTION_DB_CLASS'],['STUDENT','NOTION_DB_STUDENT'],['CLASS_PROGRESS','NOTION_DB_CLASS_PROGRESS'],['DAILY_RECORD','NOTION_DB_DAILY_RECORD'],['BRIEFING','NOTION_DB_BRIEFING'],['EXAM_SCORE','NOTION_DB_EXAM_SCORE'],['COUNSELING','NOTION_DB_COUNSELING'],['ADMIN_INBOX','NOTION_DB_ADMIN_INBOX'],['TODO','NOTION_DB_TODO'],['STAFF','NOTION_DB_STAFF'],['CLINIC','NOTION_DB_CLINIC'],['MATERIAL','NOTION_DB_MATERIAL'],['EXAM_PREP','NOTION_DB_EXAM_PREP'],['SCHOOL_EXAM_RANGE','NOTION_DB_SCHOOL_EXAM_RANGE'],['SLACK_RECORDS','NOTION_SLACK_RECORDS_DB_ID'],['MANUAL','NOTION_DB_MANUAL'],['MANUAL_STEP','NOTION_DB_MANUAL_STEP']];
+// MANUAL/MANUAL_STEP은 lib/notion.ts에서도 optional env var(requireManualDb 패턴)이므로
+// 여기서도 필수로 요구하지 않는다. 값이 없으면 해당 소스는 조용히 건너뛴다.
+export const OPTIONAL_SOURCES=new Set(['MANUAL','MANUAL_STEP']);
+export const DERIVED=['CLASS_STUDENTS','CLASS_STAFF','CLASS_SCHEDULES','STAFF_WORK_SCHEDULES'];
+export const TABLE={CLASS:'classes',STUDENT:'students',CLASS_PROGRESS:'class_progress',DAILY_RECORD:'daily_records',BRIEFING:'briefings',EXAM_SCORE:'exam_scores',COUNSELING:'counseling_entries',ADMIN_INBOX:'admin_inbox_entries',TODO:'tasks',STAFF:'staff',CLINIC:'clinic_records',MATERIAL:'material_tasks',EXAM_PREP:'exam_preps',SCHOOL_EXAM_RANGE:'school_exam_ranges',SLACK_RECORDS:'slack_records',MANUAL:'manuals',MANUAL_STEP:'manual_steps',CLASS_STUDENTS:'class_students',CLASS_STAFF:'class_staff',CLASS_SCHEDULES:'class_schedules',STAFF_WORK_SCHEDULES:'staff_work_schedules'};
+
+export const p=(x,n)=>x.properties?.[n],plain=v=>(v??[]).map(x=>x.plain_text??x.text?.content??'').join(''),title=(x,n)=>plain(p(x,n)?.title),rich=(x,n)=>plain(p(x,n)?.rich_text),select=(x,n)=>p(x,n)?.select?.name??p(x,n)?.status?.name??null,multi=(x,n)=>(p(x,n)?.multi_select??[]).map(v=>v.name),rel=(x,n)=>(p(x,n)?.relation??[]).map(v=>v.id),dat=(x,n)=>p(x,n)?.date?.start??null,num=(x,n)=>p(x,n)?.number??null,check=(x,n)=>p(x,n)?.checkbox??false,phone=(x,n)=>p(x,n)?.phone_number??null,url=(x,n)=>p(x,n)?.url??null,files=(x,n)=>(p(x,n)?.files??[]).map(f=>({name:f.name??'파일',url:(f.type==='file'?f.file?.url:f.external?.url)??''}));
+export function payload(x,s){const properties={...(x.properties??{})};if(s==='STAFF'){delete properties.PIN;delete properties.pin;}return{notion_url:x.url,notion_created_time:x.created_time,notion_last_edited_time:x.last_edited_time,archived:!!x.archived,in_trash:!!x.in_trash,properties,...(s==='STAFF'?{omitted_sensitive_properties:['PIN','pin']}: {})};}
+export function stableUuid(v){const b=Buffer.from(createHash('sha256').update(`fixture:${v}`).digest().subarray(0,16));b[6]=(b[6]&15)|80;b[8]=(b[8]&63)|128;const h=b.toString('hex');return`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;}
+
+// 소스별로 다른 소스의 relation을 참조하는 필드 -> 대상 소스 매핑. dual-write
+// 쪽(lib/supabaseRepo.ts)은 이걸로 "이 레코드 하나를 저장하려면 어느 테이블의
+// 어떤 notion_id들을 먼저 Supabase id로 풀어야 하는지"를 알아낸다.
+export const targets={CLASS:{'소속학생':'STUDENT','담당조교':'STAFF'},STUDENT:{'소속반':'CLASS'},CLASS_PROGRESS:{'반':'CLASS','생성된학생기록':'DAILY_RECORD'},DAILY_RECORD:{'학생':'STUDENT','반':'CLASS','반별진도원본':'CLASS_PROGRESS'},BRIEFING:{'학생':'STUDENT'},EXAM_SCORE:{'학생':'STUDENT'},COUNSELING:{'학생':'STUDENT'},ADMIN_INBOX:{'대상학생':'STUDENT'},TODO:{'담당자':'STAFF','관련학생':'STUDENT','관련반':'CLASS','클리닉보고':'CLINIC','상위업무':'TODO'},CLINIC:{'조교':'STAFF','담당학생':'STUDENT','담당강사':'STAFF','관련업무':'TODO'},MATERIAL:{'요청자':'STAFF','담당자':'STAFF'},EXAM_PREP:{'학생':'STUDENT'},SLACK_RECORDS:{'학생':'STUDENT'},MANUAL_STEP:{'매뉴얼':'MANUAL'}};
+
+// T는 (first, mapped, issue) 구현을 주입받는 팩토리다. 배치 마이그레이션은
+// 전체 배치에서 미리 구해둔 Map 기반 first/mapped를 넘기고, dual-write는
+// 레코드 1건의 relation만 실시간 조회해서 만든 mini-map 기반 first/mapped를
+// 넘긴다 — 필드 매핑 규칙(T 안의 각 소스별 함수 바디)은 완전히 동일하다.
+export function makeT({first,mapped,issue}){return{
+CLASS:x=>({name:title(x,'반이름'),teachers:rich(x,'담당교사'),day_teachers:rich(x,'요일별담당교사'),days:multi(x,'요일'),time_text:rich(x,'시간'),level:select(x,'레벨'),category:select(x,'구분'),student_notion_ids:rel(x,'소속학생'),assistant_notion_ids:rel(x,'담당조교')}),
+STUDENT:x=>({name:title(x,'이름'),school:rich(x,'학교'),grade:select(x,'학년'),status:select(x,'상태'),phone:phone(x,'연락처'),guardian_phone:phone(x,'학부모연락처'),class_notion_ids:rel(x,'소속반'),enrolled_on:dat(x,'등록일'),attendance_started_on:dat(x,'등원일'),fee_day:num(x,'회비일'),learning_level:rich(x,'학습레벨'),level_lv:num(x,'레벨Lv'),memo:rich(x,'메모'),action:rich(x,'조치'),action_assignee_text:rich(x,'조치담당자'),action_alarm_on:dat(x,'조치알람일')}),
+CLASS_PROGRESS:x=>({title:title(x,'제목'),class_notion_ids:rel(x,'반'),class_id:first('CLASS',rel(x,'반')),record_date:dat(x,'날짜'),subjects:multi(x,'수업과목'),progress_content:rich(x,'진도내용'),homework_content:rich(x,'과제내용'),next_test:rich(x,'다음시간테스트'),notice:rich(x,'전달사항'),period:select(x,'교시'),student_records_created:check(x,'학생기록생성됨'),daily_record_notion_ids:rel(x,'생성된학생기록')}),
+DAILY_RECORD:x=>({title:title(x,'제목'),student_notion_ids:rel(x,'학생'),student_id:first('STUDENT',rel(x,'학생')),class_notion_ids:rel(x,'반'),record_date:dat(x,'날짜'),progress_content:rich(x,'진도내용'),attendance:select(x,'출결'),homework_done:check(x,'과제여부'),vocab_result:select(x,'단어테스트결과'),class_progress_notion_ids:rel(x,'반별진도원본'),note:rich(x,'비고'),achievement:rich(x,'성취사항')}),
+BRIEFING:x=>({title:title(x,'제목'),student_notion_ids:rel(x,'학생'),student_id:first('STUDENT',rel(x,'학생')),record_date:dat(x,'날짜'),briefing_type:select(x,'브리핑유형'),content:rich(x,'브리핑내용')}),
+EXAM_SCORE:x=>({title:title(x,'제목'),student_notion_ids:rel(x,'학생'),student_id:first('STUDENT',rel(x,'학생')),exam_name:rich(x,'시험명'),subject:select(x,'과목'),score:num(x,'점수'),exam_date:dat(x,'날짜')}),
+COUNSELING:x=>({title:title(x,'제목'),student_notion_ids:rel(x,'학생'),student_id:first('STUDENT',rel(x,'학생')),record_date:dat(x,'날짜'),counselor:rich(x,'상담자'),transcript:rich(x,'전사내용'),content:rich(x,'상담내용'),follow_up:rich(x,'후속조치'),entered_by:rich(x,'입력자')}),
+ADMIN_INBOX:x=>({title:title(x,'제목'),input_type:select(x,'입력유형'),student_notion_ids:rel(x,'대상학생'),student_id:first('STUDENT',rel(x,'대상학생')),start_date:dat(x,'날짜'),end_date:dat(x,'종료일'),content:rich(x,'내용'),complete:check(x,'처리완료'),entered_by:rich(x,'입력자'),owner_text:rich(x,'담당자')}),
+TODO:x=>({title:title(x,'제목'),type:select(x,'유형'),staff_notion_ids:rel(x,'담당자'),staff_id:first('STAFF',rel(x,'담당자')),student_notion_ids:rel(x,'관련학생'),class_notion_ids:rel(x,'관련반'),due_date:dat(x,'예정일'),time_text:rich(x,'시간'),memo:rich(x,'메모'),complete:check(x,'완료여부'),priority:select(x,'우선순위'),clinic_report_notion_ids:rel(x,'클리닉보고'),absence_lesson:rich(x,'결석수업내용'),outcome:rich(x,'결과값'),urgent:check(x,'긴급여부'),director_ack:check(x,'원장확인'),pool:check(x,'업무풀'),parent_task_notion_ids:rel(x,'상위업무'),parent_task_id:first('TODO',rel(x,'상위업무'))}),
+STAFF:x=>({name:title(x,'이름'),role:select(x,'역할'),must_change_password:check(x,'비번변경필요'),resigned:check(x,'퇴사'),work_schedule:rich(x,'근무시간표'),work_days:multi(x,'근무요일')}),
+CLINIC:x=>({title:title(x,'제목'),assistant_notion_ids:rel(x,'조교'),assistant_id:first('STAFF',rel(x,'조교')),student_notion_ids:rel(x,'담당학생'),student_ids:mapped('STUDENT',rel(x,'담당학생')),teacher_notion_ids:rel(x,'담당강사'),teacher_id:first('STAFF',rel(x,'담당강사')),task_notion_ids:rel(x,'관련업무'),task_id:first('TODO',rel(x,'관련업무')),record_date:dat(x,'날짜'),content:rich(x,'진행내용'),next_preparation:rich(x,'다음준비사항'),confirmed:check(x,'확인완료')}),
+MATERIAL:x=>({title:title(x,'제목'),requester_notion_ids:rel(x,'요청자'),requester_id:first('STAFF',rel(x,'요청자')),owner_notion_ids:rel(x,'담당자'),owner_id:first('STAFF',rel(x,'담당자')),content:rich(x,'작업내용'),progress:num(x,'작업률'),status:select(x,'상태'),due_date:dat(x,'마감일'),file_location:url(x,'파일저장위치'),original_files:files(x,'원본파일')}),
+EXAM_PREP:x=>{const raw=rich(x,'데이터');let data=null;if(raw)try{data=JSON.parse(raw);if(!['중등','고등'].includes(data?.level))issue('EXAM_PREP','error',`exam-data-shape:${x.id}`);}catch(e){issue('EXAM_PREP','error',`exam-data-json:${x.id}:${e.message}`);data={_parse_error:true,raw};}return{title:title(x,'제목'),student_notion_ids:rel(x,'학생'),student_id:first('STUDENT',rel(x,'학생')),exam_title:rich(x,'시험명'),teachers:rich(x,'담당교사'),progress:num(x,'진행률'),weak_points:rich(x,'취약부분'),updated_on:dat(x,'갱신일'),school_level:select(x,'학교급'),exam_data:data};},
+SCHOOL_EXAM_RANGE:x=>({title:title(x,'제목'),school:rich(x,'학교'),grade:select(x,'학년'),exam_title:rich(x,'시험명'),exam_range:rich(x,'시험범위'),exam_start:dat(x,'시험시작일'),exam_end:dat(x,'시험종료일'),textbook_name:rich(x,'교과서명'),textbook_units:rich(x,'교과서단원'),supplementary_name:rich(x,'부교재명'),supplementary_units:rich(x,'부교재단원'),mock_name:rich(x,'모의고사명'),mock_units:rich(x,'모의고사단원'),print_name:rich(x,'학교프린트명'),print_units:rich(x,'학교프린트단원'),updated_on:dat(x,'갱신일')}),
+SLACK_RECORDS:x=>({title:title(x,'제목'),student_notion_ids:rel(x,'학생'),student_id:first('STUDENT',rel(x,'학생')),written_at:dat(x,'작성시각'),original:rich(x,'원문'),author:rich(x,'Slack작성자'),permalink:url(x,'원문링크'),status:select(x,'상태'),link_status:select(x,'연결상태')}),
+MANUAL:x=>({title:title(x,'제목'),category:select(x,'카테고리'),target_roles:multi(x,'대상역할'),status:select(x,'상태'),video_url:url(x,'원본영상'),summary:rich(x,'요약'),author:rich(x,'작성자')}),
+MANUAL_STEP:x=>({title:title(x,'제목'),manual_notion_ids:rel(x,'매뉴얼'),manual_id:first('MANUAL',rel(x,'매뉴얼')),step_order:num(x,'순서'),description:rich(x,'설명'),screenshot_url:url(x,'스크린샷'),video_timestamp:rich(x,'영상타임스탬프'),caution:rich(x,'주의사항'),related_path:rich(x,'관련경로'),keywords:rich(x,'키워드')})};}
+
+// runMigration()은 기존 CLI 스크립트의 로직을 100% 그대로 유지한 채 함수로 감싼 것이다.
+// (Vercel production runtime의 API route에서 process.argv 없이 프로그래밍적으로 호출하기 위함.)
+// CLI 사용법은 파일 하단의 entrypoint에서 기존과 동일하게 유지된다:
+//   node migrate_notion_to_supabase.mjs --branch=sajik [--execute] [--fixtures <dir>]
+export async function runMigration(opts={}){
+const EXECUTE=!!opts.execute;
+const fixtureDir=opts.fixtureDir??null;
+if(fixtureDir&&EXECUTE)throw Error('--fixtures and --execute cannot be combined.');
+const branchArg=opts.branch;
+if(!branchArg)throw Error('branch is required, e.g. "sajik" or "geumjeong" (see supabase/schema/002_branch_scoping.sql).');
+const dbIds=opts.dbIds??{};const getEnv=(e)=>dbIds[e]??process.env[e];
+const notionToken=opts.notionToken??process.env.NOTION_TOKEN,supabaseUrl=(opts.supabaseUrl??process.env.SUPABASE_URL)?.replace(/\/$/,''),supabaseKey=opts.supabaseKey??process.env.SUPABASE_SERVICE_ROLE_KEY;
+if(!fixtureDir&&!notionToken)throw Error('NOTION_TOKEN is required outside fixture mode.');
+if(!fixtureDir){const m=SOURCES.filter(([s,e])=>!OPTIONAL_SOURCES.has(s)&&!getEnv(e)).map(([,e])=>e);if(m.length)throw Error(`Missing database IDs: ${m.join(', ')}`);}
+if(EXECUTE&&(!supabaseUrl||!supabaseKey))throw Error('--execute requires Supabase credentials.');
+// fixture 모드는 모든 소스의 fixture 파일이 있다고 가정해 항상 SOURCES 전체를 활성화한다.
+// 실행/라이브 모드는 OPTIONAL_SOURCES 중 env var가 없는 소스를 조용히 제외한다.
+const ACTIVE_SOURCES=SOURCES.filter(([s,e])=>fixtureDir||!OPTIONAL_SOURCES.has(s)||getEnv(e));
+const stats=new Map([...SOURCES.map(([s])=>s),...DERIVED].map(s=>[s,{read:0,transformed:0,skipped:0,error:0,unresolved:0}])),errors=[],unresolved=[];
+function issue(s,k,m){(k==='error'?errors:unresolved).push(`${s}:${m}`);stats.get(s)[k]++;}
+async function notionQuery(id){const out=[];let cursor;do{const r=await fetch(`https://api.notion.com/v1/data_sources/${id}/query`,{method:'POST',headers:{Authorization:`Bearer ${notionToken}`,'Notion-Version':process.env.NOTION_VERSION??'2025-09-03','Content-Type':'application/json'},body:JSON.stringify({page_size:100,...(cursor?{start_cursor:cursor}:{})})});if(!r.ok)throw Error(`Notion query failed (${r.status})`);const b=await r.json();out.push(...b.results);cursor=b.has_more?b.next_cursor:null;}while(cursor);return out;}
+async function fixturePages(s){const n=(await readdir(resolve(fixtureDir))).filter(x=>x.toUpperCase()===`${s}.JSON`);if(n.length!==1)throw Error(`fixture missing or duplicate: ${s}.json`);const v=JSON.parse(await readFile(resolve(fixtureDir,n[0]),'utf8'));return Array.isArray(v)?v:v.results??[v];}
+// 소스 하나의 Notion 조회 실패(예: 잘못된 data source ID로 인한 404)가
+// 전체 마이그레이션을 중단시키지 않도록 소스 단위로 격리한다. 실패한
+// 소스는 read=0으로 처리되고 error로 명시적으로 보고되며, 다른 16개
+// 소스는 영향받지 않는다.
+const loaded=new Map();for(const[s,e]of ACTIVE_SOURCES){let rows;try{rows=fixtureDir?await fixturePages(s):await notionQuery(getEnv(e));}catch(err){issue(s,'error',`source-query:${err instanceof Error?err.message:String(err)}`);rows=[];}loaded.set(s,rows);stats.get(s).read=rows.length;console.log(`[read-only${fixtureDir?' fixture':''}] ${s}: ${rows.length} pages`);}
+for(const[s]of SOURCES)if(!loaded.has(s))console.log(`[skipped] ${s}: no database ID configured (optional source)`);
+
+const headers=()=>({apikey:supabaseKey,Authorization:`Bearer ${supabaseKey}`});
+// 사직/금정 두 지점이 하나의 Supabase 프로젝트를 공유하므로(supabase/schema/002_branch_scoping.sql)
+// 모든 row는 --branch=<code>로 지정한 지점의 branch_id로 태그된다. fixture 모드(Supabase 자격증명 없음)는
+// branches 테이블을 조회할 수 없으므로 다른 fixture id처럼 결정적 UUID로 시뮬레이션한다.
+async function resolveBranchId(){
+  if(supabaseUrl&&supabaseKey){
+    const r=await fetch(`${supabaseUrl}/rest/v1/branches?select=id&code=eq.${encodeURIComponent(branchArg)}`,{headers:headers()});
+    if(!r.ok)throw Error(`Supabase branch lookup failed (${r.status})`);
+    const rows=await r.json();
+    if(!rows.length)throw Error(`branch code not found in branches table: ${branchArg}`);
+    return rows[0].id;
+  }
+  return stableUuid(`branch:${branchArg}`);
+}
+const BRANCH_ID=await resolveBranchId();
+console.log(`[branch] ${branchArg} -> ${BRANCH_ID}`);
+async function existing(table){const m=new Map();if(!EXECUTE)return m;for(let o=0;;o+=1000){const r=await fetch(`${supabaseUrl}/rest/v1/${table}?select=id,notion_id&notion_id=not.is.null&branch_id=eq.${BRANCH_ID}`,{headers:{...headers(),Range:`${o}-${o+999}`}});if(!r.ok)throw Error(`Supabase mapping read ${table} failed (${r.status})`);const rows=await r.json();rows.forEach(x=>m.set(x.notion_id,x.id));if(rows.length<1000)break;}return m;}
+const ids=new Map();for(const[s]of ACTIVE_SOURCES){const m=await existing(TABLE[s]);for(const x of loaded.get(s))if(x?.id&&!m.has(x.id))m.set(x.id,fixtureDir?stableUuid(`${s}:${x.id}`):randomUUID());ids.set(s,m);}
+const mapped=(s,a)=>a.map(id=>ids.get(s)?.get(id)).filter(Boolean),first=(s,a)=>mapped(s,a)[0]??null;
+for(const[s,fs]of Object.entries(targets)){if(!loaded.has(s))continue;for(const x of loaded.get(s))for(const[f,t]of Object.entries(fs))for(const id of rel(x,f))if(!ids.get(t)?.has(id))issue(s,'unresolved',`relation:${f}->${t}:${x.id}:${id}`);}
+
+const T=makeT({first,mapped,issue});
+const sourceRows=new Map();for(const[s]of ACTIVE_SOURCES){const rows=[];for(const x of loaded.get(s))try{if(!x?.id||!x?.properties){stats.get(s).skipped++;issue(s,'error',`invalid-page:${x?.id??'missing-id'}`);continue;}rows.push({id:ids.get(s).get(x.id),notion_id:x.id,branch_id:BRANCH_ID,...T[s](x),source_payload:payload(x,s)});stats.get(s).transformed++;}catch(e){stats.get(s).skipped++;issue(s,'error',`transform:${x?.id}:${e.message}`);}sourceRows.set(s,rows);}
+
+const wd=new Map([['월',1],['화',2],['수',3],['목',4],['금',5],['토',6],['일',7]]),byName=new Map();for(const x of loaded.get('STAFF')){const n=title(x,'이름').trim();if(n)byName.set(n,[...(byName.get(n)??[]),x.id]);}
+function teacher(name,s,ctx){const m=byName.get(name.trim())??[];if(m.length!==1){issue(s,'unresolved',`teacher-name:${ctx}:${name.trim()||'<empty>'}:${m.length?'ambiguous':'not-found'}`);return null;}return ids.get('STAFF').get(m[0]);}
+const derived=new Map(DERIVED.map(s=>[s,[]])),keys=new Map(DERIVED.map(s=>[s,new Set()]));
+function add(s,key,row){stats.get(s).read++;if(keys.get(s).has(key)){stats.get(s).skipped++;return;}keys.get(s).add(key);derived.get(s).push(row);stats.get(s).transformed++;}
+for(const x of loaded.get('CLASS')){const class_id=ids.get('CLASS').get(x.id);
+ for(const nid of rel(x,'소속학생')){const student_id=ids.get('STUDENT').get(nid);if(!student_id){stats.get('CLASS_STUDENTS').read++;stats.get('CLASS_STUDENTS').skipped++;issue('CLASS_STUDENTS','unresolved',`student:${x.id}:${nid}`);}else add('CLASS_STUDENTS',`${class_id}:${student_id}`,{class_id,student_id,branch_id:BRANCH_ID,source_payload:{class_notion_id:x.id,student_notion_id:nid,derived_from:'CLASS.소속학생'}});}
+ for(const nid of rel(x,'담당조교')){const staff_id=ids.get('STAFF').get(nid);if(!staff_id){stats.get('CLASS_STAFF').read++;stats.get('CLASS_STAFF').skipped++;issue('CLASS_STAFF','unresolved',`assistant:${x.id}:${nid}`);}else add('CLASS_STAFF',`${class_id}:${staff_id}:assistant`,{class_id,staff_id,assignment_role:'assistant',branch_id:BRANCH_ID,source_payload:{class_notion_id:x.id,staff_notion_id:nid,derived_from:'CLASS.담당조교'}});}
+ for(const name of rich(x,'담당교사').split(/[,;\n]/).map(v=>v.trim()).filter(Boolean)){const staff_id=teacher(name,'CLASS_STAFF',x.id);if(!staff_id){stats.get('CLASS_STAFF').read++;stats.get('CLASS_STAFF').skipped++;}else add('CLASS_STAFF',`${class_id}:${staff_id}:teacher`,{class_id,staff_id,assignment_role:'teacher',branch_id:BRANCH_ID,source_payload:{class_notion_id:x.id,teacher_name:name,derived_from:'CLASS.담당교사'}});}
+ for(const seg of rich(x,'요일별담당교사').split(';').map(v=>v.trim()).filter(Boolean)){const[d,es]=seg.split('=');if(!wd.has(d?.trim())||!es){stats.get('CLASS_SCHEDULES').read++;stats.get('CLASS_SCHEDULES').skipped++;issue('CLASS_SCHEDULES','unresolved',`parse:${x.id}:${seg}`);continue;}for(const e of es.split(',').map(v=>v.trim()).filter(Boolean)){const m=e.match(/^(\d+)\s*:\s*(.+)$/);if(!m){stats.get('CLASS_SCHEDULES').read++;stats.get('CLASS_SCHEDULES').skipped++;issue('CLASS_SCHEDULES','unresolved',`parse:${x.id}:${e}`);continue;}const period=Number(m[1]),teacher_id=teacher(m[2],'CLASS_SCHEDULES',`${x.id}:${d.trim()}:${period}`);add('CLASS_SCHEDULES',`${class_id}:${wd.get(d.trim())}:${period}`,{class_id,weekday:wd.get(d.trim()),period,teacher_id,time_text:rich(x,'시간')||null,branch_id:BRANCH_ID,source_payload:{class_notion_id:x.id,teacher_name:m[2].trim(),derived_from:'CLASS.요일별담당교사'}});}}
+}
+for(const x of loaded.get('STAFF'))for(const seg of rich(x,'근무시간표').split(';').map(v=>v.trim()).filter(Boolean)){const[d,...hp]=seg.split('='),hours=hp.join('=').trim();if(!wd.has(d?.trim())||!hours){stats.get('STAFF_WORK_SCHEDULES').read++;stats.get('STAFF_WORK_SCHEDULES').skipped++;issue('STAFF_WORK_SCHEDULES','unresolved',`parse:${x.id}:${seg}`);continue;}const staff_id=ids.get('STAFF').get(x.id);add('STAFF_WORK_SCHEDULES',`${staff_id}:${wd.get(d.trim())}`,{staff_id,weekday:wd.get(d.trim()),work_hours_text:hours,branch_id:BRANCH_ID,source_payload:{staff_notion_id:x.id,derived_from:'STAFF.근무시간표'}});}
+async function upsert(table,rows,conflict='branch_id,notion_id'){if(!EXECUTE||!rows?.length)return;const r=await fetch(`${supabaseUrl}/rest/v1/${table}?on_conflict=${encodeURIComponent(conflict)}`,{method:'POST',headers:{...headers(),'Content-Type':'application/json',Prefer:'resolution=merge-duplicates'},body:JSON.stringify(rows)});if(!r.ok){const body=await r.text().catch(()=>'');throw Error(`Supabase upsert ${table} failed (${r.status}): ${body.slice(0,500)}`);}}
+// MANUAL은 MANUAL_STEP보다 먼저 upsert해 relation FK를 먼저 해석 가능하게 한다.
+for(const s of ['STAFF','STUDENT','CLASS','CLASS_PROGRESS','DAILY_RECORD','BRIEFING','EXAM_SCORE','COUNSELING','ADMIN_INBOX','TODO','CLINIC','MATERIAL','EXAM_PREP','SCHOOL_EXAM_RANGE','SLACK_RECORDS','MANUAL','MANUAL_STEP'])await upsert(TABLE[s],sourceRows.get(s));
+await upsert(TABLE.CLASS_STUDENTS,derived.get('CLASS_STUDENTS'),'class_id,student_id');await upsert(TABLE.CLASS_STAFF,derived.get('CLASS_STAFF'),'class_id,staff_id,assignment_role');await upsert(TABLE.CLASS_SCHEDULES,derived.get('CLASS_SCHEDULES'),'class_id,weekday,period');await upsert(TABLE.STAFF_WORK_SCHEDULES,derived.get('STAFF_WORK_SCHEDULES'),'staff_id,weekday');
+console.log(EXECUTE?'[execute] Supabase upserts complete.':'[dry-run] No Supabase request was made.');console.log('DRY_RUN_SUMMARY_JSON='+JSON.stringify(Object.fromEntries(stats)));for(const x of errors)console.log(`[error] ${x}`);for(const x of unresolved)console.log(`[unresolved] ${x}`);
+return{branch:branchArg,branchId:BRANCH_ID,execute:EXECUTE,stats:Object.fromEntries(stats),errors,unresolved};
+}
+
+// CLI entrypoint — 기존과 동일한 사용법을 그대로 유지한다.
+const isMain=process.argv[1]&&import.meta.url===`file://${process.argv[1]}`;
+if(isMain){
+const argv=process.argv.slice(2);
+const execute=argv.includes('--execute');
+const fi=argv.indexOf('--fixtures');
+const fixtureDir=fi<0?null:argv[fi+1];
+if(fi>=0&&!fixtureDir)throw Error('--fixtures requires a directory.');
+const branch=(argv.find(x=>x.startsWith('--branch='))||'').split('=')[1];
+await runMigration({execute,fixtureDir,branch});
+}

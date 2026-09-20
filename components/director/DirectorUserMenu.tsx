@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { LogOut, ChevronDown } from "lucide-react";
+import { LogOut, ChevronDown, KeyRound } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -12,7 +12,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-export default function DirectorUserMenu({ staffName, role }: { staffName: string; role: string }) {
+// 우측 상단 계정 메뉴 — 지금 로그인한 사람/역할/지점을 항상 눈에 보이게 해서
+// 계정·지점 착각(사직/금정 두 지점이 같은 코드베이스, 다른 배포)을 막는다.
+// staffName/role은 세션에서, branchName은 DirectorTopbar 호출부가 이미
+// 계산해 쓰던 것과 같은 값(NEXT_PUBLIC_BRANCH_NAME)을 그대로 재사용한다 —
+// 이 메뉴만을 위한 새 지점 판별 로직을 따로 만들지 않는다.
+export default function DirectorUserMenu({ staffName, role, branchName }: { staffName: string; role: string; branchName: string }) {
   const router = useRouter();
 
   async function handleLogout() {
@@ -29,14 +34,25 @@ export default function DirectorUserMenu({ staffName, role }: { staffName: strin
         <Avatar>
           <AvatarFallback>{initial}</AvatarFallback>
         </Avatar>
-        <span className="hidden font-medium text-foreground sm:inline">{staffName}</span>
-        <ChevronDown className="size-3.5 text-muted-foreground" />
+        <span className="hidden flex-col items-start leading-tight sm:flex">
+          <span className="font-medium text-foreground">{staffName}</span>
+          <span className="text-xs text-muted-foreground">
+            {role} · {branchName}
+          </span>
+        </span>
+        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuLabel>
-          {staffName} · {role}
+        <DropdownMenuLabel className="flex flex-col gap-0.5">
+          <span className="font-medium text-foreground">{staffName}</span>
+          <span className="text-xs font-normal text-muted-foreground">{role}</span>
+          <span className="text-xs font-normal text-muted-foreground">{branchName}</span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => router.push("/change-pin")}>
+          <KeyRound className="size-4" />
+          비밀번호 변경
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={handleLogout}>
           <LogOut className="size-4" />
           로그아웃

@@ -1,0 +1,132 @@
+[
+  {
+    "id": "staff-1",
+    "url": "https://example.invalid/STAFF/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "이름": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "가상강사",
+            "text": {
+              "content": "가상강사"
+            }
+          }
+        ]
+      },
+      "역할": {
+        "type": "select",
+        "select": {
+          "name": "강사"
+        }
+      },
+      "PIN": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "REDACTED_FIXTURE",
+            "text": {
+              "content": "REDACTED_FIXTURE"
+            }
+          }
+        ]
+      },
+      "비번변경필요": {
+        "type": "checkbox",
+        "checkbox": false
+      },
+      "퇴사": {
+        "type": "checkbox",
+        "checkbox": false
+      },
+      "근무시간표": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "월=14:00-18:00",
+            "text": {
+              "content": "월=14:00-18:00"
+            }
+          }
+        ]
+      },
+      "근무요일": {
+        "type": "multi_select",
+        "multi_select": [
+          {
+            "name": "월"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "staff-2",
+    "url": "https://example.invalid/STAFF/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "이름": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "가상조교",
+            "text": {
+              "content": "가상조교"
+            }
+          }
+        ]
+      },
+      "역할": {
+        "type": "select",
+        "select": {
+          "name": "조교"
+        }
+      },
+      "PIN": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "REDACTED_FIXTURE",
+            "text": {
+              "content": "REDACTED_FIXTURE"
+            }
+          }
+        ]
+      },
+      "비번변경필요": {
+        "type": "checkbox",
+        "checkbox": true
+      },
+      "퇴사": {
+        "type": "checkbox",
+        "checkbox": true
+      },
+      "근무시간표": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "파싱실패",
+            "text": {
+              "content": "파싱실패"
+            }
+          }
+        ]
+      },
+      "근무요일": {
+        "type": "multi_select",
+        "multi_select": [
+          {
+            "name": "화"
+          }
+        ]
+      }
+    }
+  }
+]

@@ -1,0 +1,206 @@
+[
+  {
+    "id": "class_progress-1",
+    "url": "https://example.invalid/CLASS_PROGRESS/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "진도1",
+            "text": {
+              "content": "진도1"
+            }
+          }
+        ]
+      },
+      "반": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "class-1"
+          }
+        ]
+      },
+      "날짜": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-03"
+        }
+      },
+      "수업과목": {
+        "type": "multi_select",
+        "multi_select": [
+          {
+            "name": "문법"
+          }
+        ]
+      },
+      "진도내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "1과",
+            "text": {
+              "content": "1과"
+            }
+          }
+        ]
+      },
+      "과제내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "문제",
+            "text": {
+              "content": "문제"
+            }
+          }
+        ]
+      },
+      "다음시간테스트": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "단어",
+            "text": {
+              "content": "단어"
+            }
+          }
+        ]
+      },
+      "전달사항": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "없음",
+            "text": {
+              "content": "없음"
+            }
+          }
+        ]
+      },
+      "교시": {
+        "type": "select",
+        "select": {
+          "name": "1교시"
+        }
+      },
+      "학생기록생성됨": {
+        "type": "checkbox",
+        "checkbox": true
+      },
+      "생성된학생기록": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "daily_record-1"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "class_progress-2",
+    "url": "https://example.invalid/CLASS_PROGRESS/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "진도2",
+            "text": {
+              "content": "진도2"
+            }
+          }
+        ]
+      },
+      "반": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "class-2"
+          }
+        ]
+      },
+      "날짜": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-04"
+        }
+      },
+      "수업과목": {
+        "type": "multi_select",
+        "multi_select": []
+      },
+      "진도내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "과제내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "다음시간테스트": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "전달사항": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "교시": {
+        "type": "select",
+        "select": null
+      },
+      "학생기록생성됨": {
+        "type": "checkbox",
+        "checkbox": true
+      },
+      "생성된학생기록": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "daily_record-2"
+          }
+        ]
+      }
+    }
+  }
+]

@@ -1,0 +1,202 @@
+[
+  {
+    "id": "daily_record-1",
+    "url": "https://example.invalid/DAILY_RECORD/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "일일1",
+            "text": {
+              "content": "일일1"
+            }
+          }
+        ]
+      },
+      "학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-1"
+          }
+        ]
+      },
+      "반": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "class-1"
+          }
+        ]
+      },
+      "날짜": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-03"
+        }
+      },
+      "진도내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "1과",
+            "text": {
+              "content": "1과"
+            }
+          }
+        ]
+      },
+      "출결": {
+        "type": "select",
+        "select": {
+          "name": "출석"
+        }
+      },
+      "과제여부": {
+        "type": "checkbox",
+        "checkbox": true
+      },
+      "단어테스트결과": {
+        "type": "select",
+        "select": {
+          "name": "통과"
+        }
+      },
+      "반별진도원본": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "class_progress-1"
+          }
+        ]
+      },
+      "비고": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "성취사항": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "[]",
+            "text": {
+              "content": "[]"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "daily_record-2",
+    "url": "https://example.invalid/DAILY_RECORD/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "일일2",
+            "text": {
+              "content": "일일2"
+            }
+          }
+        ]
+      },
+      "학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-2"
+          }
+        ]
+      },
+      "반": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "class-2"
+          }
+        ]
+      },
+      "날짜": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-04"
+        }
+      },
+      "진도내용": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "2과",
+            "text": {
+              "content": "2과"
+            }
+          }
+        ]
+      },
+      "출결": {
+        "type": "select",
+        "select": {
+          "name": "지각"
+        }
+      },
+      "과제여부": {
+        "type": "checkbox",
+        "checkbox": false
+      },
+      "단어테스트결과": {
+        "type": "select",
+        "select": {
+          "name": "재시험"
+        }
+      },
+      "반별진도원본": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "class_progress-2"
+          }
+        ]
+      },
+      "비고": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상",
+            "text": {
+              "content": "가상"
+            }
+          }
+        ]
+      },
+      "성취사항": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "[]",
+            "text": {
+              "content": "[]"
+            }
+          }
+        ]
+      }
+    }
+  }
+]

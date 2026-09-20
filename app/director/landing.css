@@ -36,6 +36,15 @@
 .landing-logo { display: inline-flex; align-items: center; width: 177px; height: 42px; flex: none; }
 .landing-logo img { display: block; width: 177px; height: auto; }
 .landing-actions { display: flex; align-items: center; gap: 10px; }
+.director-landing .landing-account-menu button {
+  min-height: 40px;
+  padding: 3px 10px;
+  color: var(--landing-ink);
+  background: var(--landing-surface);
+  border: 1px solid var(--landing-line);
+  border-radius: 999px;
+}
+.director-landing .landing-account-menu button:hover { background: #f5ebd6; }
 
 .director-landing .landing-action {
   height: 40px;
@@ -79,6 +88,7 @@
 .landing-promise-ko { color: var(--landing-muted); font-size: 14px; line-height: 22px; font-weight: 500; letter-spacing: -0.07px; }
 
 .landing-input-area { position: relative; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+.landing-search-wrap { position: relative; width: 100%; }
 .landing-search {
   display: flex;
   align-items: center;
@@ -94,10 +104,11 @@
 .landing-search:focus-within { outline: 2px solid var(--landing-ink); outline-offset: 3px; }
 .landing-ai-icon { width: 42px; height: 42px; flex: none; display: grid; place-items: center; border-radius: 14px; background: #fcecce; }
 .landing-ai-icon img { display: block; width: 19px; height: 19px; }
-.director-landing .landing-search input[type="search"] {
+.director-landing .landing-search textarea {
   min-width: 0;
   flex: 1;
   height: 100%;
+  min-height: 0;
   padding: 0;
   color: var(--landing-ink);
   background: transparent;
@@ -109,10 +120,10 @@
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
-  appearance: none;
+  resize: none;
+  overflow-y: auto;
 }
-.landing-search input::placeholder { color: var(--landing-ink); opacity: 1; }
-.landing-search input::-webkit-search-cancel-button { appearance: none; }
+.landing-search textarea::placeholder { color: var(--landing-ink); opacity: 1; }
 .director-landing .landing-enter {
   flex: none;
   padding: 7px 12px;
@@ -157,12 +168,15 @@
   flex-wrap: wrap;
   gap: 8px;
   max-width: 100%;
+  margin: 0;
   padding: 12px;
   background: var(--landing-surface);
   border: 1px solid var(--landing-line);
   border-radius: 16px;
   box-shadow: 0 8px 24px rgba(24, 50, 63, 0.12);
+  list-style: none;
 }
+.landing-result ul { margin: 6px 0 0; padding-left: 18px; }
 .landing-result { max-width: 100%; margin: 0; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 20px; }
 .landing-result-success { color: #185a3d; background: #e7f5eb; }
 .landing-result-error { color: #853a2c; background: #fff0e9; }
@@ -196,8 +210,9 @@
   .landing-promise-en { font-size: 18px; }
   .landing-search { height: 66px; gap: 9px; padding: 10px 12px; border-radius: 22px; }
   .landing-ai-icon { width: 38px; height: 38px; }
-  .director-landing .landing-search input[type="search"] { font-size: 12px; }
+  .director-landing .landing-search textarea { font-size: 12px; }
   .director-landing .landing-enter { padding: 7px 8px; font-size: 10px; }
+  .director-landing .landing-account-menu button { min-height: 34px; padding: 2px 6px; }
   .landing-footer { min-height: 100px; padding: 20px 22px; flex-direction: column; align-items: flex-start; gap: 12px; }
   .landing-footer > div { gap: 14px; }
 }

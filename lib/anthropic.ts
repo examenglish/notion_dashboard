@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { mark } from "@/lib/timing";
 
 // Server-only. Never import this file from a "use client" component.
 if (typeof window !== "undefined") {
@@ -215,6 +216,111 @@ export type NlParseResult =
   | { kind: "clarify"; message: string }
   | { kind: "log_admin_inbox" | "log_schedule_entry" | "log_counseling" | "log_student_action"; input: any };
 
+// ---------------------------------------------------------------------------
+// AI 업무운영 시스템(섹션3) — "한 문장 → 여러 업무"로 쪼개는 전용 경로.
+// 위 NL_TOOLS/parseNaturalLanguageInput은 건드리지 않고 완전히 별도의 tool +
+// 별도의 호출부(app/api/tasks/from-text/route.ts)로만 쓰인다 — 기존 대시보드
+// 입력창/Slack 슬래시태그 동작에는 전혀 영향이 없다. 담당자 배정은 여기서
+// 하지 않는다(AI는 "무슨 업무들인지"만 판단하고, 배정은 lib/task-routing.ts의
+// 결정론적 규칙이 맡는다 — 섹션3 요구사항).
+// ---------------------------------------------------------------------------
+
+const CREATE_TASKS_TOOL = (typeLabels: string[]): Anthropic.Tool => ({
+  name: "create_tasks",
+  description:
+    "직원이 학생 상황이나 업무를 자연어로 설명한 문장을, 실행 가능한 개별 업무 여러 건으로 쪼갠다. 문장 하나에 여러 조치가 섞여 있으면(예: 암기 확인 + 재시험 + 숙제 확인) 각각을 별도 업무로 분리한다.",
+  input_schema: {
+    type: "object",
+    properties: {
+      tasks: {
+        type: "array",
+        minItems: 1,
+        items: {
+          type: "object",
+          properties: {
+            type: { type: "string", enum: typeLabels, description: "업무 유형(한글 라벨 중 하나)" },
+            studentName: { type: "string", description: "학생 이름. 해당 없으면 빈 문자열." },
+            studentSchool: { type: "string", description: "학생 학교. 언급 없으면 빈 문자열." },
+            content: { type: "string", description: "업무 내용 요약 — 무엇을, 왜 해야 하는지." },
+            date: { type: "string", description: "YYYY-MM-DD. 언급 없으면 오늘." },
+            time: { type: "string", description: "예: 16:00. 언급 없으면 빈 문자열." },
+            priority: { type: "string", enum: ["긴급", "보통"], description: "문장에 '급하다/오늘 꼭' 같은 긴급 표현이 있으면 긴급." },
+          },
+          required: ["type", "content", "date"],
+        },
+      },
+    },
+    required: ["tasks"],
+  },
+});
+
+const CREATE_TASKS_CLARIFY_TOOL: Anthropic.Tool = {
+  name: "clarify",
+  description: "문장에서 실행 가능한 업무를 전혀 찾을 수 없을 때만 사용한다.",
+  input_schema: {
+    type: "object",
+    properties: { message: { type: "string", description: "무엇이 불명확한지 설명하는 한국어 메시지" } },
+    required: ["message"],
+  },
+};
+
+function buildCreateTasksSystemBlocks(ref: NlReference, typeLabels: string[]): Anthropic.TextBlockParam[] {
+  const text = `너는 영어학원 관리 시스템에서, 직원이 자연어로 쓴 업무 지시를 실행 가능한 개별 업무 목록으로 구조화하는 도우미다.
+
+오늘 날짜는 ${ref.today} (${ref.weekday}요일)이다.
+날짜 참고표 (YYYY-MM-DD(요일,주차) 형식):
+${buildDateTable(ref.today)}
+
+규칙:
+- 문장 하나에 여러 조치가 섞여 있으면 각각을 별도 업무로 나눈다. 예: "민수 대화문 암기 안 됨. 관계대명사도 잘 모름. 문제 뽑아서 오늘 재시험시키고 본문 숙제도 확인" → (1)암기확인 (2)재시험 (3)숙제확인, 세 건.
+- 업무 유형(type)은 반드시 아래 목록 중 하나를 그대로 쓴다: ${typeLabels.join(", ")}
+- 담당자를 임의로 정하지 않는다 — ownerName 같은 필드는 없다. 시스템이 근무시간/담당반 기준으로 자동 배정한다.
+- 학생 이름이 문장에 있으면 studentName에 정확히 채운다(재원생 명단과 최대한 일치시킨다). 학교가 언급되면 studentSchool도 채운다.
+- 날짜/시간이 명시되지 않으면 date는 오늘(${ref.today}), time은 빈 문자열로 둔다.
+- 실행 가능한 업무를 전혀 찾을 수 없는 문장(잡담, 의미 불명 등)에서만 clarify를 쓴다.
+- 도구는 반드시 하나만 호출한다.
+
+재원생 명단 (이름(학교)):
+${ref.students.join(", ")}
+
+직원 명단:
+${ref.staff.join(", ")}`;
+  return [{ type: "text", text, cache_control: { type: "ephemeral" } }];
+}
+
+export type TaskDraft = {
+  type: string;
+  studentName: string;
+  studentSchool: string;
+  content: string;
+  date: string;
+  time: string;
+  priority?: "긴급" | "보통";
+};
+
+export type CreateTasksParseResult = { kind: "tasks"; tasks: TaskDraft[] } | { kind: "clarify"; message: string };
+
+export async function parseCreateTasksInput(text: string, ref: NlReference, typeLabels: string[]): Promise<CreateTasksParseResult> {
+  mark("anthropic:ct:before_call");
+  const res = await anthropic.messages.create({
+    model: NL_MODEL,
+    max_tokens: 1024,
+    system: buildCreateTasksSystemBlocks(ref, typeLabels),
+    tools: [CREATE_TASKS_TOOL(typeLabels), CREATE_TASKS_CLARIFY_TOOL],
+    tool_choice: { type: "any" },
+    messages: [{ role: "user", content: text }],
+  });
+  mark("anthropic:ct:after_call");
+
+  const toolUse = res.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+  if (!toolUse || toolUse.name === "clarify") {
+    const input = (toolUse?.input as { message?: string }) ?? {};
+    return { kind: "clarify", message: input.message || "업무를 파악하지 못했습니다. 다시 입력해 주세요." };
+  }
+  const input = toolUse.input as { tasks: TaskDraft[] };
+  return { kind: "tasks", tasks: input.tasks ?? [] };
+}
+
 // forceTool: "/보강", "/상담" 같은 슬래시 명령으로 카테고리를 이미 알고 있을
 // 때 넘긴다 — Haiku의 분류(어느 도구를 쓸지) 단계를 완전히 건너뛰고 해당
 // 도구 하나만 강제 호출해서, 그 안의 필드(학생 이름/날짜/시간 등) 추출만
@@ -224,6 +330,7 @@ export async function parseNaturalLanguageInput(
   ref: NlReference,
   forceTool?: "log_admin_inbox" | "log_schedule_entry" | "log_counseling" | "log_student_action"
 ): Promise<NlParseResult> {
+  mark("anthropic:legacy:before_call");
   const res = await anthropic.messages.create({
     model: NL_MODEL,
     max_tokens: 512,
@@ -232,6 +339,7 @@ export async function parseNaturalLanguageInput(
     tool_choice: forceTool ? { type: "tool", name: forceTool } : { type: "any" },
     messages: [{ role: "user", content: text }],
   });
+  mark("anthropic:legacy:after_call");
 
   const toolUse = res.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
   if (!toolUse) {
@@ -242,4 +350,147 @@ export async function parseNaturalLanguageInput(
     return { kind: "clarify", message: input.message || "요청을 이해하지 못했습니다. 다시 입력해 주세요." };
   }
   return { kind: toolUse.name as any, input: toolUse.input };
+}
+
+// ---------------------------------------------------------------------------
+// 통합 자연어 입력(2026-09-19, staff.md PART 8) — 위 parseCreateTasksInput과
+// parseNaturalLanguageInput을 순서대로 호출하던 예전 app/api/ai-input 경로가
+// 실측 9.9초 중 LLM 호출만 7.1초(72%)를 차지했다(호출을 두 번 했으므로).
+// 여기서는 한 번의 호출로 문장을 "여러 개의 독립된 intent"로 나눠서 위
+// 두 도구가 커버하던 것(업무 생성 13종 + 행정/일정/상담/조치 4종)과, 새로
+// 추가된 "확인"(조회, 예: 결석 입력 여부 확인) intent까지 한 번에 뽑는다.
+// 기존 parseCreateTasksInput/parseNaturalLanguageInput과 그 호출부
+// (runCreateTasksCommand/runNaturalLanguageCommand, 슬래시 명령/Slack)는
+// 그대로 둔다 — 이 함수는 app/api/ai-input의 자유 텍스트 입력 전용
+// 신규 경로(runUnifiedNlInput)에서만 쓴다.
+// ---------------------------------------------------------------------------
+
+export type UnifiedIntentRoute =
+  | "task"
+  | "admin_inbox"
+  | "schedule"
+  | "counseling"
+  | "student_action"
+  | "attendance_check"
+  | "clarify";
+
+export type UnifiedIntent = {
+  route: UnifiedIntentRoute;
+  taskType?: string;
+  inboxType?: "결석예정" | "긴급상담요청" | "신규생문의" | "기타";
+  scheduleType?: "보강" | "재시" | "신입생상담" | "레벨체크";
+  students: string[];
+  studentSchool?: string;
+  className?: string;
+  instruction: string;
+  quantity?: number | null;
+  material?: string | null;
+  date?: string;
+  endDate?: string;
+  time?: string;
+  ownerName?: string;
+  counselor?: string;
+  priority?: "긴급" | "보통";
+  message?: string;
+};
+
+const UNIFIED_INTENTS_TOOL = (taskTypeLabels: string[]): Anthropic.Tool => ({
+  name: "submit_intents",
+  description:
+    "사용자 문장 하나를 독립적으로 처리 가능한 intent 여러 개로 분리한다. 서로 다른 요청(업무 지시, 기록, 조회 등)이 한 문장에 섞여 있으면 반드시 각각 별도 intent로 나눈다.",
+  input_schema: {
+    type: "object",
+    properties: {
+      intents: {
+        type: "array",
+        minItems: 1,
+        items: {
+          type: "object",
+          properties: {
+            route: {
+              type: "string",
+              enum: ["task", "admin_inbox", "schedule", "counseling", "student_action", "attendance_check", "clarify"],
+              description:
+                "task=업무 생성(아래 taskType 13종 중 하나), admin_inbox=행정실 기록(결석예정/긴급상담요청/신규생문의/기타), schedule=예정된 일정(보강/재시/신입생상담/레벨체크), counseling=이미 진행한 상담 기록, student_action=학생 조치사항 메모, attendance_check=이미 입력된 출결/결석 여부를 조회만 하는 확인 요청(새로 기록하지 않음), clarify=위 어디에도 명확히 해당하지 않을 때.",
+            },
+            taskType: { type: "string", enum: taskTypeLabels, description: "route가 task일 때만. 업무 유형 한글 라벨." },
+            inboxType: { type: "string", enum: ["결석예정", "긴급상담요청", "신규생문의", "기타"], description: "route가 admin_inbox일 때만." },
+            scheduleType: { type: "string", enum: ["보강", "재시", "신입생상담", "레벨체크"], description: "route가 schedule일 때만." },
+            students: {
+              type: "array",
+              items: { type: "string" },
+              description: "이 intent가 관련된 학생 이름들. 여러 명이면 전부 나열(예: 3명이 같은 업무 하나를 공유하면 배열에 3명 다). 해당 없으면 빈 배열.",
+            },
+            studentSchool: { type: "string", description: "학생 학교(재원생 명단에 없는 신입생 가능성이 있을 때만 채움). 없으면 빈 문자열." },
+            className: { type: "string", description: "언급된 반 이름. 없으면 빈 문자열." },
+            instruction: { type: "string", description: "이 intent의 핵심 내용/지시/요약(무엇을 해야 하는지 또는 무엇을 기록하는지)." },
+            quantity: { type: "number", description: "'3부'처럼 수량이 언급되면 그 숫자. 없으면 0." },
+            material: { type: "string", description: "언급된 자료/교재 이름(예: '부교재', '예상문제'). 없으면 빈 문자열." },
+            date: { type: "string", description: "YYYY-MM-DD. 언급 없으면 오늘." },
+            endDate: { type: "string", description: "YYYY-MM-DD. 기간이 있는 admin_inbox(결석예정)에만, 없으면 빈 문자열." },
+            time: { type: "string", description: "예: 16:00. 없으면 빈 문자열." },
+            ownerName: { type: "string", description: "담당 직원 이름(schedule). 없으면 빈 문자열." },
+            counselor: { type: "string", description: "상담자 이름(counseling). 없으면 빈 문자열." },
+            priority: { type: "string", enum: ["긴급", "보통"], description: "급한 표현이 있으면 긴급, 아니면 보통." },
+            message: { type: "string", description: "route가 clarify일 때만, 무엇이 불명확한지 한국어 설명." },
+          },
+          required: ["route", "students", "instruction"],
+        },
+      },
+    },
+    required: ["intents"],
+  },
+});
+
+function buildUnifiedSystemBlocks(ref: NlReference, taskTypeLabels: string[]): Anthropic.TextBlockParam[] {
+  const text = `너는 영어학원 관리 시스템의 자연어 입력을 구조화하는 도우미다. 직원이 자유롭게 쓴 한국어 문장 하나에 서로 다른 요청이 여러 개 섞여 있을 수 있다 — 반드시 각각을 독립된 intent로 분리해서 submit_intents 도구 하나를 호출한다.
+
+오늘 날짜는 ${ref.today} (${ref.weekday}요일)이다.
+날짜 참고표 (YYYY-MM-DD(요일,주차) 형식):
+${buildDateTable(ref.today)}
+
+intent 분리 예시:
+"김정우, 신융, 허준혁 영어2 천재조 3과 예상문제, 부교재 변형문제 출처 찾아서 출력 3부 오류 생김, 김정우 결석 입력했음 확인해줘"
+→ 3개 intent로 분리:
+  1) route:"task", taskType:"자료준비"(또는 "출력"), students:["김정우","신융","허준혁"], instruction:"3과 예상문제/부교재 변형문제 출처 찾기", material:"부교재 변형문제"
+  2) route:"task", taskType:"출력", students:["김정우","신융","허준혁"], instruction:"출력", quantity:3
+  3) route:"attendance_check", students:["김정우"], instruction:"결석 입력 여부 확인"
+
+분류 규칙:
+- route:"task"의 taskType은 반드시 아래 13개 중 하나: ${taskTypeLabels.join(", ")}
+- route:"schedule"은 아직 안 한, 앞으로 할 일정(보강/재시/신입생상담/레벨체크)일 때만.
+- route:"counseling"은 상담을 이미 진행하고 그 내용을 기록할 때만(예정이면 schedule).
+- route:"student_action"은 학생의 지속적인 학습 조치/후속관리 메모.
+- route:"admin_inbox"는 결석예정/긴급상담요청/신규생문의/기타 전달사항.
+- route:"attendance_check"는 "확인해줘/입력됐는지 봐줘"처럼 이미 있어야 할 기록을 조회만 하는 요청 — 새로 기록을 만들라는 뜻이 아니다. 절대 task나 admin_inbox로 분류하지 않는다.
+- 학생 이름은 재원생 명단과 최대한 정확히 일치시킨다. 명단에 없어도 clarify를 쓰지 말고 문장 그대로 students에 넣는다(신입생일 수 있음 — 이후 처리는 시스템이 담당).
+- 문장 전체가 어디에도 해당하지 않을 때만 그 부분을 route:"clarify"로 남긴다(문장 전체를 통째로 포기하지 말고, 해석 가능한 다른 부분은 정상 분류한다).
+- intents 배열은 최소 1개 이상이어야 한다.
+
+재원생 명단 (이름(학교)):
+${ref.students.join(", ")}
+
+반 목록:
+${ref.classes.join(", ")}
+
+직원 명단:
+${ref.staff.join(", ")}`;
+  return [{ type: "text", text, cache_control: { type: "ephemeral" } }];
+}
+
+export async function parseUnifiedInput(text: string, ref: NlReference, taskTypeLabels: string[]): Promise<UnifiedIntent[]> {
+  mark("anthropic:unified:before_call");
+  const res = await anthropic.messages.create({
+    model: NL_MODEL,
+    max_tokens: 2048,
+    system: buildUnifiedSystemBlocks(ref, taskTypeLabels),
+    tools: [UNIFIED_INTENTS_TOOL(taskTypeLabels)],
+    tool_choice: { type: "tool", name: "submit_intents" },
+    messages: [{ role: "user", content: text }],
+  });
+  mark("anthropic:unified:after_call");
+
+  const toolUse = res.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+  const input = (toolUse?.input as { intents?: UnifiedIntent[] }) ?? {};
+  return input.intents ?? [];
 }

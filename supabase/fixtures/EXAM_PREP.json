@@ -1,0 +1,180 @@
+[
+  {
+    "id": "exam_prep-1",
+    "url": "https://example.invalid/EXAM_PREP/1",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "대비1",
+            "text": {
+              "content": "대비1"
+            }
+          }
+        ]
+      },
+      "학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-1"
+          }
+        ]
+      },
+      "시험명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "중간",
+            "text": {
+              "content": "중간"
+            }
+          }
+        ]
+      },
+      "담당교사": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상강사",
+            "text": {
+              "content": "가상강사"
+            }
+          }
+        ]
+      },
+      "진행률": {
+        "type": "number",
+        "number": 0
+      },
+      "취약부분": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "어법",
+            "text": {
+              "content": "어법"
+            }
+          }
+        ]
+      },
+      "갱신일": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-03"
+        }
+      },
+      "학교급": {
+        "type": "select",
+        "select": {
+          "name": "중등"
+        }
+      },
+      "데이터": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "{\"level\":\"중등\",\"middle\":{\"textSources\":[],\"schoolPrint\":\"\",\"practiceItems\":{\"자주 틀리는 문제\":[],\"기출문제\":[],\"백발백중\":[],\"적중백\":[],\"추가문제\":[]}}}",
+            "text": {
+              "content": "{\"level\":\"중등\",\"middle\":{\"textSources\":[],\"schoolPrint\":\"\",\"practiceItems\":{\"자주 틀리는 문제\":[],\"기출문제\":[],\"백발백중\":[],\"적중백\":[],\"추가문제\":[]}}}"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "exam_prep-2",
+    "url": "https://example.invalid/EXAM_PREP/2",
+    "created_time": "2026-01-01T00:00:00.000Z",
+    "last_edited_time": "2026-01-02T00:00:00.000Z",
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "제목": {
+        "type": "title",
+        "title": [
+          {
+            "plain_text": "대비2",
+            "text": {
+              "content": "대비2"
+            }
+          }
+        ]
+      },
+      "학생": {
+        "type": "relation",
+        "relation": [
+          {
+            "id": "student-2"
+          }
+        ]
+      },
+      "시험명": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "기말",
+            "text": {
+              "content": "기말"
+            }
+          }
+        ]
+      },
+      "담당교사": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "가상강사",
+            "text": {
+              "content": "가상강사"
+            }
+          }
+        ]
+      },
+      "진행률": {
+        "type": "number",
+        "number": 0
+      },
+      "취약부분": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "",
+            "text": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      "갱신일": {
+        "type": "date",
+        "date": {
+          "start": "2026-01-04"
+        }
+      },
+      "학교급": {
+        "type": "select",
+        "select": {
+          "name": "고등"
+        }
+      },
+      "데이터": {
+        "type": "rich_text",
+        "rich_text": [
+          {
+            "plain_text": "{invalid-json",
+            "text": {
+              "content": "{invalid-json"
+            }
+          }
+        ]
+      }
+    }
+  }
+]

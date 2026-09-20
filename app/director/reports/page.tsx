@@ -19,6 +19,7 @@ export default async function DirectorReportsPage() {
         <DirectorTopbar
           staffName={session.name}
           role={session.role ?? ""}
+          branchName={branchName}
           dateLabel={formatDateLabel(todayKST())}
           greetingTitle="학생 리포트"
           greetingText="기간을 정하고 반·학교·학생 단위로 학부모 발송용 학습현황 리포트를 만드세요."

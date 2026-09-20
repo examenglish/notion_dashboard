@@ -14,6 +14,7 @@ export default function PreviewTestPage() {
         <DirectorTopbar
           staffName="김원장"
           role="원장"
+          branchName="이그잼영어학원 · 금정"
           dateLabel="8월 14일(금)"
           greetingTitle="전체 학원 현황"
           greetingText="김원장 원장님, 오늘 하루 현황입니다."

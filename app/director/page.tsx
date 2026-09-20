@@ -1,13 +1,17 @@
 import Link from "next/link";
 import Image from "next/image";
+import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import DirectorLandingInput from "@/components/director/DirectorLandingInput";
+import AiUnifiedInput from "@/components/AiUnifiedInput";
+import DirectorUserMenu from "@/components/director/DirectorUserMenu";
 import "./landing.css";
-
 export default async function DirectorLandingPage() {
   const session = await getSession();
-  const canUseAI = !!session?.role && ["원장", "행정", "강사", "조교"].includes(session.role);
+  if (!session) redirect("/login?next=/director");
+  if (!session.role || !["원장", "행정", "강사", "조교"].includes(session.role)) redirect("/dashboard");
+
+  const branchName = process.env.NEXT_PUBLIC_BRANCH_NAME ?? "이그잼영어학원";
 
   return (
     <div className="director-landing">
@@ -17,11 +21,11 @@ export default async function DirectorLandingPage() {
         </Link>
         <nav className="landing-actions" aria-label="계정 메뉴">
           <Button asChild className="landing-action landing-action-primary">
-            <Link href={canUseAI ? "/director/dashboard" : "/login?next=/director/dashboard"}>대시보드로 가기</Link>
+            <Link href="/director/dashboard">대시보드로 가기</Link>
           </Button>
-          <Button asChild variant="outline" className="landing-action landing-action-outline">
-            <Link href="/login?next=/director">로그인</Link>
-          </Button>
+          <div className="landing-account-menu">
+            <DirectorUserMenu staffName={session.name} role={session.role} branchName={branchName} />
+          </div>
         </nav>
       </header>
 
@@ -35,7 +39,7 @@ export default async function DirectorLandingPage() {
             <p className="landing-promise-en">We Built What We Needed.</p>
             <p className="landing-promise-ko">학원에서 시작된, 우리만의 AI.</p>
           </div>
-          <DirectorLandingInput canUseAI={canUseAI} canAccessReports={session?.role === "원장" || session?.role === "행정"} />
+          <AiUnifiedInput role={session.role} figma />
         </div>
       </main>
 
