@@ -246,6 +246,26 @@ describe("getMakeupScheduleStatus / findClassRecordGaps — postgres-primary", (
   });
 });
 
+describe("getPlannedAbsentStudentIds — postgres-primary (staff.md PART 24, 마지막 순수 Notion 함수 전환)", () => {
+  it("그 날짜 결석예정 + 기간이 걸치는 결석예정 학생을 모두 찾는다", async () => {
+    tables.admin_inbox_entries.push(
+      { id: "i1", notion_id: null, branch_id: "branch-sajik", student_notion_ids: ["notion-stu-a"], input_type: "결석예정", start_date: "2026-09-20", end_date: null, content: "", complete: false, entered_by: "" },
+      { id: "i2", notion_id: null, branch_id: "branch-sajik", student_notion_ids: ["notion-stu-geumjeong-like"], input_type: "결석예정", start_date: "2026-09-18", end_date: "2026-09-22", content: "", complete: false, entered_by: "" },
+      { id: "i3", notion_id: null, branch_id: "branch-sajik", student_notion_ids: ["notion-stu-other"], input_type: "기타", start_date: "2026-09-20", end_date: null, content: "", complete: false, entered_by: "" }
+    );
+    const notion = await freshNotion();
+    const ids = await notion.getPlannedAbsentStudentIds("2026-09-20");
+    expect(ids.sort()).toEqual(["notion-stu-a", "notion-stu-geumjeong-like"].sort());
+  });
+
+  it("branch isolation: 다른 지점 결석예정은 안 섞인다", async () => {
+    tables.admin_inbox_entries.push({ id: "i-geumjeong", notion_id: null, branch_id: "branch-geumjeong", student_notion_ids: ["notion-stu-a"], input_type: "결석예정", start_date: "2026-09-20", end_date: null, content: "", complete: false, entered_by: "" });
+    const notion = await freshNotion();
+    const ids = await notion.getPlannedAbsentStudentIds("2026-09-20");
+    expect(ids).toEqual([]);
+  });
+});
+
 describe("getAdminInboxEntry / getCounselingEntryEnteredBy — 상세/수정/삭제 라우트 dual-id 버그 수정", () => {
   it("native PG UUID 항목도 조회된다(예전엔 notion.pages.retrieve라 여기서 항상 실패했음)", async () => {
     tables.admin_inbox_entries.push({ id: "pg-inbox-new", notion_id: null, branch_id: "branch-sajik", student_notion_ids: ["notion-stu-a"], input_type: "결석예정", complete: false, start_date: "2026-09-20", content: "결석", owner_text: "박선생", entered_by: "김조교" });

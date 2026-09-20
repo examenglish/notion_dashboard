@@ -317,46 +317,23 @@ export async function updateStaffSchedule(staffId: string, workHours: WorkHours)
   await dualWriteEntity("STAFF", updated);
 }
 
+// PostgreSQL(staff.pin_hash) 전용 — Notion 평문 PIN 폴백은 제거됐다
+// (원장 확인: 재직 직원 중 pin_hash 누락 0명, 2026-09-20, staff.md
+// PART 24). 여기서 실패하면 그대로 로그인 실패다 — Notion으로 다시
+// 시도하지 않는다.
 export async function findStaffByNameAndPin(name: string, pin: string) {
-  if (branchCode()) {
-    try {
-      const row = await pgFindByExactColumn("STAFF", "name", name);
-      if (row && !row.resigned && row.pin_hash) {
-        const ok = await verifyPin(pin, row.pin_hash as string);
-        if (!ok) return null;
-        return {
-          // notion_id가 아직 없는(postgres-primary로 막 만든 직원, 미러
-          // 대기 중) 계정도 로그인 직후 session.staffId가 null이 되면 안
-          // 된다 — PART 10/16/17/18과 동일한 종류의 버그, 여기서도 수정.
-          id: (row.notion_id as string | null) ?? (row.id as string),
-          name: row.name as string,
-          role: row.role as string,
-          mustChangePin: !!row.must_change_password,
-        };
-      }
-    } catch (err) {
-      console.error("findStaffByNameAndPin: postgres lookup failed, falling back to Notion", err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  // pin_hash가 아직 backfill 안 된 계정(또는 postgres 조회 실패) — 기존
-  // Notion 평문 경로로 확인한다. 여기서 검증에 성공했다는 건 방금 입력한
-  // pin이 정답이라는 뜻이므로, 이 값을 그대로(추측 아님) 해시해 Postgres에
-  // 즉시 채워 넣는다 — 다음 로그인부터는 이 계정도 Postgres만으로 확인된다.
-  const all = await getCachedStaffList();
-  const staff = all.find((s) => s.name === name);
-  if (!staff || staff.pin !== pin || staff.resigned) return null;
-  if (branchCode()) {
-    fireAndForget("pin-hash:lazy-backfill", async () => {
-      const hash = await hashPin(pin);
-      await pgPatchByNotionId("STAFF", staff.id, { pin_hash: hash });
-    });
-  }
+  const row = await pgFindByExactColumn("STAFF", "name", name);
+  if (!row || row.resigned || !row.pin_hash) return null;
+  const ok = await verifyPin(pin, row.pin_hash as string);
+  if (!ok) return null;
   return {
-    id: staff.id,
-    name: staff.name,
-    role: staff.role,
-    mustChangePin: staff.mustChangePin,
+    // notion_id가 아직 없는(postgres-primary로 막 만든 직원, 미러 대기
+    // 중) 계정도 로그인 직후 session.staffId가 null이 되면 안 된다 —
+    // PART 10/16/17/18과 동일한 종류의 버그, 여기서도 수정.
+    id: (row.notion_id as string | null) ?? (row.id as string),
+    name: row.name as string,
+    role: row.role as string,
+    mustChangePin: !!row.must_change_password,
   };
 }
 
@@ -3775,13 +3752,25 @@ async function syncAttendanceForPlannedAbsence(studentId: string, date: string) 
 // ClassRecordForm이 아직 저장된 적 없는 반/날짜를 열었을 때도 결석 체크박스를
 // 미리 체크해 보여줄 수 있도록, 주어진 날짜에 "결석예정"으로 등록된 학생 id
 // 목록을 돌려준다.
-// 이 함수는 아직 100% Notion 전용(ADMIN_INBOX 읽기, 이번 수업진도/출결
-// postgres-primary 전환 범위 밖 — staff.md PART 13 참고)이다. 다만 이
-// 결과는 "결석예정 체크박스를 미리 켜두는" 편의 기능일 뿐이라, Notion이
-// 느리거나 죽어있어도 수업 기록 입력 화면 전체(getClassProgressForEdit)가
-// 막히면 안 된다 — 실패하면 조용히 빈 배열로 폴백하고 로그만 남긴다.
+// staff.md PART 24: postgres-primary로 전환 완료(그동안 미룬 이유였던
+// "수업진도/출결 전환 범위 밖"은 이미 해소됨). 이 결과는 "결석예정
+// 체크박스를 미리 켜두는" 편의 기능일 뿐이라, 실패해도 수업 기록 입력
+// 화면 전체(getClassProgressForEdit)가 막히면 안 된다 — try/catch
+// 안전망은 그대로 유지하고 조용히 빈 배열로 폴백, 로그만 남긴다.
 export async function getPlannedAbsentStudentIds(date: string): Promise<string[]> {
   try {
+    if (getDbProvider() === "postgres") {
+      const [byDate, byRange] = await Promise.all([
+        pgQueryRaw("ADMIN_INBOX", `input_type=eq.${encodeURIComponent("결석예정")}&start_date=eq.${date}`),
+        pgQueryRaw("ADMIN_INBOX", `input_type=eq.${encodeURIComponent("결석예정")}&start_date=lte.${date}&end_date=gte.${date}`),
+      ]);
+      const ids = new Set<string>();
+      for (const r of [...byDate, ...byRange].filter(pgNotArchived)) {
+        const sid = (r.student_notion_ids as string[] | undefined)?.[0];
+        if (sid) ids.add(sid);
+      }
+      return Array.from(ids);
+    }
     const [byDate, byRange] = await Promise.all([
       queryAllPages({
         data_source_id: DB.ADMIN_INBOX,

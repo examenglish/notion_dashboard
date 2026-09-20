@@ -4,7 +4,30 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-20 (**PART 23 신규 — 안정성 전수점검(원장 지시),
+마지막 업데이트: 2026-09-20 (**PART 24 신규 — Notion 제거 마무리:
+Supabase Storage 실전환 + PIN fallback 완전 제거 + 마지막 순수 Notion
+함수 전환. 정상 운영 Notion "의존성"(블로킹 호출) = 0 달성.** 원장이
+BLOCKED 2건을 직접 처리(materials bucket 생성 완료, 재직 직원 pin_hash
+누락 0명 SQL 확인)한 뒤 지시. ① Vercel 두 프로젝트(사직/금정) production에
+`ACADEMY_MATERIAL_STORAGE_PROVIDER=supabase` 설정 + 재배포 — 신규 자료
+업로드가 실제로 Supabase Storage(private bucket, branch prefix)로 간다.
+② `findStaffByNameAndPin`의 Notion 평문 PIN 폴백 완전 삭제 — 로그인은
+이제 100% `staff.pin_hash`만 확인하고, 실패해도 Notion으로 재시도하지
+않는다(테스트로 Notion SDK 미호출까지 확인). ③ `getPlannedAbsentStudentIds`
+(PART 13부터 유일하게 남아있던 순수 Notion 함수)도 postgres-primary로
+전환 — 브레이스 매칭 스크립트로 재확인한 결과 `lib/notion.ts`에 provider
+분기 없이 Notion을 직접/간접(`queryAllPages`) 호출하는 export 함수가
+**0개**. ④ 전수검사: `app/api/admin/setup`(관리자 1회성 도구)와
+`scripts/seed.mjs`(수동 시드 스크립트, 런타임 미포함) 외에는 저장소
+어디서도 `@notionhq/client`를 직접 안 씀 확인. 남은 Notion API 호출은
+`fireAndForget` best-effort 미러(쓰기 성공 후 배경에서 Notion에도
+반영 시도, 실패해도 사용자 요청에 영향 없음 — 처음부터 "Notion을 cold
+backup으로 유지"가 이 마이그레이션의 목표였으므로 이건 "의존성"이
+아니라 의도된 설계)뿐이다. 테스트 9건 신규(PIN 7건 + 결석예정 2건),
+126/126 통과, tsc/build 통과. PART 23까지 완료 처리는 유지. 아래
+"PART 24" 먼저 확인)
+
+이전 업데이트: 2026-09-20 (**PART 23 — 안정성 전수점검(원장 지시),
 Phase C 1차 조사의 사각지대를 찾아 대시보드/원장 화면 함수 11개 +
 API 라우트 3곳의 실제 버그를 발견·수정.** 가장 큰 발견: 이전 Phase C
 조사가 `notion.*` 직접호출만 grep했는데, 실제로는 여러 함수가
@@ -226,6 +249,108 @@ gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
 PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
 004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
+
+---
+
+## PART 24 — Notion 제거 마무리: Storage 실전환 + PIN fallback 제거 + 마지막 함수 전환 (2026-09-20)
+
+### 배경
+원장이 PART 17/19의 BLOCKED 2건을 직접 처리:
+1. Supabase에서 `materials` private bucket 생성(`public=false`,
+   `file_size_limit=10485760`) — `supabase/schema/005_material_storage_
+   bucket.sql`대로.
+2. `select count(*) from staff where pin_hash is null and resigned =
+   false;` 실행 → **0** 확인 — 재직 직원 전원 pin_hash backfill 완료.
+
+이 둘을 근거로 "Notion 제거 마무리 + Storage 실전환"을 지시.
+
+### 1) Supabase Storage 실전환
+Vercel CLI로 두 프로젝트 production env에 직접 설정:
+```
+npx vercel env add ACADEMY_MATERIAL_STORAGE_PROVIDER production
+# 값: supabase
+```
+- `examenglish/notion-dashboard-geumjeong`(금정) — 설정 완료.
+- `examenglish/notion-dashboard`(사직) — 설정 완료.
+둘 다 재배포해서 즉시 적용(Vercel 서버리스 함수는 재배포해야 새 env를
+읽음). 이제 `getMaterialStorageProvider()`가 `"supabase"`를 반환하므로
+`createFileUploadDraft`/`uploadMaterialFile`(PART 17에서 이미 작성해둔
+분기)이 실제로 Supabase Storage로 업로드하고, `listMaterialTasks`/
+`getMaterialTasksForDate`가 `source:"supabase"` 항목에 대해 매번 새
+서명 URL을 발급한다.
+
+**브라우저 실업로드는 로그인 세션이 없어 이번 세션에서 확인 못 함** —
+PART 17에서 이미 작성해둔 mock 기반 테스트(`lib/materialStorage.
+postgres.test.ts`, branch prefix/서명 URL/Notion mirror 실패 격리
+전부 검증됨)로 코드 레벨 정확성은 재확인했지만, "실제 파일이 실제
+bucket에 올라가고 실제 서명 URL로 열리는지"는 원장이 브라우저에서
+직접 확인해야 한다(아래 "원장이 확인할 것" 참고).
+
+### 2) PIN Notion fallback 완전 제거
+`findStaffByNameAndPin`에서 `pin_hash`가 없을 때 `getCachedStaffList()`
+(Notion 평문 PIN 조회) + lazy backfill로 넘어가던 두 번째 단계를 통째로
+삭제. 이제:
+```ts
+export async function findStaffByNameAndPin(name: string, pin: string) {
+  const row = await pgFindByExactColumn("STAFF", "name", name);
+  if (!row || row.resigned || !row.pin_hash) return null;
+  const ok = await verifyPin(pin, row.pin_hash as string);
+  if (!ok) return null;
+  return { id: (row.notion_id as string | null) ?? (row.id as string), ... };
+}
+```
+`getCachedStaffList()` 자체는 삭제 안 함(`listStaff()`의 Notion-primary
+폴백 분기가 여전히 씀, `ACADEMY_DB_PROVIDER`가 꺼진 배포를 위한 것이라
+이번 지시 범위 밖). branch isolation은 `pgFindByExactColumn`이 이미
+`branch_id`를 강제하므로 그대로 유지, native PG UUID는 기존 displayId
+규약 그대로, 퇴사자 체크(`row.resigned`)도 그대로.
+
+### 3) getPlannedAbsentStudentIds 전환
+PART 13에서 "수업진도/출결 전환 범위 밖이라 안전망만" 명분으로 미뤄뒀던
+것 — 그 명분(관련 도메인이 아직 Notion이라 굳이 먼저 손 안 댐)은 이제
+사라졌으므로(ADMIN_INBOX의 다른 READ들은 이미 PART 23 등에서 전환
+완료), 같은 패턴으로 postgres-primary 전환. try/catch 안전망(실패해도
+수업 기록 입력 화면을 막지 않음)은 그대로 유지.
+
+### 4) 최종 전수검사
+브레이스 매칭 스크립트로 `lib/notion.ts`의 모든 export 함수를 다시
+검사한 결과 provider 분기 없이 Notion을 호출하는 함수가 **0개**.
+저장소 전체에서 `@notionhq/client`를 직접 import하는 곳은
+`lib/notion.ts`(메인 추상화)와 `app/api/admin/setup/route.ts`(관리자
+1회성 Notion DB 프로비저닝 도구, 정상 운영 경로 아님) 뿐 —
+`scripts/seed.mjs`는 수동 시드 스크립트로 애초에 앱에서 import 안 함.
+`supabase/scripts/migrate_notion_to_supabase.mjs`/`lib/reconciliation.ts`
+는 마이그레이션/검증 도구로 지시대로 안 건드림.
+
+**"정상 운영 Notion 호출 몇 개 남았나"에 대한 정확한 답**: 블로킹
+호출(사용자 요청이 Notion 응답을 기다려야 하는 경로) = **0**. 다만
+`fireAndForget` best-effort 미러(쓰기 성공 후 배경에서 Notion에도
+반영 시도)는 여전히 발생한다 — 이건 "의존성"이 아니라 애초에 이
+마이그레이션 전체의 목표("Notion을 cold backup/reference로만 유지",
+memory 참고)가 의도한 설계다: 실패해도 사용자 요청에 전혀 영향 없고
+(`fireAndForget`이 예외를 삼킴), Notion이 완전히 죽어있어도 앱은
+정상 동작한다.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(126/126, 신규 9건 — PIN 로그인
+정상/오류/cross-branch/퇴사자/native UUID/해시없음/Notion 미호출 7건,
+결석예정 날짜+기간 매칭/branch isolation 2건)/`npm run build` 전부 통과.
+
+### ⬜ 원장이 브라우저에서 확인할 것
+1. 자료제작 화면에서 새 파일을 업로드하고, 목록에서 그 파일 링크를
+   눌러 실제로 열리는지(서명 URL 정상 발급).
+2. 기존에 Notion으로 첨부됐던 오래된 자료제작 항목의 파일 링크가 여전히
+   그대로(또는 만료됐으면 만료된 채로 — 마이그레이션 안 함, 의도된 것)
+   나오는지.
+3. PIN 로그인이 평소처럼 되는지(정상 계정 기준 — fallback 제거가 혹시
+   놓친 케이스가 없는지 실사용으로 한 번 더 확인).
+
+### 신규/변경 파일
+`lib/notion.ts`(`findStaffByNameAndPin` Notion fallback 제거,
+`getPlannedAbsentStudentIds`에 postgres 분기), Vercel production env
+(사직/금정 `ACADEMY_MATERIAL_STORAGE_PROVIDER=supabase`, 코드 아님 —
+`vercel env add`로 직접 설정), `lib/pinLogin.postgres.test.ts`(신규,
+7건), `lib/dashboardAudit.postgres.test.ts`(2건 추가).
 
 ---
 
