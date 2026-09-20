@@ -4,7 +4,35 @@
 현재까지 진행 상황과 다음 할 일을 정리합니다. 새 세션을 시작하면 이 파일을
 먼저 읽고 "미완료" 항목부터 확인하세요.
 
-마지막 업데이트: 2026-09-20 (**PART 22 신규 — `getStudentPeriodReport`
+마지막 업데이트: 2026-09-20 (**PART 23 신규 — 안정성 전수점검(원장 지시),
+Phase C 1차 조사의 사각지대를 찾아 대시보드/원장 화면 함수 11개 +
+API 라우트 3곳의 실제 버그를 발견·수정.** 가장 큰 발견: 이전 Phase C
+조사가 `notion.*` 직접호출만 grep했는데, 실제로는 여러 함수가
+`queryAllPages()`(Notion 전용 wrapper) 뒤에 숨어있어 그물을 빠져나갔다
+— `getTodaySchedule`(대시보드 "오늘의 일정", 최대 피해), `getClassSummaryByDate`/
+`getMonthlyStudentMetrics`/`getMonthlyOutcomeBreakdown`/
+`getDailyOutcomeBreakdown`/`getDailyOutcomeDetail`/
+`getUrgentCounselingRequests`/`getRecentAdminInbox`/`getRecentBriefings`/
+`getMakeupScheduleStatus`/`findClassRecordGaps` 11개 전부 postgres-primary로
+전환(새 스키마 없음). 두 번째 발견(더 심각): `app/api/admin-inbox/[id]`/
+`app/api/counseling/[id]`/`app/api/urgent-counseling/[id]/complete` 3개
+API 라우트가 `lib/notion.ts` 추상화를 건너뛰고 `notion.pages.retrieve`를
+직접 호출하고 있었다 — postgres-primary로 막 생성된(notion_id 없는)
+행정실/상담 항목은 **수정·삭제·완료처리 자체가 항상 500**이었다(목록엔
+보이지만 클릭하면 깨지는 패턴, PART 10/16/17/18과 같은 병인데 이번엔
+lib 밖 라우트 레벨에서 발생). `getAdminInboxEntry`/
+`getCounselingEntryEnteredBy`(신규, dual-id 조회) 추가해 3개 라우트
+전부 수정. 재검증 결과 `lib/notion.ts`에 남은 순수 Notion 함수는
+`getPlannedAbsentStudentIds`(PART 13 안전망) 단 하나뿐임을 스크립트로
+확인(브레이스 매칭 기반, 이전보다 정확). branch_id는 중앙화된
+primitive(`pgFetch`/`pgInsertRow`/`pgPatchByNotionId` 등) 덕분에 전수
+누락 없음 확인(`lib/reconciliation.ts`의 사소한 예외 1건은 admin 전용
+도구라 영향 없음, 안 건드림). Notion mirror 실패가 500을 만드는 경로도
+스크립트로 재확인 — postgres 분기 안의 모든 notion.* 호출이
+fireAndForget으로 격리돼 있어 0건. 테스트 14건 신규, 117/117 통과,
+tsc/build 통과. PART 22까지 완료 처리는 유지. 아래 "PART 23" 먼저 확인)
+
+이전 업데이트: 2026-09-20 (**PART 22 — `getStudentPeriodReport`
 (학부모 발송 학습현황 리포트) Notion-only → PostgreSQL-primary 전환.**
 Phase D 원래 목록의 "reports" 항목 — 기간 필터(`record_date gte/lte`)로
 `daily_records`/`exam_scores`를 직접 조회하고, 학생 기본정보는 이미
@@ -198,6 +226,98 @@ gap. `hasPriorFailure`(재시 자동 URGENT 승격)/`getTaskThread`(후속업무
 PART 9(Account Menu) 완료 처리는 유지. `supabase/schema/
 004_manual_steps_title.sql`은 아직 미적용 — 계속 blocker. 아래 "PART 11"
 먼저 확인)
+
+---
+
+## PART 23 — 안정성 전수점검: 대시보드 함수 11개 + API 라우트 3곳 버그 수정 (2026-09-20)
+
+### 배경
+원장 지시: 새 기능 없이 "지금까지 놓친 gap/버그"만 찾는 마지막 전수점검.
+7개 항목(① lib/notion.ts 재검증 ② app/api 전수검색 ③ branch_id 누락
+④ 목록/상세 불일치 재검사 ⑤ Notion mirror 500 경로 ⑥ 전체 lifecycle
+⑦ 명백한 버그는 즉시 수정)을 순서대로 진행.
+
+### 발견 1 — Phase C 1차 조사의 사각지대 (가장 큰 발견)
+이전 세션(PART 18)의 Phase C 조사는 함수 본문에서 `notion.pages/
+dataSources/fileUploads.*`를 직접 grep했다. 그런데 이 코드베이스 초기
+(수업진도/출결 이전) 함수들은 `notion.dataSources.query`를 페이지네이션
+처리해주는 내부 헬퍼 `queryAllPages()`를 통해서만 Notion을 호출한다 —
+즉 함수 본문에 `notion.` 리터럴이 안 보여서 "이미 postgres 분기가
+있거나 Notion을 안 쓴다"로 오분류됐다. 브레이스 매칭으로 함수 경계를
+정확히 찾고 `queryAllPages()` 호출 여부까지 검사하는 스크립트로
+재조사한 결과 11개 함수가 실제로는 여전히 100% Notion이었다:
+
+- `getTodaySchedule` — **대시보드 "오늘의 일정" 위젯**(조치알람/신규등원/
+  보강/재시/클리닉/복습/개인할일/상담/행정실 전부). 가장 자주 쓰이는
+  화면 중 하나인데도 postgres-primary로 만든 AI 업무/상담/행정실
+  기록이 Notion 미러 전(또는 미러가 영구 실패하는 유형)이면 여기서
+  통째로 안 보였다 — PART 10에서 "내 업무"가 겪었던 것과 같은 종류의
+  피해가 대시보드에도 있었던 것.
+- `getClassSummaryByDate`/`getMonthlyStudentMetrics`/
+  `getMonthlyOutcomeBreakdown`/`getDailyOutcomeBreakdown`/
+  `getDailyOutcomeDetail`(원장 대시보드 통계 카드/도넛차트/타일 팝업)
+- `getUrgentCounselingRequests`/`getRecentAdminInbox`/`getRecentBriefings`
+  (행정실/브리핑 목록)
+- `getMakeupScheduleStatus`(보강/재시 확정 현황), `findClassRecordGaps`
+  (진도 누락 확인 — PART 13에서 의도적으로 미룬 것, 이번에 마저 처리)
+
+전부 새 스키마 없이(기존 컬럼 재사용) `getDbProvider()==="postgres"`
+분기 추가 + 기존 Notion 코드 폴백 유지.
+
+### 발견 2 — API 라우트가 lib/notion.ts 추상화를 건너뛴 3곳 (더 심각)
+`app/api/admin-inbox/[id]/route.ts`(PATCH/DELETE), `app/api/counseling/
+[id]/route.ts`(PATCH), `app/api/urgent-counseling/[id]/complete/route.ts`
+(POST) 세 라우트가 "본인이 입력한 항목만 수정 가능" 권한 체크(또는
+완료처리에 필요한 학생/내용 조회)를 위해 `import { notion } from
+"@/lib/notion"`로 client를 직접 가져와 `notion.pages.retrieve({page_id:
+params.id})`를 호출하고 있었다 — `updateAdminInboxEntry`/
+`deleteAdminInboxEntry`/`updateCounselingEntry` 자체는 이미
+postgres-primary인데, 그 앞의 권한 체크가 Notion 전용이라 **postgres-
+primary로 막 생성된(notion_id 아직 없는) 행정실/상담 항목은 수정·삭제·
+완료처리 자체가 항상 500**이었다. PART 10/16/17/18에서 반복 발견된
+"목록엔 보이지만 상세/수정에서 깨지는" 패턴과 같은 병인데, 이번엔
+`lib/notion.ts` 내부가 아니라 API 라우트가 그 추상화를 우회해서 생긴
+케이스라 이전 스캔들에서 전혀 안 잡혔다.
+
+**수정**: `lib/notion.ts`에 `getAdminInboxEntry(id)`(studentId/content/
+owner/enteredBy 반환)와 `getCounselingEntryEnteredBy(id)`(dual-id 조회)
+신규 추가, 3개 라우트가 `notion.pages.retrieve` 대신 이걸 쓰도록 교체.
+
+### branch_id / Notion mirror 500 재검사 — 문제 없음 확인
+모든 postgres read/write가 중앙화된 primitive(`pgFetch`/`pgQueryRaw`/
+`pgInsertRow`/`pgPatchByNotionId`/`pgPatchById`/`pgArchiveByNotionId`/
+`pgFindByExactColumn`/`resolveRelationIds`, 전부 `lib/supabaseRepo.ts`/
+`lib/supabasePgRead.ts`)만 거치고, 그 primitive들이 예외 없이
+`branch_id=eq.<bid>`를 붙이거나 INSERT 시 `branch_id`를 주입하므로
+개별 함수가 branch_id를 빠뜨릴 방법 자체가 없다(설계로 보장) —
+`lib/reconciliation.ts`(관리자 전용 검증 도구)의 사소한 예외 1건만
+발견했으나 자기 세션이 방금 만든 행 하나를 즉시 재확인하는 코드라
+실질 위험 없음, 안 건드림. Notion mirror 500 경로는 postgres 분기 안의
+모든 `notion.*` 호출이 `fireAndForget`으로 격리돼 있는지 브레이스
+매칭 스크립트로 전수 검사 — 0건(전부 안전).
+
+### 재검증 — lib/notion.ts에 남은 순수 Notion 함수
+브레이스 매칭 기반 스크립트로 다시 확인한 결과, `getDbProvider`류 분기가
+전혀 없이 `notion.*` 또는 `queryAllPages()`를 호출하는 export 함수는
+**`getPlannedAbsentStudentIds`(PART 13에서 이미 안전망만 추가하고
+의도적으로 미뤄둔 것) 단 하나**만 남았다. `findStaffByNameAndPin`의 PIN
+평문 폴백은 함수 자체는 이미 분기돼 있고(postgres 우선) "폴백 경로가
+남아있다"는 게 요점이라 이 스크립트의 대상이 아니다 — PART 19에서
+BLOCKED로 기록한 것 그대로 유지.
+
+### 검증
+`npx tsc --noEmit`/`npx vitest run`(117/117, 신규 14건 — 오늘의 일정
+알람/등원/보강/상담 + branch isolation, 반별/월간 통계 집계, 월간/일간
+도넛차트, 결석·과제미완료 학생 상세, 긴급상담 미처리 필터, 행정실/
+브리핑 목록, 보강 확정현황 staffId 필터, 진도누락 반×날짜 탐지, API
+라우트 dual-id 조회 2건)/`npm run build` 전부 통과.
+
+### 신규/변경 파일
+`lib/notion.ts`(11개 함수에 postgres 분기, `getAdminInboxEntry`/
+`getCounselingEntryEnteredBy` 신규), `app/api/admin-inbox/[id]/route.ts`/
+`app/api/counseling/[id]/route.ts`/`app/api/urgent-counseling/[id]/
+complete/route.ts`(notion.pages.retrieve 직접호출 제거),
+`lib/dashboardAudit.postgres.test.ts`(신규, 14건).
 
 ---
 

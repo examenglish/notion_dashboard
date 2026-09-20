@@ -1513,6 +1513,44 @@ export async function getClassSummary() {
 // Per-class attendance/homework rate for one specific day (not cumulative),
 // driving the ◀ 날짜 ▶ navigator on the dashboard.
 export async function getClassSummaryByDate(date: string) {
+  if (getDbProvider() === "postgres") {
+    const [classes, records, counselingEntries] = await Promise.all([
+      listClasses(),
+      pgQueryRaw("DAILY_RECORD", `record_date=eq.${date}`),
+      pgQueryRaw("COUNSELING", `record_date=eq.${date}`),
+    ]);
+    const byClass = new Map<string, Record<string, unknown>[]>();
+    for (const r of records.filter(pgNotArchived)) {
+      for (const classId of (r.class_notion_ids as string[] | undefined) ?? []) {
+        if (!byClass.has(classId)) byClass.set(classId, []);
+        byClass.get(classId)!.push(r);
+      }
+    }
+    const counseledStudentIds = new Set<string>();
+    for (const entry of counselingEntries.filter(pgNotArchived)) {
+      for (const studentId of (entry.student_notion_ids as string[] | undefined) ?? []) {
+        counseledStudentIds.add(studentId);
+      }
+    }
+    return classes.map((c) => {
+      const recs = byClass.get(c.id) ?? [];
+      const total = recs.length;
+      const present = recs.filter((r) => r.attendance !== "결석").length;
+      const homeworkDone = recs.filter((r) => !!r.homework_done).length;
+      const vocabPass = recs.filter((r) => r.vocab_result === "통과").length;
+      const rosterSize = c.studentIds.length;
+      const counseledInClass = c.studentIds.filter((id) => counseledStudentIds.has(id)).length;
+      return {
+        classId: c.id,
+        className: c.name,
+        recordCount: total,
+        attendanceRate: total === 0 ? null : present / total,
+        homeworkRate: total === 0 ? null : homeworkDone / total,
+        vocabPassRate: total === 0 ? null : vocabPass / total,
+        counselingRate: rosterSize === 0 ? null : counseledInClass / rosterSize,
+      };
+    });
+  }
   const [classes, records, counselingEntries] = await Promise.all([
     listClasses(),
     queryAllPages({
@@ -1569,6 +1607,57 @@ export async function getClassSummaryByDate(date: string) {
 export async function getMonthlyStudentMetrics() {
   const [y, m] = todayKST().split("-").map(Number);
   const monthStart = `${y}-${String(m).padStart(2, "0")}-01`;
+
+  if (getDbProvider() === "postgres") {
+    const [records, classes, names] = await Promise.all([
+      pgQueryRaw("DAILY_RECORD", `record_date=gte.${monthStart}`),
+      listClasses(),
+      studentNameMap(),
+    ]);
+    const classNameById = new Map(classes.map((c) => [c.id, c.name]));
+    type Agg = {
+      attTotal: number;
+      attPresent: number;
+      vocabTotal: number;
+      vocabPass: number;
+      hwTotal: number;
+      hwIncomplete: number;
+      classId: string | null;
+    };
+    const byStudent = new Map<string, Agg>();
+    for (const r of records.filter(pgNotArchived)) {
+      const studentId = (r.student_notion_ids as string[] | undefined)?.[0];
+      if (!studentId) continue;
+      const cur: Agg = byStudent.get(studentId) ?? {
+        attTotal: 0,
+        attPresent: 0,
+        vocabTotal: 0,
+        vocabPass: 0,
+        hwTotal: 0,
+        hwIncomplete: 0,
+        classId: (r.class_notion_ids as string[] | undefined)?.[0] ?? null,
+      };
+      cur.attTotal += 1;
+      if (r.attendance !== "결석") cur.attPresent += 1;
+      const voc = r.vocab_result as string | null;
+      if (voc && voc !== "미응시") {
+        cur.vocabTotal += 1;
+        if (voc === "통과") cur.vocabPass += 1;
+      }
+      cur.hwTotal += 1;
+      if (!r.homework_done) cur.hwIncomplete += 1;
+      byStudent.set(studentId, cur);
+    }
+    return Array.from(byStudent.entries()).map(([studentId, v]) => ({
+      studentId,
+      studentName: names.get(studentId) ?? "-",
+      className: v.classId ? classNameById.get(v.classId) ?? "-" : "-",
+      recordCount: v.attTotal,
+      attendanceRate: v.attTotal > 0 ? v.attPresent / v.attTotal : null,
+      vocabPassRate: v.vocabTotal > 0 ? v.vocabPass / v.vocabTotal : null,
+      homeworkRate: v.hwTotal > 0 ? (v.hwTotal - v.hwIncomplete) / v.hwTotal : null,
+    }));
+  }
 
   const [records, classes, names] = await Promise.all([
     queryAllPages({
@@ -1633,6 +1722,30 @@ export async function getMonthlyOutcomeBreakdown(month?: string) {
   const nextY = m === 12 ? y + 1 : y;
   const nextM = m === 12 ? 1 : m + 1;
   const nextMonthStart = `${nextY}-${String(nextM).padStart(2, "0")}-01`;
+  if (getDbProvider() === "postgres") {
+    const [records, counselingEntries] = await Promise.all([
+      pgQueryRaw("DAILY_RECORD", `record_date=gte.${monthStart}&record_date=lt.${nextMonthStart}`),
+      pgQueryRaw("COUNSELING", `record_date=gte.${monthStart}&record_date=lt.${nextMonthStart}`),
+    ]);
+    const attendance = { 출석: 0, 지각: 0, 결석: 0 };
+    const vocab = { 통과: 0, 재시험: 0, 미응시: 0 };
+    const homework = { 완료: 0, 미완료: 0 };
+    for (const r of records.filter(pgNotArchived)) {
+      const att = r.attendance as keyof typeof attendance | null;
+      if (att && att in attendance) attendance[att] += 1;
+      const voc = r.vocab_result as keyof typeof vocab | null;
+      if (voc && voc in vocab) vocab[voc] += 1;
+      if (r.homework_done) homework.완료 += 1;
+      else homework.미완료 += 1;
+    }
+    const counselingByCounselor: Record<string, number> = {};
+    for (const entry of counselingEntries.filter(pgNotArchived)) {
+      const counselor = (entry.counselor as string) || "미지정";
+      counselingByCounselor[counselor] = (counselingByCounselor[counselor] ?? 0) + 1;
+    }
+    return { attendance, vocab, homework, counselingByCounselor };
+  }
+
   const dateFilter = {
     and: [
       { property: "날짜", date: { on_or_after: monthStart } },
@@ -1670,6 +1783,21 @@ export async function getMonthlyOutcomeBreakdown(month?: string) {
 // (기본: 오늘)로만 좁힌 것. 기존 함수는 건드리지 않고 나란히 추가한 읽기전용
 // 헬퍼로, DB⑤일일기록 하나만 조회한다(쓰기 없음).
 export async function getDailyOutcomeBreakdown(date: string) {
+  if (getDbProvider() === "postgres") {
+    const records = (await pgQueryRaw("DAILY_RECORD", `record_date=eq.${date}`)).filter(pgNotArchived);
+    const attendance = { 출석: 0, 지각: 0, 결석: 0 };
+    const vocab = { 통과: 0, 재시험: 0, 미응시: 0 };
+    const homework = { 완료: 0, 미완료: 0 };
+    for (const r of records) {
+      const att = r.attendance as keyof typeof attendance | null;
+      if (att && att in attendance) attendance[att] += 1;
+      const voc = r.vocab_result as keyof typeof vocab | null;
+      if (voc && voc in vocab) vocab[voc] += 1;
+      if (r.homework_done) homework.완료 += 1;
+      else homework.미완료 += 1;
+    }
+    return { attendance, vocab, homework };
+  }
   const records = await queryAllPages({
     data_source_id: DB.DAILY_RECORD,
     filter: { property: "날짜", date: { equals: date } },
@@ -1707,6 +1835,56 @@ export async function getDailyOutcomeDetail(date: string): Promise<{
   vocabRetestStudents: DailyOutcomeStudent[];
   attendedStudents: DailyOutcomeStudent[];
 }> {
+  if (getDbProvider() === "postgres") {
+    const [records, students, classes] = await Promise.all([
+      pgQueryRaw("DAILY_RECORD", `record_date=eq.${date}`),
+      searchStudents(""),
+      listClasses(),
+    ]);
+    const studentMap = new Map(students.map((s) => [s.id, s]));
+    const classMap = new Map(classes.map((c) => [c.id, c]));
+
+    function resolvePg(r: Record<string, unknown>): DailyOutcomeStudent | null {
+      const studentId = (r.student_notion_ids as string[] | undefined)?.[0];
+      if (!studentId) return null;
+      const student = studentMap.get(studentId);
+      const classId = (r.class_notion_ids as string[] | undefined)?.[0];
+      const cls = classId ? classMap.get(classId) : undefined;
+      return {
+        studentId,
+        studentName: student?.name ?? "-",
+        school: student?.school ?? "",
+        grade: student?.grade ?? null,
+        className: cls ? stripClassSuffix(cls.name) : "-",
+      };
+    }
+
+    const absentStudents: DailyOutcomeStudent[] = [];
+    const incompleteHomeworkStudents: DailyOutcomeStudent[] = [];
+    const vocabRetestStudents: DailyOutcomeStudent[] = [];
+    const attendedStudents: DailyOutcomeStudent[] = [];
+    for (const r of records.filter(pgNotArchived)) {
+      const status = r.attendance as string | null;
+      if (status === "결석") {
+        const s = resolvePg(r);
+        if (s) absentStudents.push(s);
+      }
+      if (status === "출석" || status === "지각") {
+        const s = resolvePg(r);
+        if (s) attendedStudents.push({ ...s, status });
+      }
+      if (!r.homework_done) {
+        const s = resolvePg(r);
+        if (s) incompleteHomeworkStudents.push(s);
+      }
+      if (r.vocab_result === "재시험") {
+        const s = resolvePg(r);
+        if (s) vocabRetestStudents.push(s);
+      }
+    }
+    return { absentStudents, incompleteHomeworkStudents, vocabRetestStudents, attendedStudents };
+  }
+
   const [records, students, classes] = await Promise.all([
     queryAllPages({
       data_source_id: DB.DAILY_RECORD,
@@ -1777,6 +1955,131 @@ async function staffNameMap(): Promise<Map<string, string>> {
 }
 
 export async function getTodaySchedule(today: string, viewerStaffId?: string) {
+  if (getDbProvider() === "postgres") {
+    const [alarmRows, firstDayRows, todoRows, counselingRows, inboxByDateRows, inboxByRangeRows, names, classMap, staffMap, studentBrief] =
+      await Promise.all([
+        pgQueryRaw("STUDENT", `action_alarm_on=eq.${today}`),
+        pgQueryRaw("STUDENT", `attendance_started_on=eq.${today}`),
+        pgQueryRaw("TODO", `due_date=eq.${today}`),
+        pgQueryRaw("COUNSELING", `record_date=eq.${today}`),
+        pgQueryRaw("ADMIN_INBOX", `start_date=eq.${today}`),
+        pgQueryRaw("ADMIN_INBOX", `start_date=lte.${today}&end_date=gte.${today}`),
+        studentNameMap(),
+        classInfoMap(),
+        pgStaffNameMap(),
+        studentBriefMap(),
+      ]);
+
+    const alarms = alarmRows.filter(pgNotArchived).map((r) => ({
+      id: (r.notion_id as string | null) ?? (r.id as string),
+      studentName: (r.name as string) ?? "",
+      school: (r.school as string) ?? "",
+      content: (r.action as string) ?? "",
+      counselor: (r.action_assignee_text as string) ?? "",
+      status: (r.status as string | null) ?? null,
+    }));
+
+    const firstDays = firstDayRows.filter(pgNotArchived).map((r) => {
+      const classId = (r.class_notion_ids as string[] | undefined)?.[0];
+      const classInfo = classId ? classMap.get(classId) : undefined;
+      return {
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        studentName: (r.name as string) ?? "",
+        school: (r.school as string) ?? "",
+        gradeNum: gradeDigits((r.grade as string | null) ?? null),
+        classTime: classInfo ? formatClassSchedule(classInfo.days, classInfo.time) : "",
+        status: (r.status as string | null) ?? null,
+      };
+    });
+
+    const byTypesPg = (types: string[]) =>
+      todoRows
+        .filter(pgNotArchived)
+        .filter((r) => types.includes((r.type as string) ?? ""))
+        .map((r) => {
+          const studentId = (r.student_notion_ids as string[] | undefined)?.[0];
+          const ownerId = (r.staff_notion_ids as string[] | undefined)?.[0];
+          const info = studentId ? studentBrief.get(studentId) : undefined;
+          return {
+            id: (r.notion_id as string | null) ?? (r.id as string),
+            title: (r.title as string) ?? "",
+            time: (r.time_text as string) ?? "",
+            memo: (r.memo as string) ?? "",
+            studentName: studentId ? names.get(studentId) ?? "-" : "-",
+            school: info?.school ?? "",
+            gradeNum: info?.gradeNum ?? "",
+            owner: ownerId ? staffMap.get(ownerId) ?? "-" : "-",
+            done: !!r.complete,
+            status: info?.status ?? null,
+          };
+        });
+
+    const counseling = counselingRows
+      .filter(pgNotArchived)
+      .map((r) => {
+        const studentId = (r.student_notion_ids as string[] | undefined)?.[0] ?? null;
+        const brief = studentId ? studentBrief.get(studentId) : undefined;
+        return {
+          id: (r.notion_id as string | null) ?? (r.id as string),
+          date: (r.record_date as string | null) ?? null,
+          studentId,
+          studentName: studentId ? names.get(studentId) ?? "-" : "-",
+          school: brief?.school ?? "",
+          grade: brief?.grade ?? null,
+          gradeNum: brief?.gradeNum ?? "",
+          counselor: (r.counselor as string) ?? "",
+          transcript: (r.transcript as string) ?? "",
+          content: (r.content as string) ?? "",
+          followUp: (r.follow_up as string) ?? "",
+          enteredBy: (r.entered_by as string) ?? "",
+          status: brief?.status ?? null,
+        };
+      });
+
+    const inquiryMap = new Map<string, any>();
+    for (const r of [...inboxByDateRows, ...inboxByRangeRows].filter(pgNotArchived)) {
+      const studentId = (r.student_notion_ids as string[] | undefined)?.[0] ?? null;
+      const brief = studentId ? studentBrief.get(studentId) : undefined;
+      const id = (r.notion_id as string | null) ?? (r.id as string);
+      inquiryMap.set(id, {
+        id,
+        date: (r.start_date as string | null) ?? null,
+        endDate: (r.end_date as string | null) ?? null,
+        studentId,
+        studentName: studentId ? names.get(studentId) ?? "-" : "전체",
+        school: brief?.school ?? "",
+        grade: brief?.grade ?? null,
+        gradeNum: brief?.gradeNum ?? "",
+        type: (r.input_type as string | null) ?? null,
+        content: (r.content as string) ?? "",
+        done: !!r.complete,
+        owner: (r.owner_text as string) ?? "",
+        enteredBy: (r.entered_by as string) ?? "",
+        status: brief?.status ?? null,
+      });
+    }
+
+    const personalTodos = viewerStaffId
+      ? todoRows
+          .filter(pgNotArchived)
+          .filter((r) => (r.type as string) === "개인할일" && ((r.staff_notion_ids as string[] | undefined) ?? []).includes(viewerStaffId))
+          .map((r) => ({ id: (r.notion_id as string | null) ?? (r.id as string), title: (r.title as string) ?? "", done: !!r.complete }))
+      : [];
+
+    return {
+      alarms,
+      firstDays,
+      newStudentEvents: byTypesPg(["신입생상담", "레벨체크"]),
+      makeupClasses: byTypesPg(["보강"]),
+      retests: byTypesPg(["재시"]),
+      clinicTasks: byTypesPg(["클리닉"]),
+      reviewTasks: byTypesPg(["복습"]),
+      personalTodos,
+      counseling,
+      inquiries: Array.from(inquiryMap.values()),
+    };
+  }
+
   const [alarmStudents, firstDayStudents, todoResults, counselingResults, inquiriesByDate, inquiriesByRange, names, classMap, staffMap] =
     await Promise.all([
       queryAllPages({
@@ -2588,17 +2891,27 @@ export async function findClassRecordGaps(from: string, to: string, includeExamC
   const KOREAN_WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
   const [allClasses, recordPages] = await Promise.all([
     listClasses(),
-    queryAllPages({
-      data_source_id: DB.CLASS_PROGRESS,
-      filter: { and: [{ property: "날짜", date: { on_or_after: from } }, { property: "날짜", date: { on_or_before: to } }] },
-    }),
+    getDbProvider() === "postgres"
+      ? pgQueryRaw("CLASS_PROGRESS", `record_date=gte.${from}&record_date=lte.${to}`)
+      : queryAllPages({
+          data_source_id: DB.CLASS_PROGRESS,
+          filter: { and: [{ property: "날짜", date: { on_or_after: from } }, { property: "날짜", date: { on_or_before: to } }] },
+        }),
   ]);
 
   const filledKeys = new Set<string>();
-  for (const p of recordPages as any[]) {
-    const date = getDate(p, "날짜");
-    if (!date) continue;
-    for (const classId of getRelationIds(p, "반")) filledKeys.add(`${classId}|${date}`);
+  if (getDbProvider() === "postgres") {
+    for (const r of recordPages.filter(pgNotArchived)) {
+      const date = (r.record_date as string | null) ?? null;
+      if (!date) continue;
+      for (const classId of (r.class_notion_ids as string[] | undefined) ?? []) filledKeys.add(`${classId}|${date}`);
+    }
+  } else {
+    for (const p of recordPages as any[]) {
+      const date = getDate(p, "날짜");
+      if (!date) continue;
+      for (const classId of getRelationIds(p, "반")) filledKeys.add(`${classId}|${date}`);
+    }
   }
 
   const classes = allClasses.filter((c) => (includeExamClasses ? true : c.type !== "시험대비") && c.days.length > 0);
@@ -3104,6 +3417,31 @@ function firstRelationName(page: Page, prop: string, names: Map<string, string>)
 // 것만, 전체 이력을 훑는 getRecentAdminInbox와 달리 날짜 무관하게(급한 건은
 // 하루만 보여주면 놓칠 수 있어) 필터링해서 가져온다.
 export async function getUrgentCounselingRequests() {
+  if (getDbProvider() === "postgres") {
+    const [rows, names, briefs] = await Promise.all([
+      pgQueryRaw("ADMIN_INBOX", `input_type=eq.${encodeURIComponent("긴급상담요청")}&complete=eq.false`),
+      studentNameMap(),
+      studentSchoolGradeMap(),
+    ]);
+    return rows
+      .filter(pgNotArchived)
+      .sort((a, b) => ((b.start_date as string) ?? "").localeCompare((a.start_date as string) ?? ""))
+      .map((r) => {
+        const studentId = (r.student_notion_ids as string[] | undefined)?.[0] ?? null;
+        const brief = studentId ? briefs.get(studentId) : undefined;
+        return {
+          id: (r.notion_id as string | null) ?? (r.id as string),
+          date: (r.start_date as string | null) ?? null,
+          studentId,
+          studentName: studentId ? names.get(studentId) ?? "-" : "-",
+          school: brief?.school ?? "",
+          grade: brief?.grade ?? null,
+          content: (r.content as string) ?? "",
+          owner: (r.owner_text as string) ?? "",
+          enteredBy: (r.entered_by as string) ?? "",
+        };
+      });
+  }
   const [results, names, briefs] = await Promise.all([
     queryAllPages({
       data_source_id: DB.ADMIN_INBOX,
@@ -3136,6 +3474,30 @@ export async function getUrgentCounselingRequests() {
 }
 
 export async function getRecentAdminInbox() {
+  if (getDbProvider() === "postgres") {
+    const [rows, names, briefs] = await Promise.all([pgQueryRaw("ADMIN_INBOX", "select=*"), studentNameMap(), studentSchoolGradeMap()]);
+    return rows
+      .filter(pgNotArchived)
+      .sort((a, b) => ((b.created_at as string) ?? "").localeCompare((a.created_at as string) ?? ""))
+      .map((r) => {
+        const studentId = (r.student_notion_ids as string[] | undefined)?.[0] ?? null;
+        const brief = studentId ? briefs.get(studentId) : undefined;
+        return {
+          id: (r.notion_id as string | null) ?? (r.id as string),
+          date: (r.start_date as string | null) ?? null,
+          endDate: (r.end_date as string | null) ?? null,
+          type: (r.input_type as string | null) ?? null,
+          studentId,
+          studentName: studentId ? names.get(studentId) ?? "-" : "-",
+          studentSchool: brief?.school ?? "",
+          studentGrade: brief?.grade ?? null,
+          content: (r.content as string) ?? "",
+          done: !!r.complete,
+          enteredBy: (r.entered_by as string) ?? "",
+          owner: (r.owner_text as string) ?? "",
+        };
+      });
+  }
   const [results, names, briefs] = await Promise.all([
     queryAllPages({
       data_source_id: DB.ADMIN_INBOX,
@@ -3165,6 +3527,23 @@ export async function getRecentAdminInbox() {
 }
 
 export async function getRecentBriefings() {
+  if (getDbProvider() === "postgres") {
+    const [rows, names] = await Promise.all([pgQueryRaw("BRIEFING", "select=*"), studentNameMap()]);
+    return rows
+      .filter(pgNotArchived)
+      .sort((a, b) => ((b.record_date as string) ?? "").localeCompare((a.record_date as string) ?? ""))
+      .map((r) => {
+        const studentId = (r.student_notion_ids as string[] | undefined)?.[0] ?? null;
+        return {
+          id: (r.notion_id as string | null) ?? (r.id as string),
+          date: (r.record_date as string | null) ?? null,
+          type: (r.briefing_type as string | null) ?? null,
+          studentId,
+          studentName: studentId ? names.get(studentId) ?? "-" : "-",
+          content: (r.content as string) ?? "",
+        };
+      });
+  }
   const [results, names] = await Promise.all([
     queryAllPages({
       data_source_id: DB.BRIEFING,
@@ -3241,6 +3620,43 @@ function notionUpdateCounseling(id: string, input: { counselor?: string; date?: 
   if (input.summary !== undefined) properties["상담내용"] = { rich_text: [{ text: { content: input.summary } }] };
   if (input.followUp !== undefined) properties["후속조치"] = { rich_text: [{ text: { content: input.followUp } }] };
   return notion.pages.update({ page_id: id, properties });
+}
+
+// API 라우트의 "본인이 입력한 항목만 수정/삭제 가능" 권한 체크와
+// 긴급상담요청 완료처리가 지금까지 notion.pages.retrieve를 직접 썼다 —
+// postgres-primary로 막 만들어진(notion_id 아직 없는) 항목에서 항상 실패해
+// 수정/삭제/완료처리 자체가 막히는 버그였다(목록엔 보이지만 클릭하면
+// 깨지는 패턴, staff.md PART 23). dual-id 조회로 대체.
+export async function getCounselingEntryEnteredBy(id: string): Promise<string> {
+  if (getDbProvider() === "postgres") {
+    const row = await pgGetByNotionId("COUNSELING", id);
+    return (row?.entered_by as string) ?? "";
+  }
+  const page: any = await notion.pages.retrieve({ page_id: id }).catch(() => null);
+  return page ? getRichText(page, "입력자") : "";
+}
+
+export async function getAdminInboxEntry(
+  id: string
+): Promise<{ studentId: string | null; content: string; owner: string; enteredBy: string } | null> {
+  if (getDbProvider() === "postgres") {
+    const row = await pgGetByNotionId("ADMIN_INBOX", id);
+    if (!row) return null;
+    return {
+      studentId: (row.student_notion_ids as string[] | undefined)?.[0] ?? null,
+      content: (row.content as string) ?? "",
+      owner: (row.owner_text as string) ?? "",
+      enteredBy: (row.entered_by as string) ?? "",
+    };
+  }
+  const page: any = await notion.pages.retrieve({ page_id: id }).catch(() => null);
+  if (!page) return null;
+  return {
+    studentId: getRelationIds(page, "대상학생")[0] ?? null,
+    content: getRichText(page, "내용"),
+    owner: getRichText(page, "담당자"),
+    enteredBy: getRichText(page, "입력자"),
+  };
 }
 
 export async function updateCounselingEntry(
@@ -6220,6 +6636,40 @@ export type MakeupScheduleItem = {
 // staffId를 주면 그 담당자에게 배정된 것만, 안 주면(행정/원장 전체 현황)
 // 전체를 돌려준다.
 export async function getMakeupScheduleStatus(opts: { staffId?: string } = {}): Promise<MakeupScheduleItem[]> {
+  if (getDbProvider() === "postgres") {
+    const filterExpr = [
+      `type=in.(${encodeURIComponent("보강")},${encodeURIComponent("재시")})`,
+      `complete=eq.false`,
+      opts.staffId ? `staff_notion_ids=cs.{${encodeURIComponent(opts.staffId)}}` : null,
+    ]
+      .filter(Boolean)
+      .join("&");
+    const records = (await pgQueryRaw("TODO", filterExpr)).filter(pgNotArchived);
+    if (records.length === 0) return [];
+    const [students, classes, staffList] = await Promise.all([searchStudents(""), listClasses(), listStaff()]);
+    const studentMap = new Map(students.map((s) => [s.id, s]));
+    const classMap = new Map(classes.map((c) => [c.id, c]));
+    const staffMap = new Map(staffList.map((s) => [s.id, s.name]));
+    return records.map((r) => {
+      const studentId = (r.student_notion_ids as string[] | undefined)?.[0];
+      const classId = (r.class_notion_ids as string[] | undefined)?.[0];
+      const ownerId = (r.staff_notion_ids as string[] | undefined)?.[0];
+      const cls = classId ? classMap.get(classId) : undefined;
+      const time = (r.time_text as string) ?? "";
+      return {
+        id: (r.notion_id as string | null) ?? (r.id as string),
+        type: (r.type as string) ?? "보강",
+        studentName: (studentId && studentMap.get(studentId)?.name) || "-",
+        className: cls ? stripClassSuffix(cls.name) : "-",
+        ownerName: (ownerId && staffMap.get(ownerId)) || "미배정",
+        date: (r.due_date as string | null) ?? null,
+        time,
+        memo: (r.memo as string) ?? "",
+        lessonContent: (r.absence_lesson as string) ?? "",
+        confirmed: time.trim() !== "",
+      };
+    });
+  }
   const filters: any[] = [
     {
       or: [

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { notion, getRelationIds, getRichText, updateAdminInboxEntry, createCounselingEntry } from "@/lib/notion";
+import { getAdminInboxEntry, updateAdminInboxEntry, createCounselingEntry } from "@/lib/notion";
 import { readStaffName, readStaffRole } from "@/lib/session";
 import { todayKST } from "@/lib/date";
 
@@ -14,13 +14,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (readStaffRole(req) !== "원장") {
     return NextResponse.json({ error: "완료 처리는 원장만 할 수 있습니다." }, { status: 403 });
   }
-  const page: any = await notion.pages.retrieve({ page_id: params.id });
-  const studentId = getRelationIds(page, "대상학생")[0];
+  const entry = await getAdminInboxEntry(params.id);
+  const studentId = entry?.studentId;
   if (!studentId) {
     return NextResponse.json({ error: "연결된 학생이 없어 완료 처리할 수 없습니다." }, { status: 400 });
   }
-  const content = getRichText(page, "내용");
-  const owner = getRichText(page, "담당자");
+  const content = entry.content;
+  const owner = entry.owner;
   const staffName = readStaffName(req);
 
   await Promise.all([
