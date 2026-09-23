@@ -544,7 +544,9 @@ export async function retryDualWriteFailures(limit = 50): Promise<{ retried: num
     // PostgreSQL이 정본인 배포에서 TODO를 Notion 페이지로 재동기화하면, 행 전체를
     // upsert해 현재 담당자/완료상태/source_payload.workflow(진행 이력)를 오래된
     // Notion 값으로 덮어쓴다 — 자동 재시도하지 않고 수동 검토로 남긴다(해결 표시 안 함).
-    if (row.entity === "TODO" && getDbProvider() === "postgres") {
+    // STAFF도 같다 — 재동기화가 source_payload를 덮어쓰면 계정 비활성화/재설정의 세션 무효화
+    // 시각(source_payload.auth)이 사라져 옛 세션이 되살아날 수 있다.
+    if ((row.entity === "TODO" || row.entity === "STAFF") && getDbProvider() === "postgres") {
       stillFailing++;
       continue;
     }

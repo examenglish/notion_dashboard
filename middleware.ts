@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE, verifySessionCookieValue } from "./lib/session";
+import { checkSessionActive } from "./lib/sessionGuard";
 
 // Routes that must work before a session exists. /api/cron/* is called by
 // Vercel Cron (no login cookie) — each route under it authenticates itself
@@ -55,6 +56,20 @@ export async function middleware(req: NextRequest) {
     const loginUrl = new URL("/login", req.url);
     loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);
+  }
+
+  // 서명이 유효해도 직원이 비활성화됐거나(퇴사) 비활성화/재활성화/비밀번호 재설정 이후에
+  // 발급된 쿠키가 아니면 거부한다 — 모든 보호 API와 middleware 대상 페이지에 공통 적용.
+  // DB 확인이 실패하면 열어두지 않고 거부한다(fail-closed).
+  const active = await checkSessionActive(session);
+  if (active !== "ok") {
+    const message =
+      active === "inactive" ? "계정이 비활성화되었거나 로그인이 만료되었습니다. 다시 로그인해 주세요." : "로그인 상태를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+    const res = pathname.startsWith("/api/")
+      ? NextResponse.json({ error: message }, { status: active === "inactive" ? 401 : 503 })
+      : NextResponse.redirect(new URL("/login", req.url));
+    if (active === "inactive") res.cookies.delete(SESSION_COOKIE);
+    return res;
   }
 
   // Staff who haven't set their own PIN yet (still on the temporary 1111)

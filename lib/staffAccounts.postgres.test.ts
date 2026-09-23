@@ -6,7 +6,9 @@ import { NextRequest } from "next/server";
 
 vi.mock("next/cache", () => ({ unstable_cache: (fn: any) => fn, revalidateTag: vi.fn() }));
 
-const { notionCalls } = vi.hoisted(() => ({ notionCalls: [] as any[] }));
+const { notionCalls, pageCookie } = vi.hoisted(() => ({ notionCalls: [] as any[], pageCookie: { value: "" } }));
+// 서버 컴포넌트 getSession()이 읽는 쿠키(페이지 접근 경로)
+vi.mock("next/headers", () => ({ cookies: () => ({ get: () => (pageCookie.value ? { value: pageCookie.value } : undefined) }) }));
 vi.mock("@notionhq/client", () => ({
   Client: vi.fn().mockImplementation(function Client() {
     return {
@@ -251,5 +253,115 @@ describe("원장 직원 계정 관리", () => {
     expect(staff("st-minji")).toMatchObject({ id: "st-minji", notion_id: "st-minji", role: "조교", work_schedule: "월=14:00-22:00" });
     expect(tables.classes[0].assistant_notion_ids).toEqual(["st-minji"]);
     expect(tables.tasks[0].staff_notion_ids).toEqual(["st-minji"]);
+  });
+});
+
+
+describe("비활성화/재설정 시 기존 세션 즉시 차단(서명 쿠키 유지 + 서버 활성 확인)", () => {
+  async function loginCookie(name: string, pin = "1234"): Promise<string> {
+    const login = await import("@/app/api/login/route");
+    const res = await login.POST(req("/api/login", "POST", null, { name, pin }));
+    expect(res.status).toBe(200);
+    const m = (res.headers.get("set-cookie") ?? "").match(/academy_session=([^;]+)/);
+    return decodeURIComponent(m![1]);
+  }
+  async function hit(path: string, cookie: string, method = "GET") {
+    const { middleware } = await import("@/middleware");
+    return middleware(new NextRequest(`http://localhost${path}`, { method, headers: { cookie: `academy_session=${cookie}` } }));
+  }
+  const passed = (res: Response) => res.headers.get("x-middleware-next") === "1";
+  async function setResigned(id: string, resigned: boolean) {
+    const { PATCH } = await import("@/app/api/staff/[id]/route");
+    const res = await PATCH(req(`/api/staff/${id}`, "PATCH", DIRECTOR, { resigned }), { params: { id } });
+    expect(res.status).toBe(200);
+  }
+
+  it("로그인 → 쿠키 → 비활성화 → 기존 쿠키로 보호 API·자연어 입력·직원관리·행정실·업무 전부 거부(401) → 재활성화해도 옛 쿠키 거부 → 새 로그인 정상", async () => {
+    const cookie = await loginCookie("박민지");
+    expect(passed(await hit("/api/students", cookie))).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 2));
+    await setResigned("st-minji", true);
+    for (const [path, method] of [
+      ["/api/students", "GET"],
+      ["/api/students/stu-1", "PATCH"],
+      ["/api/ai-input", "POST"],
+      ["/api/tasks?scope=mine", "GET"],
+      ["/api/tasks/t1/complete", "POST"],
+      ["/api/staff/accounts", "GET"],
+      ["/api/admin-inbox", "GET"],
+      ["/api/class-record", "POST"],
+    ]) {
+      const res = await hit(path, cookie, method);
+      expect(res.status, `${method} ${path}`).toBe(401);
+      expect(res.headers.get("set-cookie") ?? "").toContain("academy_session=;");
+    }
+    // middleware 대상 페이지는 로그인으로
+    const page = await hit("/dashboard", cookie);
+    expect(page.status).toBe(307);
+    expect(page.headers.get("location")).toContain("/login");
+    // /director/* 페이지(getSession 경로)도 세션 없음
+    pageCookie.value = cookie;
+    const { getSession } = await import("@/lib/auth");
+    expect(await getSession()).toBeNull();
+
+    await new Promise((r) => setTimeout(r, 2));
+    await setResigned("st-minji", false);
+    expect((await hit("/api/students", cookie)).status).toBe(401);
+    expect(await getSession()).toBeNull();
+
+    await new Promise((r) => setTimeout(r, 2));
+    const fresh = await loginCookie("박민지");
+    expect(passed(await hit("/api/students", fresh))).toBe(true);
+    pageCookie.value = fresh;
+    expect((await getSession())?.name).toBe("박민지");
+    pageCookie.value = "";
+  });
+
+  it("다른 직원·원장 세션은 영향 없음, 다른 지점 직원 쿠키는 이 지점에서 쓸 수 없음", async () => {
+    const director = await loginCookie("서도영");
+    const admin = await loginCookie("이행정");
+    await new Promise((r) => setTimeout(r, 2));
+    await setResigned("st-minji", true);
+    expect(passed(await hit("/api/students", director))).toBe(true);
+    expect(passed(await hit("/api/students", admin))).toBe(true);
+
+    // 금정 직원으로 서명된 쿠키(같은 SESSION_SECRET 가정)라도 사직 배포에선 거부
+    const { createSessionCookieValue } = await import("@/lib/session");
+    const gj = await createSessionCookieValue({ staffId: "st-gj", name: "금정조교", role: "조교", issuedAt: Date.now() });
+    expect((await hit("/api/students", gj)).status).toBe(401);
+    expect(staff("st-gj").resigned).toBe(false);
+  });
+
+  it("원장 본인 계정 비활성화 방지 유지", async () => {
+    const { PATCH } = await import("@/app/api/staff/[id]/route");
+    const res = await PATCH(req("/api/staff/st-dir", "PATCH", DIRECTOR, { resigned: true }), { params: { id: "st-dir" } });
+    expect(res.status).toBe(400);
+    expect(staff("st-dir").resigned).toBe(false);
+  });
+
+  it("원장 비밀번호 재설정은 그 직원의 기존 세션을 끊고, 새 비밀번호로 다시 로그인하면 정상(본인 PIN 변경 경로로)", async () => {
+    const cookie = await loginCookie("박민지");
+    await new Promise((r) => setTimeout(r, 2));
+    expect((await resetAs(DIRECTOR, "st-minji", "5678")).status).toBe(200);
+    expect((await hit("/api/students", cookie)).status).toBe(401);
+    await new Promise((r) => setTimeout(r, 2));
+    const fresh = await loginCookie("박민지", "5678");
+    // 재설정 후엔 본인 PIN 변경부터(기존 mustChangePin 흐름)
+    expect((await hit("/api/students", fresh)).status).toBe(403);
+    expect(passed(await hit("/api/change-pin", fresh, "POST"))).toBe(true);
+  });
+
+  it("정상 직원의 기존 로그인과 보호 API 접근은 그대로(DB 확인 1회 추가만)", async () => {
+    const cookie = await loginCookie("이행정");
+    expect(passed(await hit("/api/tasks?scope=mine", cookie))).toBe(true);
+    expect(passed(await hit("/api/ai-input", cookie, "POST"))).toBe(true);
+  });
+
+  it("DB 확인 실패 시 열어두지 않는다(fail-closed, 503)", async () => {
+    const cookie = await loginCookie("박민지");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("down", { status: 500 })));
+    const res = await hit("/api/students", cookie);
+    expect(res.status).toBe(503);
   });
 });

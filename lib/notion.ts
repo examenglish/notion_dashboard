@@ -374,7 +374,12 @@ export async function getStaffInBranch(staffId: string): Promise<{ id: string; n
 // 어디에도 남기지 않는다. 재설정 후 첫 로그인에서 본인이 새 PIN으로 바꾸게 한다.
 export async function resetStaffPin(staffId: string, newPin: string): Promise<void> {
   if (getDbProvider() !== "postgres") throw new Error("비밀번호 재설정은 Postgres 모드에서만 지원합니다.");
-  await pgPatchByNotionId("STAFF", staffId, { pin_hash: await hashPin(newPin), must_change_password: true });
+  // 원장 재설정은 분실·유출 대응이므로 그 직원의 기존 세션도 끊는다(새 비밀번호로 다시 로그인).
+  await pgPatchByNotionId("STAFF", staffId, {
+    pin_hash: await hashPin(newPin),
+    must_change_password: true,
+    source_payload: await staffSessionCutoffPayload(staffId),
+  });
   revalidateTag(STAFF_CACHE_TAG);
   fireAndForget("notion:resetStaffPin", () =>
     notion.pages.update({ page_id: staffId, properties: { 비번변경필요: { checkbox: true } } as any })
@@ -385,10 +390,20 @@ export async function resetStaffPin(staffId: string, newPin: string): Promise<vo
 // 켠다. 페이지를 지우면 그 직원이 relation으로 연결된 과거 기록(클리닉 등)에서
 // 조교 이름이 더 이상 뜨지 않게 되므로(관계가 가리키는 페이지 자체가 없어짐),
 // 작성한 기록을 그대로 유지하려면 페이지는 살려두고 로그인/목록에서만 걸러야 한다.
+// 이 시각 이전에 발급된 세션 쿠키를 무효화(lib/sessionGuard.ts). 새 컬럼 없이
+// staff.source_payload.auth.sessionsValidAfter에 병합 저장한다.
+async function staffSessionCutoffPayload(staffId: string): Promise<Record<string, unknown>> {
+  const row = await pgGetByNotionId("STAFF", staffId);
+  const payload = ((row?.source_payload as Record<string, unknown> | null) ?? {}) as Record<string, unknown>;
+  const auth = ((payload.auth as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>;
+  return { ...payload, auth: { ...auth, sessionsValidAfter: Date.now() } };
+}
+
 export async function setStaffResigned(staffId: string, resigned: boolean) {
   revalidateTag(STAFF_CACHE_TAG);
   if (getDbProvider() === "postgres") {
-    await pgPatchByNotionId("STAFF", staffId, { resigned });
+    // 비활성화는 기존 세션을 즉시 끊고, 재활성화도 옛 세션을 되살리지 않는다(새로 로그인).
+    await pgPatchByNotionId("STAFF", staffId, { resigned, source_payload: await staffSessionCutoffPayload(staffId) });
     fireAndForget("notion:setStaffResigned", () =>
       notion.pages.update({ page_id: staffId, properties: { 퇴사: { checkbox: resigned } } as any })
     );
