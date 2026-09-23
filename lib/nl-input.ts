@@ -35,6 +35,11 @@ import {
   mergeProgressText,
   getActiveLearningRecord,
   getClassProgressRowById,
+  listAdminInboxCorrectionRows,
+  getActiveAdminInboxRow,
+  getAdminInboxEntry,
+  updateAdminInboxEntry,
+  deleteAdminInboxEntry,
   listExamAiHistoryRows,
   getTodaySchedule,
   listMyTasks,
@@ -629,7 +634,11 @@ export type TaskDraft = {
 // "cp:<class_progress id>" — 실행 직전에 DB에서 다시 읽어 확인한다.
 export type CorrectionDraft = {
   kind: "correction";
-  target: "student_record" | "class_progress" | "recent";
+  target: "student_record" | "class_progress" | "admin_record" | "recent";
+  // 행정실 기록 유형(결석예정 등) — admin_record 대상 찾기용
+  inboxType?: string;
+  newStartDate?: string;
+  newEndDate?: string;
   operation: "modify" | "cancel" | "unknown";
   studentNames: string[];
   className: string;
@@ -1154,7 +1163,11 @@ function toClarify(i: UnifiedIntent, message: string): UnifiedIntent {
 }
 
 // ---- 원문 신호(AI 출력과 독립). 특정 문장이 아니라 의미 신호로 판정한다.
-const SIG_REF = /(입력한|입력했|입력된|입력하신|넣은|넣었|기록|방금|아까|\d+\s*번(?!\s*(문제|문항|째))|기존|전에\s*(입력|넣)|그거|그\s*(점수|기록|과제|학생))/;
+// 기존 기록을 가리키는 말 — 행정실 기록 명사(결석예정/행정실/문의)는 그 자체로 이미 저장된 기록을 가리킨다.
+const SIG_REF = /(입력한|입력했|입력된|입력하신|넣은|넣었|기록|방금|아까|\d+\s*번(?!\s*(문제|문항|째))|기존|전에\s*(입력|넣)|그거|그\s*(점수|기록|과제|학생)|결석\s*예정|행정실|문의)/;
+// "…결석예정 아니야"처럼 기존 기록을 부정(대체 값 없음)
+const SIG_DENY = /아니(야|에요|예요|다|임|거든|라고)\s*[.!~]*\s*$/;
+const SIG_ADMIN_NOUN = /(결석\s*예정|행정실|긴급\s*상담\s*요청|신규생\s*문의|결석)/;
 const SIG_CORR = /(취소|삭제|지워|지우|잘못|정정|고쳐|고치|바꿔|바꾸|없던\s*걸로|없는\s*걸로)/;
 const SIG_CONTRAST = /\S\s*(아니고|아니라|말고)\s+\S/;
 const SIG_QUERY = /(보여\s*(줘|주|달)|알려\s*(줘|주)|뭐\s*(입력|넣|있|했)|목록|조회|최근\s*(기록|입력)|(오늘|어제|이번\s*주|지난\s*주)\s*(입력|일정|할\s*일)|몇\s*(건|개|명))/;
@@ -1169,7 +1182,7 @@ const SIG_ADMIN_MISC = /(전달|행정|안내|공지|원장|사무실|알려\s*�
 export function writeGuardSignals(text: string) {
   const t = text ?? "";
   return {
-    correction: (SIG_REF.test(t) && SIG_CORR.test(t)) || SIG_CONTRAST.test(t),
+    correction: (SIG_REF.test(t) && (SIG_CORR.test(t) || SIG_DENY.test(t))) || SIG_CONTRAST.test(t),
     query: SIG_QUERY.test(t) && !SIG_ACTION.test(t),
     action: SIG_ACTION.test(t),
     policy: SIG_POLICY.test(t),
@@ -1186,7 +1199,7 @@ const CREATE_ROUTES = new Set(["task", "student_action", "schedule", "admin_inbo
 // 원문 정정 신호로 새 데이터 생성을 막고 정정 흐름으로 보낸다. 정정 흐름은 기존 기록만
 // 수정/취소하며, 대상이 없거나 여러 개면 저장 없이 되묻는다(새 기록을 만들지 않음).
 function toCorrection(i: UnifiedIntent, text: string): UnifiedIntent {
-  const op: UnifiedIntent["operation"] = /(취소|삭제|지워|지우|없던\s*걸로|없는\s*걸로)/.test(text)
+  const op: UnifiedIntent["operation"] = /(취소|삭제|지워|지우|없던\s*걸로|없는\s*걸로)/.test(text) || (SIG_DENY.test(text) && !SIG_CONTRAST.test(text))
     ? "cancel"
     : SIG_CONTRAST.test(text) || /(고쳐|고치|바꿔|바꾸|정정)/.test(text)
       ? "modify"
@@ -1194,11 +1207,15 @@ function toCorrection(i: UnifiedIntent, text: string): UnifiedIntent {
   const score = text.match(/(\d+(?:\.\d+)?)\s*점?\s*(?:아니고|아니라|말고)\s*(\d+(?:\.\d+)?)\s*점/);
   const contrast = text.match(/(\S+?)(?:까지)?\s*(?:아니고|아니라|말고)\s+(\S+?)(?:까지)?(?:야|이야|요|임)?\s*$/);
   const targetIsClass = i.route === "class_progress";
+  // 행정실 기록(결석예정 등)을 가리키면 새 행정 전달이 아니라 기존 행정 기록 정정
+  const targetIsAdmin = i.route === "admin_inbox" || (!targetIsClass && SIG_ADMIN_NOUN.test(text));
+  const inboxType = i.inboxType || (/결석/.test(text) ? "결석예정" : /긴급/.test(text) ? "긴급상담요청" : /신규/.test(text) ? "신규생문의" : undefined);
   return {
     ...i,
     intentClass: "correction",
     route: "correction",
-    correctionTarget: targetIsClass ? "class_progress" : (i.students ?? []).length > 0 ? "student_record" : "recent",
+    inboxType: targetIsAdmin ? inboxType : i.inboxType,
+    correctionTarget: targetIsClass ? "class_progress" : targetIsAdmin ? "admin_record" : (i.students ?? []).length > 0 ? "student_record" : "recent",
     operation: i.route === "correction" ? i.operation : op,
     oldScore: score ? Number(score[1]) : i.oldScore,
     newScore: score ? Number(score[2]) : i.newScore,
@@ -1588,6 +1605,35 @@ async function classProgressCandidates(d: CorrectionDraft, roster: Roster, since
   return rows.map(({ row, lastAt }) => ({ id: `cp:${row.id}`, label: classProgressLabel(row, roster), at: lastAt, row }));
 }
 
+// ---- 행정실 기록(admin_inbox_entries) — 화면 "행정실 문의" 카드의 기록 ----
+function adminRecordLabel(row: Record<string, unknown>, roster: Roster): string {
+  const sid = (row.student_notion_ids as string[] | null)?.[0] ?? "";
+  const name = roster.students.find((x) => x.id === sid)?.name ?? "학생 없음";
+  const period = row.start_date ? `${row.start_date}${row.end_date && row.end_date !== row.start_date ? `~${row.end_date}` : ""}` : "";
+  return [name, row.input_type || "행정실 기록", period, String(row.content ?? "").slice(0, 40)].filter(Boolean).join(" · ");
+}
+
+// 학생 이름·기록 종류·최근성(기간이 최근 7일 이후이거나 최근 7일 안에 입력)으로 찾는다.
+// 지점 격리는 조회 함수의 branch_id 필터. 학생도 종류도 없으면 이 사용자가 최근 24시간 안에 입력한 것만.
+async function adminRecordCandidates(d: CorrectionDraft, roster: Roster): Promise<CorrectionCandidate[]> {
+  const today = todayKST();
+  const sinceDate = new Date(new Date(`${today}T00:00:00+09:00`).getTime() - 7 * 86400000).toISOString().slice(0, 10);
+  const sinceIso = new Date(Date.now() - 7 * 86400000).toISOString();
+  let rows = await listAdminInboxCorrectionRows(sinceDate, sinceIso);
+  if (d.studentNames.length > 0) {
+    const ids = new Set(d.studentNames.flatMap((n) => studentIdsByName(n, roster)));
+    rows = rows.filter((r) => ids.has((r.student_notion_ids as string[] | null)?.[0] ?? ""));
+  }
+  if (d.inboxType) rows = rows.filter((r) => r.input_type === d.inboxType);
+  if (d.studentNames.length === 0 && !d.inboxType) {
+    const dayAgo = new Date(Date.now() - CORRECTION_WINDOW_MS).toISOString();
+    rows = rows.filter((r) => r.entered_by === d.enteredBy && String(r.created_at ?? "") >= dayAgo);
+  }
+  return rows
+    .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
+    .map((r) => ({ id: `ai:${(r.notion_id as string | null) ?? (r.id as string)}`, label: adminRecordLabel(r, roster), at: String(r.created_at ?? ""), row: r }));
+}
+
 async function loadSelected(d: CorrectionDraft): Promise<Record<string, unknown> | null> {
   if (!d.selectedId) return null;
   const sep = d.selectedId.indexOf(":");
@@ -1595,6 +1641,7 @@ async function loadSelected(d: CorrectionDraft): Promise<Record<string, unknown>
   const id = d.selectedId.slice(sep + 1);
   if (kind === "slr") return getActiveLearningRecord(id);
   if (kind === "cp") return getClassProgressRowById(id);
+  if (kind === "ai") return getActiveAdminInboxRow(id);
   return null;
 }
 
@@ -1623,9 +1670,14 @@ async function checkCorrectionDraft(d: CorrectionDraft, roster: Roster): Promise
       if (found.length === 1) d.classId = found[0].id;
     }
     let cands: CorrectionCandidate[] = [];
-    const wantsClass = d.target === "class_progress" || (!!d.fromText && d.target !== "student_record");
+    const wantsClass = d.target === "class_progress" || (!!d.fromText && d.target !== "student_record" && d.target !== "admin_record");
+    if (d.target === "admin_record") cands = await adminRecordCandidates(d, roster);
     if (d.target === "student_record" || (d.target === "recent" && !wantsClass)) cands = await studentRecordCandidates(d, roster, sinceIso);
-    if (wantsClass || (d.target === "recent" && cands.length === 0) || (d.target === "recent" && !d.studentNames.length)) {
+    // 학생을 말했는데 학생 기록이 없으면 그 학생의 행정실 기록(결석예정 등)도 후보로 본다.
+    if ((d.target === "student_record" || d.target === "recent") && cands.length === 0 && d.studentNames.length > 0) {
+      cands = await adminRecordCandidates(d, roster);
+    }
+    if (d.target !== "admin_record" && (wantsClass || (d.target === "recent" && cands.length === 0) || (d.target === "recent" && !d.studentNames.length))) {
       const cp = await classProgressCandidates(d, roster, sinceIso);
       if (d.target === "recent" && cands.length > 0 && cp.length > 0) {
         // "방금 거": 학생 기록 묶음과 반 진도 중 더 최근에 입력한 쪽
@@ -1656,7 +1708,8 @@ async function checkCorrectionDraft(d: CorrectionDraft, roster: Roster): Promise
     return [];
   }
   const isRecord = d.selectedId!.startsWith("slr:");
-  d.selectedLabel = isRecord ? learningRecordLabel(row, roster) : classProgressLabel(row, roster);
+  const isAdmin = d.selectedId!.startsWith("ai:");
+  d.selectedLabel = isAdmin ? adminRecordLabel(row, roster) : isRecord ? learningRecordLabel(row, roster) : classProgressLabel(row, roster);
   const missing: MissingInfo[] = [];
 
   if (d.operation === "unknown") {
@@ -1671,6 +1724,14 @@ async function checkCorrectionDraft(d: CorrectionDraft, roster: Roster): Promise
         ],
       },
     ];
+  }
+
+  if (isAdmin) {
+    // 행정실 기록 수정은 화면의 수정 버튼과 같은 범위(날짜)만 — 바꿀 날짜가 없으면 묻는다.
+    if (d.operation === "modify" && !d.newStartDate && !d.newEndDate) {
+      missing.push({ key: "change", field: "change", question: `"${d.selectedLabel}"의 날짜를 언제로 바꿀까요? (예: 9월 25일)` });
+    }
+    return missing;
   }
 
   if (isRecord) {
@@ -1818,6 +1879,14 @@ function applyCorrectionValue(
     }
     case "change": {
       let applied = false;
+      if (d.selectedId?.startsWith("ai:")) {
+        const iso = v.match(/\d{4}-\d{2}-\d{2}/g);
+        const date = iso?.[0] ?? resolveRelativeDate(v, todayKST());
+        if (!date) return false;
+        d.newStartDate = date;
+        if (iso?.[1]) d.newEndDate = iso[1];
+        return true;
+      }
       if (d.selectedId?.startsWith("cp:")) {
         const arrow = v.match(/^(.+?)\s*(?:→|->|아니고|대신)\s*(.+?)(?:으로|로)?(?:\s*(?:수정|바꿔|변경).*)?$/);
         if (arrow) {
@@ -1906,11 +1975,31 @@ function applyCorrectionValue(
   }
 }
 
-async function executeCorrection(d: CorrectionDraft, roster: Roster): Promise<UnifiedOutcome> {
+async function executeCorrection(d: CorrectionDraft, roster: Roster, session: { role?: string } = {}): Promise<UnifiedOutcome> {
   if (d.error) return { route: "correction", label: "기록 정정", status: "확인필요", message: d.error };
   const audit = { by: d.enteredBy ?? "", raw: d.rawText };
   const row = await loadSelected(d);
   if (!row) return { route: "correction", label: "기록 정정", status: "확인필요", message: "수정할 기록을 찾지 못했습니다(이미 취소됐거나 삭제됐을 수 있습니다)." };
+
+  if (d.selectedId!.startsWith("ai:")) {
+    // 화면의 행정실 기록 수정/삭제 버튼(/api/admin-inbox/[id])과 같은 함수·같은 권한 규칙:
+    // 입력한 본인 또는 원장만 내용·날짜 수정과 삭제 가능. 삭제는 soft 삭제(archived).
+    const id = d.selectedId!.slice(3);
+    const label = adminRecordLabel(row, roster);
+    const entry = await getAdminInboxEntry(id);
+    if (entry?.enteredBy && entry.enteredBy !== d.enteredBy && session.role !== "원장") {
+      return { route: "correction", label, status: "확인필요", message: `${label}: 본인이 입력한 항목만 ${d.operation === "cancel" ? "삭제" : "수정"}할 수 있습니다(입력자: ${entry.enteredBy}).` };
+    }
+    if (d.operation === "cancel") {
+      await deleteAdminInboxEntry(id);
+      return { route: "correction", label, status: "완료", message: `${label}\n행정실 기록을 삭제했습니다.` };
+    }
+    const next = { startDate: d.newStartDate || undefined, endDate: d.newEndDate || undefined };
+    await updateAdminInboxEntry(id, next);
+    const before = `${row.start_date ?? "-"}${row.end_date ? `~${row.end_date}` : ""}`;
+    const after = `${next.startDate ?? row.start_date ?? "-"}${(next.endDate ?? row.end_date) ? `~${next.endDate ?? row.end_date}` : ""}`;
+    return { route: "correction", label, status: "완료", message: `${label}\n날짜 ${before} → ${after}(으)로 수정했습니다.` };
+  }
 
   if (d.selectedId!.startsWith("slr:")) {
     const recordId = row.id as string;
@@ -2181,7 +2270,8 @@ async function executeDraft(
   draft: AnyDraft,
   roster: Roster,
   studentNames: Map<string, string>,
-  today: string
+  today: string,
+  session: { role?: string } = {}
 ): Promise<{ outcomes: UnifiedOutcome[]; slackTasks: SlackTask[] }> {
   if (draft.kind === "class_progress") {
     return {
@@ -2204,14 +2294,14 @@ async function executeDraft(
     const r = await saveStudentRecordOutcome(draft, roster, studentNames, today);
     return { outcomes: r.outcomes, slackTasks: r.slackTasks };
   }
-  if (draft.kind === "correction") return { outcomes: [await executeCorrection(draft, roster)], slackTasks: [] };
+  if (draft.kind === "correction") return { outcomes: [await executeCorrection(draft, roster, session)], slackTasks: [] };
   if (draft.kind === "confirm") {
     if (draft.decision !== "yes") {
       return { outcomes: [{ route: "confirm", label: draft.rawText, status: "완료", message: "등록하지 않았습니다." }], slackTasks: [] };
     }
     // 클라이언트가 돌려준 intent이므로 경계 검사를 다시 적용한다(행동 동사 확인만 면제).
     const guarded = enforceIntentBoundaries([draft.intent], draft.rawText, { actionConfirmed: true });
-    const r = await processIntents(guarded, draft.rawText, { staffName: draft.enteredBy }, roster);
+    const r = await processIntents(guarded, draft.rawText, { staffName: draft.enteredBy, role: session.role }, roster);
     return { outcomes: r.outcomes, slackTasks: r.tasks };
   }
   const t = taskInputFromDraft(draft, today);
@@ -2223,7 +2313,7 @@ async function executeDraft(
 export async function continuePendingInput(
   pending: PendingAction,
   answer: string,
-  opts: { choiceId?: string; staffName?: string } = {}
+  opts: { choiceId?: string; staffName?: string; role?: string } = {}
 ): Promise<{ ok: boolean; outcomes: UnifiedOutcome[]; tasks: SlackTask[]; context?: ClassContext }> {
   const today = todayKST();
   const roster = await getNlRoster();
@@ -2266,7 +2356,7 @@ export async function continuePendingInput(
     const note = applied === 0 ? "답변에서 필요한 정보를 찾지 못했습니다." : "";
     return { ok: false, outcomes: [pendingOutcome(draft, remaining, attempts, note)], tasks: [] };
   }
-  const { outcomes, slackTasks } = await executeDraft(draft, roster, studentNames, today);
+  const { outcomes, slackTasks } = await executeDraft(draft, roster, studentNames, today, { role: opts.role });
   return {
     ok: outcomes.every((o) => o.status !== "실패"),
     outcomes,
@@ -2372,7 +2462,7 @@ function resolveNamesForIntent(
 
 export async function runUnifiedNlInput(
   text: string,
-  opts: { staffName?: string; staffId?: string; context?: ClassContext | null; historyToken?: string | null } = {}
+  opts: { staffName?: string; staffId?: string; role?: string; context?: ClassContext | null; historyToken?: string | null } = {}
 ): Promise<{
   ok: boolean;
   outcomes: UnifiedOutcome[];
@@ -2424,7 +2514,7 @@ export async function runUnifiedNlInput(
 async function processIntents(
   intents: UnifiedIntent[],
   text: string,
-  opts: { staffName?: string; staffId?: string; context?: ClassContext | null; historyToken?: string | null },
+  opts: { staffName?: string; staffId?: string; role?: string; context?: ClassContext | null; historyToken?: string | null },
   roster: Roster
 ): Promise<{
   ok: boolean;
@@ -2659,7 +2749,13 @@ async function processIntents(
           const ctx = usableContext(opts.context, date, roster);
           const draft: CorrectionDraft = {
             kind: "correction",
-            target: intent.correctionTarget === "student_record" || intent.correctionTarget === "class_progress" ? intent.correctionTarget : "recent",
+            target:
+              intent.correctionTarget === "student_record" || intent.correctionTarget === "class_progress" || intent.correctionTarget === "admin_record"
+                ? intent.correctionTarget
+                : "recent",
+            inboxType: intent.inboxType || "",
+            newStartDate: /^\d{4}-\d{2}-\d{2}$/.test(intent.newStartDate ?? "") ? intent.newStartDate : "",
+            newEndDate: /^\d{4}-\d{2}-\d{2}$/.test(intent.newEndDate ?? "") ? intent.newEndDate : "",
             operation: intent.operation === "modify" || intent.operation === "cancel" ? intent.operation : "unknown",
             studentNames: (intent.newStudentName ? (intent.students ?? []).slice(0, 1) : intent.students ?? []).map((n) => n?.trim()).filter((n): n is string => !!n),
             className: intent.className?.trim() || "",
@@ -2709,7 +2805,7 @@ async function processIntents(
             outcomes.push(pendingOutcome(draft, missing, 0));
             break;
           }
-          outcomes.push(await executeCorrection(draft, roster));
+          outcomes.push(await executeCorrection(draft, roster, { role: opts.role }));
           break;
         }
         case "student_record": {

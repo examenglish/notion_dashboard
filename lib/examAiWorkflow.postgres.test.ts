@@ -1596,3 +1596,107 @@ describe("배포 전 필수 수정: 선후관계 우회 차단 + 자동배정 �
     expect(resolveTaskClass({ studentId: "s1", classIds: ["c2"] }, classes)).toBeNull();
   });
 });
+
+describe("행정실 기록(결석예정) 자연어 수정·삭제 = 화면 버튼과 같은 경로", () => {
+  const JAE = { id: "stu-jae", notion_id: "stu-jae", branch_id: B, name: "박재하", school: "부산고", grade: "고2", status: "재원", class_notion_ids: ["cls-isabel-a"] };
+  function absence(id: string, over: Record<string, unknown> = {}) {
+    const today = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
+    return {
+      id, notion_id: `n-${id}`, branch_id: B, student_notion_ids: ["stu-jae"], input_type: "결석예정",
+      start_date: today, end_date: null, content: "가족 여행", entered_by: "서도영", complete: false,
+      source_payload: {}, created_at: new Date().toISOString(), ...over,
+    };
+  }
+  beforeEach(() => {
+    tables.students.push(JAE);
+    tables.admin_inbox_entries = [];
+  });
+  const archived = (id: string) => tables.admin_inbox_entries.find((r) => r.id === id)!.source_payload?.archived === true;
+
+  it("1. 결석예정 1건 + '박재하 결석예정 삭제해줘' → 기존 기록 삭제(soft), task/새 행정 기록 0건", async () => {
+    tables.admin_inbox_entries.push(absence("ai-1"));
+    const res = await say("박재하 결석예정 삭제해줘", { intentClass: "correction", route: "correction", correctionTarget: "admin_record", operation: "cancel", inboxType: "결석예정", students: ["박재하"] });
+    expect(res.outcomes[0]).toMatchObject({ route: "correction", status: "완료" });
+    expect(res.outcomes[0].message).toContain("행정실 기록을 삭제했습니다");
+    expect(archived("ai-1")).toBe(true);
+    expect(tables.admin_inbox_entries).toHaveLength(1);
+    expect(tables.tasks).toHaveLength(0);
+  });
+
+  it("1′. AI가 새 행정 전달(결석예정)로 잘못 분류해도 원문 guard가 기존 기록 삭제로 돌리고 새 결석예정을 만들지 않는다", async () => {
+    tables.admin_inbox_entries.push(absence("ai-1"));
+    const res = await say("박재하 결석예정 삭제해줘", { intentClass: "special", route: "admin_inbox", inboxType: "결석예정", students: ["박재하"], instruction: "결석예정 삭제" });
+    expect(res.outcomes[0].route).toBe("correction");
+    expect(tables.admin_inbox_entries).toHaveLength(1);
+    expect(archived("ai-1")).toBe(true);
+  });
+
+  it("2. 같은 학생 결석예정 여러 건 → 날짜/내용 후보를 보여주고 임의 삭제하지 않음 → 고른 것만 삭제", async () => {
+    const tomorrow = new Date(Date.now() + 9 * 3600000 + 86400000).toISOString().slice(0, 10);
+    tables.admin_inbox_entries.push(absence("ai-1"), absence("ai-2", { start_date: tomorrow, content: "병원" }));
+    const q = await say("박재하 결석 예정 취소해줘", { intentClass: "correction", route: "correction", correctionTarget: "admin_record", operation: "cancel", inboxType: "결석예정", students: ["박재하"] });
+    const pending = q.outcomes[0].pending!;
+    expect(pending.question).toBe("해당하는 기록이 2개 있습니다. 어느 기록을 취소할까요?");
+    expect(pending.missing[0].candidates!.map((c) => c.label).join(" | ")).toContain("병원");
+    expect(archived("ai-1") || archived("ai-2")).toBe(false);
+    const { continuePendingInput } = await import("@/lib/nl-input");
+    await continuePendingInput(JSON.parse(JSON.stringify(pending)), "", { choiceId: "ai:n-ai-2", staffName: "서도영" });
+    expect(archived("ai-2")).toBe(true);
+    expect(archived("ai-1")).toBe(false);
+  });
+
+  it("3. '박재하 결석예정 아니야' → 정정/취소 흐름(AI가 조치사항으로 잘못 줘도)", async () => {
+    tables.admin_inbox_entries.push(absence("ai-1"));
+    const res = await say("박재하 결석예정 아니야", { intentClass: "action", route: "student_action", students: ["박재하"], instruction: "결석예정 아님" });
+    expect(res.outcomes[0].route).toBe("correction");
+    expect(archived("ai-1")).toBe(true);
+    expect(tables.tasks).toHaveLength(0);
+  });
+
+  it("4. '박재하 결석 관련 학부모에게 전화해줘' → 공통업무(행정 Pool), 기존 결석 기록 변경 없음", async () => {
+    tables.admin_inbox_entries.push(absence("ai-1"));
+    const res = await say("박재하 결석 관련 학부모에게 전화해줘", { intentClass: "action", route: "task", taskType: "학부모연락", students: ["박재하"], instruction: "결석 관련 학부모 전화" });
+    expect(res.outcomes[0]).toMatchObject({ route: "task", status: "완료" });
+    expect(tables.tasks).toHaveLength(1);
+    expect(archived("ai-1")).toBe(false);
+    expect(tables.admin_inbox_entries[0].start_date).toBe(absence("x").start_date);
+  });
+
+  it("5. 다른 지점의 같은 학생 결석예정은 대상이 아니다(현재 branch만)", async () => {
+    tables.admin_inbox_entries.push(absence("ai-other", { branch_id: "branch-geumjeong", notion_id: "n-other" }));
+    const res = await say("박재하 결석예정 삭제해줘", { intentClass: "correction", route: "correction", correctionTarget: "admin_record", operation: "cancel", inboxType: "결석예정", students: ["박재하"] });
+    expect(res.outcomes[0].message).toContain("수정할 기록을 찾지 못했습니다");
+    expect(archived("ai-other")).toBe(false);
+  });
+
+  it("6. 기록이 없으면 새 행정 기록/업무 없이 찾지 못했다고 안내", async () => {
+    const res = await say("박재하 결석예정 삭제해줘", { intentClass: "correction", route: "correction", correctionTarget: "admin_record", operation: "cancel", inboxType: "결석예정", students: ["박재하"] });
+    expect(res.outcomes[0]).toMatchObject({ status: "확인필요" });
+    expect(tables.admin_inbox_entries).toHaveLength(0);
+    expect(tables.tasks).toHaveLength(0);
+  });
+
+  it("권한: 화면 버튼과 같게 입력자 본인 또는 원장만 — 다른 강사는 거부, 원장은 가능. 날짜 수정도 같은 함수", async () => {
+    tables.admin_inbox_entries.push(absence("ai-1", { entered_by: "박민지" }));
+    const denied = await say("박재하 결석예정 삭제해줘", { intentClass: "correction", route: "correction", correctionTarget: "admin_record", operation: "cancel", inboxType: "결석예정", students: ["박재하"] }, { role: "강사" });
+    expect(denied.outcomes[0].message).toContain("본인이 입력한 항목만 삭제할 수 있습니다");
+    expect(archived("ai-1")).toBe(false);
+    await say("박재하 결석 날짜 2026-10-01로 수정해줘", { intentClass: "correction", route: "correction", correctionTarget: "admin_record", operation: "modify", inboxType: "결석예정", students: ["박재하"], newStartDate: "2026-10-01" }, { role: "원장" });
+    expect(tables.admin_inbox_entries[0].start_date).toBe("2026-10-01");
+    await say("박재하 결석예정 삭제해줘", { intentClass: "correction", route: "correction", correctionTarget: "admin_record", operation: "cancel", inboxType: "결석예정", students: ["박재하"] }, { role: "원장" });
+    expect(archived("ai-1")).toBe(true);
+  });
+
+  it("7. 화면의 기존 수정/삭제 버튼(/api/admin-inbox/[id])은 그대로 동작", async () => {
+    tables.admin_inbox_entries.push(absence("ai-1"));
+    const { NextRequest } = await import("next/server");
+    const route = await import("@/app/api/admin-inbox/[id]/route");
+    const headers = { "content-type": "application/json", "x-staff-name": encodeURIComponent("서도영"), "x-staff-role": encodeURIComponent("강사") };
+    const patch = await route.PATCH(new NextRequest("http://localhost/api/admin-inbox/n-ai-1", { method: "PATCH", headers, body: JSON.stringify({ startDate: "2026-10-02" }) }), { params: { id: "n-ai-1" } });
+    expect(patch.status).toBe(200);
+    expect(tables.admin_inbox_entries[0].start_date).toBe("2026-10-02");
+    const del = await route.DELETE(new NextRequest("http://localhost/api/admin-inbox/n-ai-1", { method: "DELETE", headers }), { params: { id: "n-ai-1" } });
+    expect(del.status).toBe(200);
+    expect(archived("ai-1")).toBe(true);
+  });
+});

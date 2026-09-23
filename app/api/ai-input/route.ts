@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveRelativeDate } from "@/lib/anthropic";
 import { createPersonalTodo } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
-import { readStaffName, readStaffId } from "@/lib/session";
+import { readStaffName, readStaffId, readStaffRole } from "@/lib/session";
 import {
   runNaturalLanguageCommand,
   runUnifiedNlInput,
@@ -42,7 +42,11 @@ export async function POST(req: NextRequest) {
     const choiceId = typeof body?.choiceId === "string" ? body.choiceId : undefined;
     if (!text && !choiceId) return NextResponse.json({ ok: false, message: "답변을 입력해 주세요." }, { status: 400 });
     try {
-      const result = await continuePendingInput(pending as PendingAction, text, { choiceId, staffName: readStaffName(req) || undefined });
+      const result = await continuePendingInput(pending as PendingAction, text, {
+        choiceId,
+        staffName: readStaffName(req) || undefined,
+        role: readStaffRole(req) || undefined,
+      });
       if (result.tasks.length > 0) notifyTaskAssignments(result.tasks);
       return NextResponse.json({
         ok: result.ok,
@@ -153,7 +157,7 @@ export async function POST(req: NextRequest) {
     // 입력 이력 조회 결과 번호 토큰 — 서버 서명(HMAC) + 조회한 직원 id가 들어 있어, 현재
     // 세션 직원과 다르거나 위·변조되면 runUnifiedNlInput이 무시한다.
     const historyToken = typeof body?.history === "string" ? body.history : null;
-    const result = await runUnifiedNlInput(text, { staffName, staffId: staffId || undefined, context, historyToken });
+    const result = await runUnifiedNlInput(text, { staffName, staffId: staffId || undefined, role: readStaffRole(req) || undefined, context, historyToken });
     mark("route:after_unified");
     if (result.tasks.length > 0) notifyTaskAssignments(result.tasks);
     const summary =

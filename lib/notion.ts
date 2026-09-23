@@ -4204,6 +4204,24 @@ export async function updateAdminInboxEntry(
   await dualWriteEntity("ADMIN_INBOX", updated);
 }
 
+// 자연어 정정 후보용(읽기 전용): 기간이 sinceDate 이후이거나 sinceIso 이후 입력된, 삭제(보관)
+// 안 된 행정실 기록 원본 행. 지점 격리는 pgQueryRaw의 branch_id 필터 그대로.
+export async function listAdminInboxCorrectionRows(sinceDate: string, sinceIso: string): Promise<Record<string, unknown>[]> {
+  if (getDbProvider() !== "postgres") return [];
+  const rows = await pgQueryRaw(
+    "ADMIN_INBOX",
+    `or=(start_date.gte.${sinceDate},end_date.gte.${sinceDate},created_at.gte.${encodeURIComponent(sinceIso)})`
+  );
+  return rows.filter(pgNotArchived);
+}
+
+// 행정실 기록 한 건(삭제 안 된 것만) — 정정 대상 재확인용.
+export async function getActiveAdminInboxRow(id: string): Promise<Record<string, unknown> | null> {
+  if (getDbProvider() !== "postgres") return null;
+  const row = await pgGetByNotionId("ADMIN_INBOX", id);
+  return row && pgNotArchived(row) ? row : null;
+}
+
 export async function deleteAdminInboxEntry(id: string) {
   if (getDbProvider() === "postgres") {
     await pgArchiveByNotionId("ADMIN_INBOX", id);
