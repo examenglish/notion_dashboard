@@ -3,7 +3,7 @@
 // 재처리하는 영구 운영 도구다 — 마이그레이션 1회성 러너와 달리 계속 남아있는다.
 import { notion, DB, listClasses, listStaff, listPoolTasks, listManuals, searchStudents, getRichText } from "./notion";
 import { SOURCES, OPTIONAL_SOURCES, TABLE, makeT, payload, rel } from "@/supabase/scripts/migrate_notion_to_supabase.mjs";
-import { dualWriteEntity, branchCode, pgGetByNotionId, pgPatchByNotionId } from "./supabaseRepo";
+import { dualWriteEntity, branchCode, pgGetByNotionId, pgPatchByNotionId, getDbProvider } from "./supabaseRepo";
 import { hashPin } from "./pinAuth";
 
 // listClasses/listStaff/listPoolTasks/listManuals는 내부적으로
@@ -538,6 +538,13 @@ export async function retryDualWriteFailures(limit = 50): Promise<{ retried: num
   for (const row of rows) {
     if (!row.notion_id || row.entity.includes(":delete")) {
       // 삭제 실패나 notion_id 없는 실패는 자동 재시도 대상이 아니다 — 수동 검토.
+      stillFailing++;
+      continue;
+    }
+    // PostgreSQL이 정본인 배포에서 TODO를 Notion 페이지로 재동기화하면, 행 전체를
+    // upsert해 현재 담당자/완료상태/source_payload.workflow(진행 이력)를 오래된
+    // Notion 값으로 덮어쓴다 — 자동 재시도하지 않고 수동 검토로 남긴다(해결 표시 안 함).
+    if (row.entity === "TODO" && getDbProvider() === "postgres") {
       stillFailing++;
       continue;
     }

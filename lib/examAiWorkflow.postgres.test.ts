@@ -37,7 +37,9 @@ vi.mock("@/lib/anthropic", async (importOriginal) => ({
 type Row = Record<string, any>;
 
 function matchClause(clause: string, row: Row): boolean {
-  const m = clause.match(/^([a-z_]+)\.(eq|cs|is|in|gte)\.(.*)$/);
+  const neg = clause.match(/^([a-z_]+)\.not\.(.*)$/);
+  if (neg) return !matchClause(`${neg[1]}.${neg[2]}`, row);
+  const m = clause.match(/^([a-z_]+)\.(eq|cs|is|in|gte|lte)\.(.*)$/);
   if (!m) throw new Error(`fake-supabase: unsupported clause "${clause}"`);
   const [, col, op, rawVal] = m;
   const cell = row[col];
@@ -52,6 +54,7 @@ function matchClause(clause: string, row: Row): boolean {
     return Array.isArray(cell) && cell.includes(v);
   }
   if (op === "gte") return String(cell ?? "") >= decoded;
+  if (op === "lte") return String(cell ?? "") <= decoded;
   if (op === "in") return rawVal.replace(/^\(/, "").replace(/\)$/, "").split(",").map(decodeURIComponent).includes(String(cell ?? ""));
   return false;
 }
@@ -363,5 +366,135 @@ describe("수업기록 권한 예외", () => {
     expect(await notion.classProgressHasStudentRecords(tables.class_progress[0].id)).toBe(false);
     tables.class_progress[0].student_records_created = true;
     expect(await notion.classProgressHasStudentRecords(tables.class_progress[0].id)).toBe(true);
+  });
+});
+
+describe("교시 구분(날짜+반+교시 단위)", () => {
+  const todayWeekday = () =>
+    ["일", "월", "화", "수", "목", "금", "토"][new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" })).getDay()];
+
+  it("같은 반·같은 날 1/2/3교시 입력은 각각 별개 행으로 저장되고, 같은 교시 재입력만 갱신된다", async () => {
+    parseUnifiedInput
+      .mockResolvedValueOnce([intent({ route: "class_progress", className: "고2 이사벨A", period: "1교시", progress: "본문 3과 1~4번", homework: "워크북 22쪽" })])
+      .mockResolvedValueOnce([intent({ route: "class_progress", className: "고2 이사벨A", period: "2교시", progress: "문법 관계대명사", homework: "문법책 35~38쪽" })])
+      .mockResolvedValueOnce([intent({ route: "class_progress", className: "고2 이사벨A", period: "3 교시", progress: "모의고사 29~32번", homework: "오답" })])
+      .mockResolvedValueOnce([intent({ route: "class_progress", className: "고2 이사벨A", period: "2교시", progress: "", homework: "문법책 35~40쪽" })]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const r1 = await runUnifiedNlInput("고2 이사벨A 1교시 본문 3과 1~4번, 과제 워크북 22쪽");
+    await runUnifiedNlInput("고2 이사벨A 2교시 문법 관계대명사, 과제 문법책 35~38쪽");
+    await runUnifiedNlInput("고2 이사벨A 3교시 모의고사 29~32번, 과제 오답");
+    await runUnifiedNlInput("고2 이사벨A 2교시 과제 문법책 35~40쪽으로 수정");
+
+    expect(r1.outcomes[0].message).toBe("고2 이사벨A 1교시\n오늘 진도: 본문 3과 1~4번\n과제: 워크북 22쪽\n저장 완료");
+    expect(tables.class_progress.map((r) => [r.period, r.progress_content, r.homework_content])).toEqual([
+      ["1교시", "본문 3과 1~4번", "워크북 22쪽"],
+      ["2교시", "문법 관계대명사", "문법책 35~40쪽"],
+      ["3교시", "모의고사 29~32번", "오답"],
+    ]);
+    // 수업기록 화면(getClassProgressForEdit)도 교시별로 따로 불러온다.
+    const notion = await import("@/lib/notion");
+    expect((await notion.getClassProgressForEdit("cls-isabel-a", tables.class_progress[0].record_date, "2교시"))?.progress).toBe("문법 관계대명사");
+    expect(await notion.getClassProgressForEdit("cls-isabel-a", tables.class_progress[0].record_date)).toBeNull();
+  });
+
+  it("시간표상 그날 교시가 2개 이상인데 교시를 안 밝히면 교시만 되묻고, 답하면 첫 입력과 합쳐 저장한다", async () => {
+    tables.classes[0].day_teachers = `${todayWeekday()}=1:김쌤,2:이쌤`;
+    parseUnifiedInput.mockResolvedValue([intent({ route: "class_progress", className: "고2 이사벨A", progress: "본문 3과", homework: "워크북 22쪽" })]);
+    const { runUnifiedNlInput, continuePendingInput } = await import("@/lib/nl-input");
+    const first = await runUnifiedNlInput("고2 이사벨A 오늘 본문 3과, 과제 워크북 22쪽");
+    const pending = first.outcomes[0].pending!;
+    expect(pending.missing.map((m) => m.field)).toEqual(["period"]);
+    expect(pending.question).toContain("오늘 고2 이사벨A 수업은 여러 교시가 있습니다. 어느 교시인가요?");
+    expect(pending.missing[0].candidates?.map((c) => c.label)).toEqual(["1교시", "2교시"]);
+    expect(tables.class_progress).toHaveLength(0);
+
+    const second = await continuePendingInput(JSON.parse(JSON.stringify(pending)), "2교시요");
+    expect(second.ok).toBe(true);
+    expect(tables.class_progress[0]).toMatchObject({ period: "2교시", progress_content: "본문 3과", homework_content: "워크북 22쪽" });
+  });
+
+  it("교시가 하나뿐인(또는 시간표 없는) 반은 교시를 묻지 않고 '교시 구분 없음'으로 저장한다", async () => {
+    tables.classes[0].day_teachers = `${todayWeekday()}=1:김쌤`;
+    parseUnifiedInput.mockResolvedValue([intent({ route: "class_progress", className: "고2 이사벨A", progress: "본문 3과", homework: "" })]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const res = await runUnifiedNlInput("고2 이사벨A 오늘 본문 3과");
+    expect(res.ok).toBe(true);
+    expect(tables.class_progress[0].period).toBeNull();
+  });
+});
+
+describe("교시 보완", () => {
+  it("교시는 'N교시' 형태로만 인식한다(되묻기 답변은 숫자만도 허용)", async () => {
+    const { normalizePeriod } = await import("@/lib/nl-input");
+    expect(normalizePeriod("1교시")).toBe("1교시");
+    expect(normalizePeriod("2 교시")).toBe("2교시");
+    expect(normalizePeriod("1타임")).toBe("");
+    expect(normalizePeriod("첫 수업")).toBe("");
+    expect(normalizePeriod("2")).toBe("");
+    expect(normalizePeriod("2", true)).toBe("2교시");
+  });
+
+  it("시간표가 없어도 그날 이미 교시별 기록이 있으면 교시를 되묻는다(기존 교시 + 다음 교시 후보)", async () => {
+    const { todayKST } = await import("@/lib/date");
+    tables.class_progress.push({
+      id: "cp-1", notion_id: null, branch_id: B, class_id: "cls-isabel-a", class_notion_ids: ["cls-isabel-a"],
+      record_date: todayKST(), period: "1교시", progress_content: "본문 3과", homework_content: "", student_records_created: true,
+      daily_record_notion_ids: ["dr-1"], source_payload: {},
+    });
+    parseUnifiedInput.mockResolvedValue([intent({ route: "class_progress", className: "고2 이사벨A", progress: "문법 관계대명사", homework: "" })]);
+    const { runUnifiedNlInput, continuePendingInput } = await import("@/lib/nl-input");
+    const first = await runUnifiedNlInput("고2 이사벨A 오늘 문법 관계대명사");
+    const pending = first.outcomes[0].pending!;
+    expect(pending.missing[0].candidates?.map((c) => c.label)).toEqual(["1교시", "2교시"]);
+
+    await continuePendingInput(JSON.parse(JSON.stringify(pending)), "2");
+    expect(tables.class_progress.map((r) => [r.period, r.progress_content])).toEqual([
+      ["1교시", "본문 3과"],
+      ["2교시", "문법 관계대명사"],
+    ]);
+  });
+});
+
+describe("findClassRecordGaps — EXAM AI 진도만 입력한 날은 누락으로 유지", () => {
+  it("정상 수업기록 저장은 student_records_created=true, AI 진도-only 행은 누락으로 남는다", async () => {
+    const { todayKST } = await import("@/lib/date");
+    const today = todayKST();
+    const weekday = ["일", "월", "화", "수", "목", "금", "토"][new Date(`${today}T00:00:00Z`).getUTCDay()];
+    tables.classes[0].days = [weekday];
+    tables.classes[2].days = [weekday];
+    tables.classes[2].student_notion_ids = ["stu-minsu-1a"];
+
+    // 고2 이사벨A: EXAM AI로 진도만
+    parseUnifiedInput.mockResolvedValue([intent({ route: "class_progress", className: "고2 이사벨A", progress: "3과", homework: "" })]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    await runUnifiedNlInput("고2 이사벨A 오늘 3과");
+
+    // 고1A: 기존 수업기록 화면 경로(학생기록 생성)
+    const notion = await import("@/lib/notion");
+    await notion.createClassProgress({
+      classId: "cls-1a", date: today, subjects: [], progress: "본문 2과", homework: "", nextAssignment: "", notice: "", perStudent: {},
+    });
+    const normal = tables.class_progress.find((r) => r.class_id === "cls-1a")!;
+    expect(normal.student_records_created).toBe(true);
+    expect(tables.daily_records).toHaveLength(1);
+
+    const gaps = await notion.findClassRecordGaps(today, today);
+    expect(gaps.map((g) => g.classId)).toEqual(["cls-isabel-a"]);
+  });
+});
+
+describe("retryDualWriteFailures — PostgreSQL 정본에서 TODO 재동기화 금지", () => {
+  it("TODO 실패 행은 Notion으로 덮어쓰지 않고 미해결(수동 검토)로 남긴다", async () => {
+    tables.tasks.push({
+      id: "task-1", notion_id: "notion-task-1", branch_id: B, type: "암기확인", complete: false,
+      staff_notion_ids: ["staff-minji"], source_payload: { workflow: { startedAt: "2026-09-23T01:00:00Z", startedBy: "staff-minji" } },
+    });
+    tables.dual_write_failures = [{ id: "f-1", branch_id: B, entity: "TODO", notion_id: "notion-task-1", resolved: false, created_at: "2026-09-01" }];
+    const { retryDualWriteFailures } = await import("@/lib/reconciliation");
+    const result = await retryDualWriteFailures();
+    expect(result).toEqual({ retried: 1, resolved: 0, stillFailing: 1 });
+    expect(tables.dual_write_failures[0].resolved).toBe(false);
+    expect(tables.tasks[0]).toMatchObject({ staff_notion_ids: ["staff-minji"], complete: false });
+    expect(tables.tasks[0].source_payload.workflow.startedBy).toBe("staff-minji");
   });
 });

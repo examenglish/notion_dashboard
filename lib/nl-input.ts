@@ -9,6 +9,7 @@ import {
   getNlRoster,
   getAttendanceOnDate,
   saveClassProgressFromText,
+  listClassProgressPeriods,
 } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
@@ -506,7 +507,7 @@ export type UnifiedOutcome = {
 //  - 여러 개가 부족하면 한 번에 묻고, 일부만 답하면 받은 건 유지하고 남은 것만 다시 묻는다.
 //  - 답변은 전체 명령으로 재해석하지 않는다(부족 항목 1개면 LLM 없이 그대로 사용).
 // ---------------------------------------------------------------------------
-export type PendingField = "class" | "student" | "owner" | "taskType" | "content";
+export type PendingField = "class" | "student" | "owner" | "taskType" | "content" | "period";
 export type MissingInfo = { key: string; field: PendingField; question: string; candidates?: { id: string; label: string }[]; ref?: string };
 type Choice = { id: string; label: string };
 
@@ -517,6 +518,7 @@ export type ClassProgressDraft = {
   date: string;
   progress: string;
   homework: string;
+  period: string;
 };
 export type TaskDraft = {
   kind: "task";
@@ -544,7 +546,7 @@ const norm = (v: string) => v.replace(/\s+/g, "").toLowerCase();
 
 // draft를 보고 비어있는 필수 항목을 채울 수 있으면 채우고(결정론적 매칭),
 // 그래도 비어있는 것만 missing으로 돌려준다.
-function checkDraft(draft: ClassProgressDraft | TaskDraft, roster: Roster): MissingInfo[] {
+async function checkDraft(draft: ClassProgressDraft | TaskDraft, roster: Roster): Promise<MissingInfo[]> {
   const missing: MissingInfo[] = [];
   if (draft.kind === "class_progress") {
     if (!draft.classId) {
@@ -564,6 +566,25 @@ function checkDraft(draft: ClassProgressDraft | TaskDraft, roster: Roster): Miss
           key: "class",
           field: "class",
           question: draft.className ? `"${draft.className}" 반을 찾지 못했습니다. 어느 반인가요?` : "어느 반의 수업인가요?",
+        });
+      }
+    }
+    // 교시: 그날 이 반이 여러 교시로 나뉘는데 교시를 안 밝혔으면 필수로 묻는다
+    // (교시 없이 저장하면 교시별 기록과 섞인다). 판단 근거는 반 시간표(요일별
+    // 담당교사)의 교시 수가 2개 이상이거나, 그날 이미 교시별로 저장된 기록이
+    // 있는 경우. 교시가 하나뿐인 반은 묻지 않고 기존처럼 저장한다.
+    if (draft.classId && !draft.period) {
+      const scheduled = scheduledPeriods(draft.classId, draft.date, roster);
+      const existing = await listClassProgressPeriods(draft.classId, draft.date);
+      if (scheduled.length >= 2 || existing.length > 0) {
+        let periods = Array.from(new Set([...scheduled, ...existing])).sort((a, b) => parseInt(a) - parseInt(b));
+        // 기존 교시 기록이 하나뿐이면 다음 교시도 고를 수 있게 한다.
+        if (periods.length < 2) periods = [...periods, `${Math.max(...periods.map((p) => parseInt(p))) + 1}교시`];
+        missing.push({
+          key: "period",
+          field: "period",
+          question: `${draft.date === todayKST() ? "오늘" : draft.date} ${draft.className} 수업은 여러 교시가 있습니다. 어느 교시인가요?`,
+          candidates: periods.map((p) => ({ id: p, label: p })),
         });
       }
     }
@@ -604,6 +625,25 @@ function checkDraft(draft: ClassProgressDraft | TaskDraft, roster: Roster): Miss
     }
   }
   return missing;
+}
+
+// 교시는 "N교시" 형태로만 인식한다("1교시"/"1 교시" → "1교시", 수업기록 화면
+// InputClient의 교시 값과 동일 형식). 되묻기 답변에서는 숫자만("2") 와도 허용.
+export function normalizePeriod(raw: string | undefined | null, allowBareNumber = false): string {
+  const v = (raw ?? "").trim();
+  const m = v.match(/(\d+)\s*교시/) ?? (allowBareNumber ? v.match(/^(\d+)$/) : null);
+  return m && Number(m[1]) > 0 ? `${Number(m[1])}교시` : "";
+}
+
+// 반 시간표(요일별담당교사 "월=1:김쌤,2:이쌤")에서 그 날짜 요일의 교시 목록.
+function scheduledPeriods(classId: string, date: string, roster: Roster): string[] {
+  const cls = roster.classes.find((c) => c.id === classId);
+  const weekday = WEEKDAYS[new Date(`${date}T00:00:00Z`).getUTCDay()];
+  const byPeriod = cls?.dayTeachers?.[weekday] ?? {};
+  return Object.keys(byPeriod)
+    .map((p) => normalizePeriod(p, true))
+    .filter(Boolean)
+    .sort((a, b) => parseInt(a) - parseInt(b));
 }
 
 function staffCandidates(name: string, staff: { id: string; name: string; role?: string | null }[]): Choice[] {
@@ -660,6 +700,13 @@ function applyValue(draft: ClassProgressDraft | TaskDraft, m: MissingInfo, value
     case "content": {
       if (draft.kind !== "class_progress") return false;
       draft.progress = v;
+      return true;
+    }
+    case "period": {
+      if (draft.kind !== "class_progress") return false;
+      const p = normalizePeriod(choiceId ?? v, true);
+      if (!p) return false;
+      draft.period = p;
       return true;
     }
     case "taskType": {
@@ -783,7 +830,15 @@ async function executeDraft(
 ): Promise<{ outcomes: UnifiedOutcome[]; slackTasks: SlackTask[] }> {
   if (draft.kind === "class_progress") {
     return {
-      outcomes: [await saveClassProgressOutcome({ classId: draft.classId as string, date: draft.date, progress: draft.progress, homework: draft.homework })],
+      outcomes: [
+        await saveClassProgressOutcome({
+          classId: draft.classId as string,
+          date: draft.date,
+          progress: draft.progress,
+          homework: draft.homework,
+          period: draft.period,
+        }),
+      ],
       slackTasks: [],
     };
   }
@@ -802,7 +857,7 @@ export async function continuePendingInput(
   const roster = await getNlRoster();
   const studentNames = new Map(roster.students.map((st) => [st.id, st.name]));
   const draft = pending.draft;
-  const missing = checkDraft(draft, roster);
+  const missing = await checkDraft(draft, roster);
 
   let applied = 0;
   if (opts.choiceId) {
@@ -822,7 +877,7 @@ export async function continuePendingInput(
     }
   }
 
-  const remaining = checkDraft(draft, roster);
+  const remaining = await checkDraft(draft, roster);
   if (remaining.length > 0) {
     const attempts = pending.attempts + (applied === 0 ? 1 : 0);
     if (attempts >= 3) {
@@ -860,10 +915,16 @@ export function resolveClassCandidates(className: string | undefined, classes: {
 }
 
 // 반 진도/과제 저장 + 화면 표시용 결과 문구(선택 후 재요청 경로도 같이 쓴다).
-export async function saveClassProgressOutcome(input: { classId: string; date: string; progress: string; homework: string }): Promise<UnifiedOutcome> {
-  const saved = await saveClassProgressFromText(input);
+export async function saveClassProgressOutcome(input: {
+  classId: string;
+  date: string;
+  progress: string;
+  homework: string;
+  period?: string;
+}): Promise<UnifiedOutcome> {
+  const saved = await saveClassProgressFromText({ ...input, period: input.period || null });
   const lines = [
-    saved.className,
+    `${saved.className}${input.period ? ` ${input.period}` : ""}`,
     `${input.date === todayKST() ? "오늘" : input.date} 진도: ${saved.progress || "-"}`,
     `과제: ${saved.homework || "-"}`,
     saved.mode === "updated" ? "기존 수업기록에 반영 완료" : "저장 완료",
@@ -1014,7 +1075,7 @@ export async function runUnifiedNlInput(
             ownerId: null,
             createdBy: opts.staffName,
           };
-          const missing = checkDraft(draft, roster);
+          const missing = await checkDraft(draft, roster);
           if (missing.length > 0) {
             outcomes.push(pendingOutcome(draft, missing, 0));
             break;
@@ -1112,8 +1173,9 @@ export async function runUnifiedNlInput(
             date: intent.date || today,
             progress: intent.progress?.trim() || "",
             homework: intent.homework?.trim() || "",
+            period: normalizePeriod(intent.period),
           };
-          const missing = checkDraft(draft, roster);
+          const missing = await checkDraft(draft, roster);
           if (missing.length > 0) {
             outcomes.push(pendingOutcome(draft, missing, 0));
             break;

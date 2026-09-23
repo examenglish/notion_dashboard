@@ -2805,6 +2805,9 @@ export async function saveClassProgressFromText(input: {
   date: string;
   progress: string;
   homework: string;
+  // "1교시" 등 — 수업기록 화면(InputClient)과 같은 값. 없으면 "교시 구분 없음" 행.
+  // 날짜+반+교시가 한 단위라, 교시가 다르면 같은 날 같은 반이어도 별개 행이다.
+  period?: string | null;
 }): Promise<{ mode: "created" | "updated"; className: string; progress: string; homework: string }> {
   if (getDbProvider() !== "postgres") throw new Error("반 진도 자연어 입력은 Postgres 모드에서만 지원합니다.");
   const classes = await listClasses();
@@ -2815,7 +2818,12 @@ export async function saveClassProgressFromText(input: {
   const homework = input.homework.trim();
 
   const existing = classPgId
-    ? (await pgQueryRaw("CLASS_PROGRESS", `class_id=eq.${classPgId}&record_date=eq.${input.date}&period=is.null`)).filter(pgNotArchived)[0]
+    ? (
+        await pgQueryRaw(
+          "CLASS_PROGRESS",
+          `class_id=eq.${classPgId}&record_date=eq.${input.date}&${input.period ? `period=eq.${encodeURIComponent(input.period)}` : "period=is.null"}`
+        )
+      ).filter(pgNotArchived)[0]
     : undefined;
   if (existing) {
     const patch: Record<string, unknown> = {};
@@ -2836,7 +2844,7 @@ export async function saveClassProgressFromText(input: {
   }
 
   await pgInsertRow("CLASS_PROGRESS", {
-    title: `${input.date} ${cls.name} 진도`,
+    title: `${input.date} ${cls.name}${input.period ? ` ${input.period}` : ""} 진도`,
     class_id: classPgId,
     class_notion_ids: [input.classId],
     record_date: input.date,
@@ -2845,10 +2853,20 @@ export async function saveClassProgressFromText(input: {
     homework_content: homework,
     next_test: "",
     notice: "",
-    period: null,
+    period: input.period || null,
     student_records_created: false,
   });
   return { mode: "created", className: stripClassSuffix(cls.name), progress, homework };
+}
+
+// 그 반·그 날짜에 이미 저장된 교시 목록("1교시" 등) — EXAM AI 반 진도 입력이
+// 교시 없이 들어왔을 때, 수업기록 화면에서 이미 교시별로 기록된 날이면 되묻기 위해.
+export async function listClassProgressPeriods(classId: string, date: string): Promise<string[]> {
+  if (getDbProvider() !== "postgres") return [];
+  const classPgId = await pgResolveRelationId("CLASS", classId);
+  if (!classPgId) return [];
+  const rows = (await pgQueryRaw("CLASS_PROGRESS", `class_id=eq.${classPgId}&record_date=eq.${date}&period=not.is.null`)).filter(pgNotArchived);
+  return Array.from(new Set(rows.map((r) => r.period as string).filter(Boolean)));
 }
 
 // 수업기록 PATCH 권한 판단용 — 학생별 기록이 아직 하나도 없는 진도 행(EXAM AI로
@@ -2954,6 +2972,14 @@ export async function findClassRecordGaps(from: string, to: string, includeExamC
     for (const r of recordPages.filter(pgNotArchived)) {
       const date = (r.record_date as string | null) ?? null;
       if (!date) continue;
+      // 학생별 기록이 만들어지지 않은 수업은 "기록 완료"로 보지 않는다 — EXAM AI가
+      // 반 진도/과제만 먼저 넣어둔 행(student_records_created=false, 연결된 학생기록
+      // 없음)은 출결 입력 전이므로 누락으로 남겨야 한다. 정상 저장 경로
+      // (createClassProgress/checkInAttendance)는 학생기록 생성 후 true로 바꾼다.
+      // 플래그 값이 없는(null) 이관된 예전 행은 기존처럼 완료로 본다.
+      const noStudentRecords =
+        r.student_records_created === false && ((r.daily_record_notion_ids as string[] | null) ?? []).length === 0;
+      if (noStudentRecords) continue;
       for (const classId of (r.class_notion_ids as string[] | undefined) ?? []) filledKeys.add(`${classId}|${date}`);
     }
   } else {
