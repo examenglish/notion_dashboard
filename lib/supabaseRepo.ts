@@ -318,12 +318,20 @@ export async function pgPatchById(entityKey: EntityKey, id: string, patch: Recor
  * id(uuid)를 호출부가 즉시 "id"로 쓸 수 있다 — 이후 Notion 미러가 성공하면
  * pgSetNotionId로 notion_id를 채워 넣는다(선택, 실패해도 기능엔 지장 없음).
  */
+// Notion 미러가 없는 PostgreSQL 전용 테이블 — notion_id 컬럼 자체가 없으므로(예: 006
+// student_learning_records) INSERT에 notion_id를 넣으면 PostgREST가 PGRST204(400)로 거부한다.
+export const PG_ONLY_ENTITIES: ReadonlySet<EntityKey> = new Set<EntityKey>(["STUDENT_LEARNING_RECORD"]);
+
+export function pgInsertPayload(entityKey: EntityKey, branchId: string, row: Record<string, unknown>): Record<string, unknown> {
+  return PG_ONLY_ENTITIES.has(entityKey) ? { branch_id: branchId, ...row } : { branch_id: branchId, notion_id: null, ...row };
+}
+
 export async function pgInsertRow(entityKey: EntityKey, row: Record<string, unknown>): Promise<{ id: string; notion_id: string | null }> {
   const { env, branchId } = await requireEnvAndBranch();
   const r = await fetch(`${env.url}/rest/v1/${TABLE[entityKey]}`, {
     method: "POST",
     headers: { ...authHeaders(env.key), "Content-Type": "application/json", Prefer: "return=representation" },
-    body: JSON.stringify([{ branch_id: branchId, notion_id: null, ...row }]),
+    body: JSON.stringify([pgInsertPayload(entityKey, branchId, row)]),
   });
   if (!r.ok) {
     const body = await r.text().catch(() => "");

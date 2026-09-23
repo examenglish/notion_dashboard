@@ -36,6 +36,23 @@ vi.mock("@/lib/anthropic", async (importOriginal) => ({
 
 type Row = Record<string, any>;
 
+// 006 migration(실제 운영 스키마)에서 student_learning_records 컬럼 목록을 읽어, fake DB가
+// 운영 PostgREST처럼 없는 컬럼을 거부하게 한다(PGRST204). 스키마 없는 fake 때문에
+// notion_id 주입 버그(운영 400)를 놓쳤던 것을 막는다.
+import { readFileSync } from "fs";
+import path from "path";
+const SLR_COLUMNS: Set<string> = (() => {
+  const sql = readFileSync(path.resolve(__dirname, "../supabase/schema/006_student_learning_records.sql"), "utf8");
+  const body = sql.slice(sql.indexOf("create table student_learning_records"), sql.indexOf(");", sql.indexOf("create table student_learning_records")));
+  return new Set(Array.from(body.matchAll(/^\s+([a-z_]+)\s+(uuid|text|date|numeric|boolean|jsonb|timestamptz)/gm)).map((m) => m[1]));
+})();
+const slrPosts: Row[] = [];
+function schemaViolation(table: string, body: Row): string | null {
+  if (table !== "student_learning_records") return null;
+  const bad = Object.keys(body).find((k) => !SLR_COLUMNS.has(k));
+  return bad ? JSON.stringify({ code: "PGRST204", message: `Could not find the '${bad}' column of 'student_learning_records' in the schema cache` }) : null;
+}
+
 function matchClause(clause: string, row: Row): boolean {
   const neg = clause.match(/^([a-z_]+)\.not\.(.*)$/);
   if (neg) return !matchClause(`${neg[1]}.${neg[2]}`, row);
@@ -88,10 +105,16 @@ function makeFakeSupabase(tables: Record<string, Row[]>) {
     if (method === "GET") return new Response(JSON.stringify(applyFilters(tables[table], u.searchParams)), { status: 200 });
     if (method === "POST") {
       const body = JSON.parse(init.body as string);
+      const items = Array.isArray(body) ? body : [body];
+      if (table === "student_learning_records") slrPosts.push(...items);
+      for (const item of items) {
+        const v = schemaViolation(table, item);
+        if (v) return new Response(v, { status: 400 });
+      }
       const now = new Date().toISOString();
-      const inserted = (Array.isArray(body) ? body : [body]).map((item: Row) => ({
+      const inserted = items.map((item: Row) => ({
         id: `gen-${++idCounter}`,
-        notion_id: null,
+        ...(table === "student_learning_records" ? {} : { notion_id: null }),
         created_at: now,
         updated_at: now,
         source_payload: {},
@@ -102,6 +125,8 @@ function makeFakeSupabase(tables: Record<string, Row[]>) {
     }
     if (method === "PATCH") {
       const body = JSON.parse(init.body as string);
+      const v = schemaViolation(table, body);
+      if (v) return new Response(v, { status: 400 });
       const matched = applyFilters(tables[table], u.searchParams);
       for (const row of matched) Object.assign(row, body, { updated_at: new Date().toISOString() });
       return new Response(JSON.stringify(matched), { status: 200 });
@@ -154,6 +179,7 @@ function makeEveryoneOffShift() {
 }
 
 beforeEach(() => {
+  slrPosts.length = 0;
   seed();
   vi.stubGlobal("fetch", makeFakeSupabase(tables));
   process.env.SUPABASE_URL = "https://fake.supabase.co";
@@ -1308,5 +1334,57 @@ describe("원문 guard — 정상 입력은 계속 동작(과잉 차단 방지)"
     expect(writeGuardSignals("오늘 일정 보여줘").action).toBe(false);
     expect(EXPLICIT_NEW_STUDENT.test("이태경 불규칙동사 테스트")).toBe(false);
     expect(EXPLICIT_NEW_STUDENT.test("이태경 입학 상담 잡아줘")).toBe(true);
+  });
+});
+
+describe("hotfix: student_learning_records INSERT payload = 006 스키마(notion_id 없음)", () => {
+  it("fake DB 스키마는 006 파일에서 읽은 컬럼이고 notion_id가 없다", () => {
+    expect(SLR_COLUMNS.has("notion_id")).toBe(false);
+    for (const c of ["branch_id", "student_id", "student_notion_ids", "class_id", "class_notion_ids", "input_hash", "source_payload"]) expect(SLR_COLUMNS.has(c)).toBe(true);
+  });
+
+  it("'이태경 불규칙동사 테스트 84점' 저장 시 실제 INSERT key는 006 컬럼만, notion_id 없음", async () => {
+    tables.students.push({ id: "stu-lee", notion_id: "stu-lee", branch_id: B, name: "이태경", school: "부산고", grade: "고2", status: "재원", class_notion_ids: ["cls-isabel-a"] });
+    tables.classes[0].student_notion_ids.push("stu-lee");
+    parseUnifiedInput.mockResolvedValueOnce([
+      intent({ intentClass: "record", route: "student_record", students: ["이태경"], recordType: "vocab", assessmentName: "불규칙동사 테스트", score: 84 }),
+    ]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const res = await runUnifiedNlInput("이태경 불규칙동사 테스트 84점", { staffName: "서도영", staffId: "staff-seo" });
+    expect(res.ok).toBe(true);
+    expect(slrPosts).toHaveLength(1);
+    const keys = Object.keys(slrPosts[0]).sort();
+    expect(keys).toEqual(
+      [
+        "branch_id", "student_id", "student_notion_ids", "class_id", "class_notion_ids", "class_progress_id",
+        "record_date", "period", "record_type", "assessment_name", "score", "max_score", "passed",
+        "retest_required", "completed", "note", "follow_up", "entered_by", "raw_text", "input_hash", "source_payload",
+      ].sort()
+    );
+    expect(keys).not.toContain("notion_id");
+    expect(keys.every((k) => SLR_COLUMNS.has(k))).toBe(true);
+    expect(slrPosts[0]).toMatchObject({ branch_id: B, student_notion_ids: ["stu-lee"], class_notion_ids: ["cls-isabel-a"], record_type: "vocab", score: 84, entered_by: "서도영" });
+  });
+
+  it("다른 테이블 INSERT는 기존처럼 notion_id: null을 유지한다(Notion 미러 테이블 동작 불변)", async () => {
+    const { pgInsertPayload } = await import("@/lib/supabaseRepo");
+    expect(pgInsertPayload("TODO", "b1", { title: "x" })).toEqual({ branch_id: "b1", notion_id: null, title: "x" });
+    expect(pgInsertPayload("CLASS_PROGRESS", "b1", {})).toHaveProperty("notion_id", null);
+    expect(pgInsertPayload("STUDENT_LEARNING_RECORD", "b1", { score: 1 })).toEqual({ branch_id: "b1", score: 1 });
+  });
+
+  it("학생 기록 PATCH(수정·취소·업무 연결)도 006 컬럼만 쓴다", async () => {
+    tables.students.push({ id: "stu-lee", notion_id: "stu-lee", branch_id: B, name: "이태경", school: "부산고", grade: "고2", status: "재원", class_notion_ids: ["cls-isabel-a"] });
+    tables.classes[0].student_notion_ids.push("stu-lee");
+    await seedRecord("고2 이사벨A 이태경 불규칙 84점 확인해줘", { students: ["이태경"], recordType: "vocab", score: 84, passed: false, actionRequested: true, taskType: "단어재시" });
+    expect(tables.student_learning_records[0].task_id).toBe(tables.tasks[0].id);
+    const q = await say("이태경 84점 아니고 94점", { intentClass: "correction", route: "correction", correctionTarget: "student_record", operation: "modify", students: ["이태경"], oldScore: 84, newScore: 94, newPassed: true });
+    // 통과로 바뀌어 열린 연결 업무 처리 여부를 먼저 묻는다
+    const { continuePendingInput } = await import("@/lib/nl-input");
+    await continuePendingInput(JSON.parse(JSON.stringify(q.outcomes[0].pending)), "업무도 취소", { staffName: "서도영" });
+    expect(tables.student_learning_records[0].score).toBe(94);
+    expect(tables.tasks[0]).toMatchObject({ complete: true, outcome: "취소" });
+    await say("이태경 불규칙 기록 취소", { intentClass: "correction", route: "correction", correctionTarget: "student_record", operation: "cancel", students: ["이태경"] });
+    expect(tables.student_learning_records[0].source_payload.cancelled).toBeTruthy();
   });
 });
