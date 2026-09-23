@@ -48,28 +48,31 @@ export function archiveChannelMap(): Map<string, string> {
   return pairMap(process.env.SLACK_FILE_ARCHIVE_CHANNELS);
 }
 
-/** Slack 팀(+선택 채널 제한) → 지점 코드. 보관 대상이 아니면 null. */
+/**
+ * Slack 팀(+선택 채널 제한) → 지점 코드. fail closed: SLACK_FILE_ARCHIVE_TEAMS에 없는 팀은 항상 null
+ * (기본 지점·SLACK_TEAM_ID·배포 지점으로 대체하지 않는다). 채널 제한을 켜면 채널 지점도 팀 지점과 같아야 한다.
+ */
 export function resolveArchiveBranch(teamId: string | undefined, channelId: string | undefined): string | null {
   if (!teamId || !channelId) return null;
-  const teamCode = archiveTeamMap().get(teamId) ?? null;
+  const teamCode = archiveTeamMap().get(teamId);
+  if (!teamCode) return null;
   const channels = archiveChannelMap();
-  if (channels.size === 0) return teamCode;
-  const channelCode = channels.get(channelId);
-  if (!channelCode) return null;
-  // 팀 매핑이 있으면 채널 지점과 일치해야 하고, 없으면 기존 단일 팀 설정(SLACK_FILE_ARCHIVE_TEAM_ID/SLACK_TEAM_ID)만 허용
-  if (teamCode) return teamCode === channelCode ? channelCode : null;
-  const legacyTeam = process.env.SLACK_FILE_ARCHIVE_TEAM_ID || process.env.SLACK_TEAM_ID;
-  return legacyTeam && legacyTeam === teamId ? channelCode : null;
+  if (channels.size > 0 && channels.get(channelId) !== teamCode) return null;
+  return teamCode;
 }
 
-/** "sajik=https://a,geumjeong=https://b" → n8n이 등록 API를 부를 지점별 주소 */
-function branchBaseUrls(): Map<string, string> {
-  const map = new Map<string, string>();
+/**
+ * 지점 → 등록 API 주소. "sajik=https://a,geumjeong=https://b"(FILE_ARCHIVE_BRANCH_URLS)에 명시된 https 주소만 쓴다.
+ * 요청이 들어온 도메인(공용 Slack gateway)이나 다른 지점 주소로 대체하지 않는다 — 없으면 null.
+ */
+export function archiveCallbackUrl(code: string): string | null {
   for (const part of (process.env.FILE_ARCHIVE_BRANCH_URLS ?? "").split(",")) {
     const i = part.indexOf("=");
-    if (i > 0) map.set(part.slice(0, i).trim(), part.slice(i + 1).trim().replace(/\/$/, ""));
+    if (i <= 0 || part.slice(0, i).trim() !== code) continue;
+    const base = part.slice(i + 1).trim().replace(/\/$/, "");
+    return /^https:\/\/[^/?#]+$/.test(base) ? `${base}/api/files/archive` : null;
   }
-  return map;
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,21 +259,28 @@ export type ArchiveJob = {
   files: { id: string; name: string; mimeType: string; size: number; createdAt: string }[];
 };
 
-/** 보관 대상 파일 메시지면 n8n에 보낼 작업을 만든다(아니면 null). Slack 다운로드 URL/토큰은 넣지 않는다. */
-export function buildArchiveJob(envelope: { team_id?: string; event_id?: string }, event: SlackFileEvent, requestOrigin: string): ArchiveJob | null {
-  if (event.type !== "message" || event.bot_id || event.subtype === "bot_message") return null;
-  if (event.subtype && event.subtype !== "file_share") return null;
+export type ArchiveJobResult =
+  | { ok: true; job: ArchiveJob }
+  | { ok: false; reason: "not_file_message" | "channel_not_allowed" | "branch_url_not_configured" };
+
+/**
+ * 보관 대상 파일 메시지면 n8n에 보낼 작업을 만든다. Slack 다운로드 URL/토큰은 넣지 않는다.
+ * 팀 등록 여부는 호출부(공용 gateway)가 먼저 archiveTeamMap()으로 확인한다.
+ */
+export function buildArchiveJob(envelope: { team_id?: string; event_id?: string }, event: SlackFileEvent): ArchiveJobResult {
+  if (event.type !== "message" || event.bot_id || event.subtype === "bot_message") return { ok: false, reason: "not_file_message" };
+  if (event.subtype && event.subtype !== "file_share") return { ok: false, reason: "not_file_message" };
   const files = (event.files ?? []).filter((f) => f.id && f.mode !== "tombstone" && f.mode !== "external");
-  if (files.length === 0) return null;
+  if (files.length === 0) return { ok: false, reason: "not_file_message" };
   const code = resolveArchiveBranch(envelope.team_id, event.channel);
-  if (!code || !envelope.team_id) return null;
-  const base = code === branchCode() ? requestOrigin : branchBaseUrls().get(code);
-  if (!base) return null;
-  return {
+  if (!code || !envelope.team_id) return { ok: false, reason: "channel_not_allowed" };
+  const callbackUrl = archiveCallbackUrl(code);
+  if (!callbackUrl) return { ok: false, reason: "branch_url_not_configured" };
+  return { ok: true, job: {
     version: 1,
     eventId: envelope.event_id ?? "",
     branchCode: code,
-    callbackUrl: `${base}/api/files/archive`,
+    callbackUrl,
     teamId: envelope.team_id,
     channelId: event.channel ?? "",
     messageTs: event.ts ?? "",
@@ -284,7 +294,7 @@ export function buildArchiveJob(envelope: { team_id?: string; event_id?: string 
       size: typeof f.size === "number" ? f.size : 0,
       createdAt: f.created ? new Date(f.created * 1000).toISOString() : new Date(Number(String(event.ts ?? "0").split(".")[0]) * 1000).toISOString(),
     })),
-  };
+  } };
 }
 
 /** n8n webhook으로 서명해서 보낸다. 실패하면 false — 호출부가 Slack에 5xx를 돌려 재시도하게 한다. */

@@ -4,7 +4,8 @@
 
 ```
 Slack(파일 첨부 메시지)
-  → EXAM AI /api/slack/file-archive  (EXAM AI File Archive 앱 전용: Slack 서명 검증, Slack 팀→지점 판별, FILE_ARCHIVE_SECRET로 서명해 전달)
+  → 공용 gateway https://slack.examenglishsj.co.kr/api/slack/file-archive
+     (EXAM AI File Archive 앱 전용: Slack 서명 검증, team_id→지점, 지점→등록 주소 명시 매핑, FILE_ARCHIVE_SECRET로 서명해 전달)
   → n8n  (서명 검증 → EXAM AI에 이미 있나? → Drive에 이미 있나? → Slack 다운로드 → Drive 업로드)
   → EXAM AI /api/files/archive (서명 검증 → 지점/채널/팀 재검증 → file_archives 멱등 등록)
 EXAM AI 입력창 "거성중2 어순배열 파일 찾아줘" → file_search(읽기 전용) → 현재 지점 + 공용 자료 → [Google Drive에서 열기]
@@ -54,17 +55,22 @@ EXAM AI/
 ### 1) DB
 - `supabase/schema/007_file_archives.sql`을 Supabase SQL Editor에서 **한 번** 실행(사직·금정 공용 DB).
 
-### 2) Slack (별도 앱 "EXAM AI File Archive")
+### 2) Slack (별도 앱 "EXAM AI File Archive", 사직·금정 워크스페이스에 같은 앱 설치)
 - 학생기록 봇(`/api/slack/events`, `SLACK_SIGNING_SECRET`)과 **분리**된 앱·endpoint. 학생기록 봇 설정은 건드리지 않는다.
-- Event Subscriptions Request URL: `https://<Slack 이벤트를 받는 지점 배포 도메인>/api/slack/file-archive`
+- Event Subscriptions Request URL(하나로 통일): `https://slack.examenglishsj.co.kr/api/slack/file-archive`
   (n8n URL이 아님 — n8n은 EXAM AI가 서명해서 보낸 job만 받는다)
-- Bot events: `message.channels`(공개), `message.groups`(비공개 채널도 보관할 때). `file_shared`는 구독하지 않는다(메타데이터가 없어 무시됨).
-- Bot scopes: `channels:history`, `groups:history`(비공개), `files:read`(n8n이 files.info·다운로드에 사용).
+- Bot events: `message.channels`(공개), `message.groups`(비공개 채널도 보관할 때만). `file_shared`는 구독하지 않는다(메타데이터가 없어 무시됨).
+- Bot scopes: `channels:history`, `groups:history`(비공개 채널 시), `files:read`(n8n이 files.info·다운로드에 사용). 그 외 불필요.
+- 두 워크스페이스에 설치하려면 앱 설정 Manage Distribution(Public Distribution)을 켜야 한다(마켓 등록 불필요).
+  n8n Slack credential의 bot token은 워크스페이스마다 다르므로, 금정 파일까지 받으려면 n8n이 지점별 토큰을 써야 한다(n8n 워크플로 쪽 과제).
 - 보관할 채널에 앱 초대.
-- 지점 = Slack 워크스페이스: `SLACK_FILE_ARCHIVE_TEAMS=T사직팀ID=sajik,T금정팀ID=geumjeong`. 같은 코드로 두 워크스페이스를 처리한다.
-  - 한 앱을 두 워크스페이스에 설치(Request URL 1개)하면 수신 배포가 `FILE_ARCHIVE_BRANCH_URLS`로 다른 지점 등록 주소를 지정한다.
-  - 워크스페이스마다 앱을 따로 만들면 각 지점 배포 URL을 Request URL로 쓰면 된다(각 배포의 signing secret).
-- 등록(`/api/files/archive`)은 해당 지점 배포가 자기 `SLACK_FILE_ARCHIVE_TEAMS`로 다시 검증한다.
+
+### 공용 gateway 라우팅(fail closed)
+- 지점 = Slack team_id만: `SLACK_FILE_ARCHIVE_TEAMS=T사직팀ID=sajik,T금정팀ID=geumjeong`. 없는 팀은 403, 기본 지점/`SLACK_TEAM_ID`/배포 지점으로 대체하지 않는다.
+- 등록 주소 = 지점별 명시: `FILE_ARCHIVE_BRANCH_URLS=sajik=https://staffsj.examenglishsj.co.kr,geumjeong=https://staff.examenglishsj.co.kr`.
+  요청 도메인(slack.…)이나 다른 지점 주소로 대체하지 않는다 — 없거나 https 도메인이 아니면 503(전달 안 함).
+- `slack.examenglishsj.co.kr`은 기존 Vercel 프로젝트 `notion-dashboard-geumjeong`에 custom domain으로 추가(새 프로젝트 불필요). gateway 동작은 배포 지점과 무관하다.
+- 등록(`/api/files/archive`)은 각 지점 배포가 자기 지점 + `SLACK_FILE_ARCHIVE_TEAMS`로 다시 검증한다(다른 지점 팀이면 403).
 
 ### 3) n8n
 - Credentials(이름은 워크플로 JSON과 동일하게, secret은 n8n에만):
@@ -74,15 +80,17 @@ EXAM AI/
 - 워크플로 import → 두 credential 연결 → 활성화 → Webhook Production URL을 EXAM AI `N8N_FILE_ARCHIVE_WEBHOOK_URL`에 등록.
 - Webhook 노드 응답은 `Immediately`(onReceived) — Slack이 n8n을 직접 호출하지 않으므로 challenge용 `Respond to Webhook` 분기는 필요 없다.
 
-### 4) EXAM AI (Vercel, 지점별 프로젝트)
-| 이름 | 설명 |
-|---|---|
-| `FILE_ARCHIVE_SECRET` | EXAM AI ↔ n8n HMAC 공유 비밀(n8n과 동일 값) |
-| `N8N_FILE_ARCHIVE_WEBHOOK_URL` | n8n Webhook Production URL (Slack 이벤트를 받는 배포에 필요) |
-| `SLACK_FILE_ARCHIVE_SIGNING_SECRET` | EXAM AI File Archive 앱의 Signing Secret (Slack 이벤트를 받는 배포) |
-| `SLACK_FILE_ARCHIVE_TEAMS` | `T팀ID=sajik,T팀ID=geumjeong` Slack 워크스페이스→지점 (두 배포 모두) |
-| `SLACK_FILE_ARCHIVE_CHANNELS` | (선택) `C채널ID=sajik,…` — 설정하면 이 채널만 보관 |
-| `FILE_ARCHIVE_BRANCH_URLS` | `sajik=https://…,geumjeong=https://…` (다른 지점 채널을 받는 경우만) |
+### 4) EXAM AI (Vercel)
+gateway = `notion-dashboard-geumjeong` 프로젝트(slack.examenglishsj.co.kr), 등록 API = 각 지점 프로젝트.
+
+| 이름 | 금정 프로젝트(gateway 겸 금정 등록) | 사직 프로젝트(사직 등록) | 설명 |
+|---|---|---|---|
+| `FILE_ARCHIVE_SECRET` | 필요 | 필요 | EXAM AI ↔ n8n HMAC 공유 비밀(n8n과 동일 값) |
+| `SLACK_FILE_ARCHIVE_TEAMS` | 필요 | 필요 | `T사직=sajik,T금정=geumjeong` |
+| `SLACK_FILE_ARCHIVE_SIGNING_SECRET` | 필요 | — | File Archive 앱 Signing Secret |
+| `N8N_FILE_ARCHIVE_WEBHOOK_URL` | 필요 | — | n8n Webhook Production URL |
+| `FILE_ARCHIVE_BRANCH_URLS` | 필요 | — | `sajik=https://staffsj.examenglishsj.co.kr,geumjeong=https://staff.examenglishsj.co.kr` |
+| `SLACK_FILE_ARCHIVE_CHANNELS` | 선택 | 선택 | `C채널=sajik,…` — 설정하면 이 채널만 보관(양쪽 같은 값) |
 
 ## 기존 Drive 자료 backfill(향후)
 - 스키마가 `source='drive_backfill'`, `(branch_id, drive_file_id)` 유니크를 이미 지원한다.

@@ -241,7 +241,7 @@ describe("Slack 이벤트(File Archive 앱) → n8n 전달", () => {
     const { POST } = await import(path === "events" ? "@/app/api/slack/events/route" : "@/app/api/slack/file-archive/route");
     const ts = String(Math.floor(Date.now() / 1000) + tsOffset);
     const sig = `v0=${createHmac("sha256", secret).update(`v0:${ts}:${body}`).digest("hex")}`;
-    const res = await POST(new NextRequest(`https://staffsj.example/api/slack/${path}`, {
+    const res = await POST(new NextRequest(`https://slack.example/api/slack/${path}`, {
       method: "POST", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": sig }, body,
     }));
     return { status: res.status, body: await res.json() };
@@ -297,7 +297,6 @@ describe("Slack 이벤트(File Archive 앱) → n8n 전달", () => {
 
   it("매핑 안 된 팀·봇 메시지·파일 없는 메시지·file_shared는 200 무시, 채널 제한 시 목록 밖 채널 무시", async () => {
     for (const r of [
-      await slackEvent(fileEvent(), "T_OTHER"),
       await slackEvent(fileEvent({ bot_id: "B1" })),
       await slackEvent(fileEvent({ subtype: undefined, files: [] })),
       await slackEvent({ type: "file_shared", file_id: "F0ABCDEF1", channel_id: "C_SAJIK", user_id: "U_MINJI" }),
@@ -306,6 +305,22 @@ describe("Slack 이벤트(File Archive 앱) → n8n 전달", () => {
     expect((await slackEvent(fileEvent({ channel: "C_UNKNOWN" }))).body).toMatchObject({ ignored: true });
     expect((await slackEvent(fileEvent())).body).toMatchObject({ archive: 1 });
     expect(n8nCalls).toHaveLength(1);
+  });
+
+  it("공용 gateway fail closed: 등록 안 된 팀은 403(기본 지점·SLACK_TEAM_ID로 대체 안 함), 지점 주소 없으면 다른 지점/요청 도메인으로 대체 안 함", async () => {
+    expect(await slackEvent(fileEvent(), "T_OTHER")).toEqual({ status: 403, body: { error: "workspace_not_allowed" } });
+    expect((await slackEvent(fileEvent(), "T_ACADEMY")).status).toBe(403); // SLACK_TEAM_ID여도 팀 매핑에 없으면 거부
+    process.env.SLACK_FILE_ARCHIVE_TEAMS = "";
+    expect((await slackEvent(fileEvent())).status).toBe(403);
+    process.env.SLACK_FILE_ARCHIVE_TEAMS = "T_SAJIK=sajik,T_GJ=geumjeong";
+    // 금정 주소 누락 → 사직 주소·gateway 도메인을 쓰지 않고 503
+    process.env.FILE_ARCHIVE_BRANCH_URLS = "sajik=https://staffsj.example";
+    expect(await slackEvent(fileEvent({ channel: "C_GJ" }), "T_GJ")).toEqual({ status: 503, body: { error: "branch_url_not_configured" } });
+    // https가 아니거나 경로가 붙은 주소도 거부
+    process.env.FILE_ARCHIVE_BRANCH_URLS = "sajik=http://staffsj.example,geumjeong=https://staff.example/x";
+    expect((await slackEvent(fileEvent())).status).toBe(503);
+    expect((await slackEvent(fileEvent({ channel: "C_GJ" }), "T_GJ")).status).toBe(503);
+    expect(n8nCalls).toHaveLength(0);
   });
 
   it("학생기록 봇 endpoint(/api/slack/events)는 파일 메시지를 n8n으로 보내지 않는다", async () => {
