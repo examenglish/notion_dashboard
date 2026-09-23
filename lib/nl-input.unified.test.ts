@@ -75,7 +75,7 @@ describe("runUnifiedNlInput — multi-intent 분리", () => {
     ]);
     vi.mocked(createTasks).mockResolvedValue([{ id: "t-1", type: "PRINT", ownerId: null, pool: true }] as any);
 
-    await runUnifiedNlInput("셋 다 출력 3부");
+    await runUnifiedNlInput("셋 다 출력 3부 해줘");
 
     const [inputs] = vi.mocked(createTasks).mock.calls[0];
     expect(inputs[0].studentIds).toEqual(["s-김정우", "s-신융", "s-허준혁"]);
@@ -126,7 +126,7 @@ describe("runUnifiedNlInput — intent.className을 기존 class_notion_ids rela
     ]);
     vi.mocked(createTasks).mockResolvedValue([{ id: "t-1", type: "PRINT", ownerId: null, pool: true }] as any);
 
-    await runUnifiedNlInput("김정우 천재조 출력");
+    await runUnifiedNlInput("김정우 천재조 출력해줘");
 
     const [inputs] = vi.mocked(createTasks).mock.calls[0];
     expect(inputs[0].classIds).toEqual(["c-1"]);
@@ -138,7 +138,7 @@ describe("runUnifiedNlInput — intent.className을 기존 class_notion_ids rela
     ]);
     vi.mocked(createTasks).mockResolvedValue([{ id: "t-1", type: "PRINT", ownerId: null, pool: true }] as any);
 
-    await runUnifiedNlInput("김정우 다른지점반 출력");
+    await runUnifiedNlInput("김정우 다른지점반 출력해줘");
 
     const [inputs] = vi.mocked(createTasks).mock.calls[0];
     expect(inputs[0].classIds).toBeUndefined();
@@ -154,7 +154,7 @@ describe("runUnifiedNlInput — intent.className을 기존 class_notion_ids rela
       { id: "t-2", type: "DELIVERY", ownerId: null, pool: true },
     ] as any);
 
-    await runUnifiedNlInput("김정우 천재조 출력, 신융 전달");
+    await runUnifiedNlInput("김정우 천재조 출력해줘, 신융 전달해줘");
 
     const [inputs] = vi.mocked(createTasks).mock.calls[0];
     expect(inputs[0].classIds).toEqual(["c-1"]);
@@ -171,7 +171,7 @@ describe("runUnifiedNlInput — 부분 실패 격리 (전체 500 방지)", () =>
     vi.mocked(createAdminInboxEntry).mockRejectedValue(new Error("Notion 500"));
     vi.mocked(createCounselingEntry).mockResolvedValue(undefined as any);
 
-    const result = await runUnifiedNlInput("문의 A. 그리고 김정우 상담 내용");
+    const result = await runUnifiedNlInput("문의 A 행정실에 전달해줘. 그리고 김정우 상담 내용");
 
     expect(result.ok).toBe(false);
     expect(result.outcomes.find((o) => o.route === "admin_inbox")?.status).toBe("실패");

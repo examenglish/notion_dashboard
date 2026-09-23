@@ -11,6 +11,7 @@ import {
   matchToDoListShortcut,
   type PendingAction,
   type ClassContext,
+  EXPLICIT_NEW_STUDENT,
 } from "@/lib/nl-input";
 import { notifyTaskAssignments } from "@/lib/slack";
 import { mark } from "@/lib/timing";
@@ -86,6 +87,15 @@ export async function POST(req: NextRequest) {
       case "clarify":
         return NextResponse.json({ ok: false, mode: "legacy", message: result.message });
       case "not_found":
+        // 명단에 없다는 사실만으로 신입생 등록을 제안하지 않는다 — 문장이나 선택한 명령이
+        // 신입생/신규 의미일 때만 등록 확인을 띄운다.
+        if (!EXPLICIT_NEW_STUDENT.test(t) && forcedScheduleType !== "신입생상담" && forcedInboxType !== "신규생문의") {
+          return NextResponse.json({
+            ok: false,
+            mode: "legacy",
+            message: `명단에서 "${result.name}" 학생을 찾지 못했습니다. 이름을 확인해 주세요(신입생이면 '신입생'이라고 함께 적어 주세요).`,
+          });
+        }
         return NextResponse.json({
           ok: false,
           mode: "legacy",

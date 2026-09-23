@@ -180,17 +180,17 @@ ${buildDateTable(ref.today)}
 
 이름 추출 규칙:
 - 문장에 학생 이름이 등장하면, content/summary/action 같은 서술형 필드 안에만 적어두지 말고 반드시 studentName 필드에도 별도로 채워 넣는다.
-- 학생 이름은 아래 재원생 명단에 있는 이름과 최대한 정확히 일치시킨다. 명단에 없는 이름이어도 절대 clarify를 사용하지 말고, 문장에 적힌 이름 그대로 studentName에 넣어 해당 도구를 정상적으로 호출한다. (신입생일 수도 있으므로, 명단에 없다는 이유만으로 멈추지 않는다 — 이후 처리는 시스템이 담당한다.)
-- 문장에 학교 이름(예: "여명중", "이그잼고")이 언급되어 있으면 studentSchool에도 채운다. 특히 명단에 없는 이름(신입생 가능성)일 때 학교가 언급되어 있으면 반드시 채운다 — 신입생 등록 시 학교 정보로 쓰인다.
+- 학생 이름은 아래 재원생 명단에 있는 이름과 최대한 정확히 일치시킨다. 명단에 없는 이름이어도 절대 clarify를 사용하지 말고, 문장에 적힌 이름 그대로 studentName에 넣어 해당 도구를 정상적으로 호출한다(학생 확인은 시스템이 따로 한다). 명단에 없다는 사실만으로 신입생·신규 문의·신입생상담으로 판단하지 않는다.
+- 문장에 학교 이름(예: "여명중", "이그잼고")이 언급되어 있으면 studentSchool에도 채운다.
 - 담당자/상담자 이름도 마찬가지로 서술형 필드뿐 아니라 ownerName/counselor/actionOwner 필드에 별도로 채운다. 아래 직원 명단과 최대한 일치시킨다.
 
 분류 규칙 (log_admin_inbox의 type):
 - 학생이 결석/지각/조퇴한다는 내용 → 반드시 "결석예정"
 - 시급하게 상담이 필요하다는 내용(성적 하락, 문제 행동, 퇴원 의사 등) → "긴급상담요청"
-- 아직 등록하지 않은 신규 학생/학부모의 문의 → "신규생문의"
+- 아직 등록하지 않은 신규 학생/학부모의 문의 → "신규생문의"(문장에 신규·신입·입학·등록 문의 같은 말이 있을 때만)
 - 위 세 가지 중 어디에도 해당하지 않는 전달사항 → "기타" (마지막 수단으로만 사용)
 
-- 보강/재시/신입생상담/레벨체크처럼 특정 날짜·시간에 일어날 "일정"이면 log_schedule_entry를 사용한다.
+- 보강/재시/신입생상담/레벨체크처럼 특정 날짜·시간에 일어날 "일정"이면 log_schedule_entry를 사용한다. 신입생상담은 신입생·신규·입학·첫 상담이라는 말이 문장에 있을 때만 고른다.
 - 상담을 실제로 진행하고 그 내용을 기록하는 것이면 log_counseling을 사용한다 (아직 예정된 상담 일정이면 log_schedule_entry).
 - 학생의 학습 상태에 대한 지속적인 조치/후속관리 메모(예: "성적하락 상담 필요", "단어시험 재시 필요")를 남기는 것이면 log_student_action을 사용한다.
 - 학생 이름이 저장에 꼭 필요한데 문장 어디에도 이름 자체가 전혀 없거나, 문장이 어느 항목에도 명확히 해당하지 않으면 clarify 도구를 사용한다. (이름이 있지만 명단에 없는 것은 clarify 사유가 아니다.) 추측해서 지어내지 않는다.
@@ -386,6 +386,10 @@ export type IntentClass = "correction" | "query" | "record" | "action" | "specia
 
 export type UnifiedIntent = {
   intentClass?: IntentClass;
+  // 서버 내부 표시(AI 출력 아님): 명시적 행동 동사가 없어 "업무로 등록할까요?" 확인이 필요,
+  // 또는 서버 guard가 남기는 안내 문구.
+  needsActionConfirm?: boolean;
+  guardNote?: string;
   route: UnifiedIntentRoute;
   taskType?: string;
   inboxType?: "결석예정" | "긴급상담요청" | "신규생문의" | "기타";
@@ -472,7 +476,7 @@ const UNIFIED_INTENTS_TOOL = (taskTypeLabels: string[]): Anthropic.Tool => ({
               items: { type: "string" },
               description: "이 intent가 관련된 학생 이름들. 여러 명이면 전부 나열(예: 3명이 같은 업무 하나를 공유하면 배열에 3명 다). 해당 없으면 빈 배열.",
             },
-            studentSchool: { type: "string", description: "학생 학교(재원생 명단에 없는 신입생 가능성이 있을 때만 채움). 없으면 빈 문자열." },
+            studentSchool: { type: "string", description: "문장에 학교 이름이 있으면 채움. 없으면 빈 문자열." },
             className: { type: "string", description: "언급된 반 이름. 없으면 빈 문자열." },
             instruction: { type: "string", description: "이 intent의 핵심 내용/지시/요약(무엇을 해야 하는지 또는 무엇을 기록하는지)." },
             quantity: { type: "number", description: "'3부'처럼 수량이 언급되면 그 숫자. 없으면 0." },

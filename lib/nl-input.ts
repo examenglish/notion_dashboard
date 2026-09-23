@@ -556,7 +556,8 @@ export type PendingField =
   | "pass"
   | "task"
   | "newStudent"
-  | "field";
+  | "field"
+  | "confirm";
 export type MissingInfo = { key: string; field: PendingField; question: string; candidates?: { id: string; label: string }[]; ref?: string };
 type Choice = { id: string; label: string };
 
@@ -651,7 +652,18 @@ export type CorrectionDraft = {
   rawText: string;
 };
 
-export type AnyDraft = ClassProgressDraft | TaskDraft | StudentRecordDraft | CorrectionDraft;
+// 명시적 행동 동사 없이 업무/일정 구조만 있는 입력("민지 시험지 출력 8시까지")을 바로 저장하지
+// 않고 "업무로 등록할까요?"로 확인받기 위한 대기 상태. 확인되면 같은 intent를 다시 경계
+// 검사(행동 동사 확인만 면제)한 뒤 처리한다.
+export type ConfirmDraft = {
+  kind: "confirm";
+  intent: UnifiedIntent;
+  decision: "yes" | "no" | null;
+  enteredBy?: string;
+  rawText: string;
+};
+
+export type AnyDraft = ClassProgressDraft | TaskDraft | StudentRecordDraft | CorrectionDraft | ConfirmDraft;
 export type PendingAction = { draft: AnyDraft; missing: MissingInfo[]; question: string; attempts: number };
 
 type Roster = Awaited<ReturnType<typeof getNlRoster>>;
@@ -710,6 +722,20 @@ async function checkDraft(draft: AnyDraft, roster: Roster): Promise<MissingInfo[
 
   if (draft.kind === "student_record") return checkStudentRecordDraft(draft, roster);
   if (draft.kind === "correction") return checkCorrectionDraft(draft, roster);
+  if (draft.kind === "confirm") {
+    if (draft.decision) return [];
+    return [
+      {
+        key: "confirm",
+        field: "confirm",
+        question: `"${draft.rawText}" — ${describeConfirmIntent(draft.intent)}(으)로 등록할까요?`,
+        candidates: [
+          { id: "yes", label: "네, 등록" },
+          { id: "no", label: "아니요" },
+        ],
+      },
+    ];
+  }
 
   if (!taskTypeFromLabel(draft.taskType)) {
     missing.push({ key: "taskType", field: "taskType", question: `어떤 작업인가요? (예: ${TASK_TYPE_LABEL_LIST.slice(0, 6).join(", ")} …)` });
@@ -892,9 +918,11 @@ function buildQuestion(draft: AnyDraft, missing: MissingInfo[]): string {
 function pendingOutcome(draft: AnyDraft, missing: MissingInfo[], attempts: number, note = ""): UnifiedOutcome {
   const question = buildQuestion(draft, missing);
   return {
-    route: draft.kind,
+    route: draft.kind === "confirm" ? draft.intent.route : draft.kind,
     label:
-      draft.kind === "class_progress"
+      draft.kind === "confirm"
+        ? "업무 등록 확인"
+        : draft.kind === "class_progress"
         ? draft.className || "반 진도"
         : draft.kind === "student_record"
           ? draft.studentName || "학생 기록"
@@ -918,6 +946,12 @@ function applyValue(draft: AnyDraft, m: MissingInfo, value: string, roster: Rost
   };
   if (!v && !choiceId) return false;
   if (draft.kind === "correction") return applyCorrectionValue(draft, m, v, roster, choiceId, pick);
+  if (draft.kind === "confirm") {
+    const x = choiceId ?? (/^(네|예|응|어|ㅇㅇ|좋아|등록|맞아|yes|ok)/i.test(v) ? "yes" : /^(아니|아뇨|노|no|취소|안\s*해|하지\s*마)/i.test(v) ? "no" : "");
+    if (x !== "yes" && x !== "no") return false;
+    draft.decision = x;
+    return true;
+  }
   switch (m.field) {
     case "class": {
       if (draft.kind !== "class_progress" && draft.kind !== "student_record") return false;
@@ -1103,18 +1137,121 @@ const INTENT_CLASS_LABEL: Record<IntentClass, string> = {
   unclear: "확인 필요",
 };
 // 신입생/신규 상담은 사용자가 그런 뜻을 직접 말했을 때만(명단에 없는 학생 ≠ 신입생).
-const EXPLICIT_NEW_STUDENT = /(신입|신규|입학|첫\s*상담|처음\s*(상담|왔|방문|등원)|등록\s*문의|체험\s*수업|새로\s*(온|들어온|등록))/;
+export const EXPLICIT_NEW_STUDENT = /(신입|신규|입학|첫\s*상담|처음\s*(상담|왔|방문|등원)|등록\s*문의|체험\s*수업|새로\s*(온|들어온|등록))/;
 
 function toClarify(i: UnifiedIntent, message: string): UnifiedIntent {
   return { ...i, intentClass: "unclear", route: "clarify", message };
 }
 
-export function enforceIntentBoundaries(intents: UnifiedIntent[], text: string): UnifiedIntent[] {
+// ---- 원문 신호(AI 출력과 독립). 특정 문장이 아니라 의미 신호로 판정한다.
+const SIG_REF = /(입력한|입력했|입력된|입력하신|넣은|넣었|기록|방금|아까|\d+\s*번(?!\s*(문제|문항|째))|기존|전에\s*(입력|넣)|그거|그\s*(점수|기록|과제|학생))/;
+const SIG_CORR = /(취소|삭제|지워|지우|잘못|정정|고쳐|고치|바꿔|바꾸|없던\s*걸로|없는\s*걸로)/;
+const SIG_CONTRAST = /\S\s*(아니고|아니라|말고)\s+\S/;
+const SIG_QUERY = /(보여\s*(줘|주|달)|알려\s*(줘|주)|뭐\s*(입력|넣|있|했)|목록|조회|최근\s*(기록|입력)|(오늘|어제|이번\s*주|지난\s*주)\s*(입력|일정|할\s*일)|몇\s*(건|개|명))/;
+// 행동 요청: 요청형 어미(…줘/…주세요, 단 보여줘·알려줘는 조회) 또는 지시 동사.
+const SIG_ACTION = /((?<!보여\s?|알려\s?)(줘|주세요|주라|줄래)|시켜|맡겨|맡기|잡아|부탁|전화\s*(해|드려|하)|연락\s*(해|드려|하)|예약\s*해|확인\s*(하도록|시켜|바람|요망)|체크\s*(해|하)|하게\s*해|하도록|할\s*것|하세요|해\s*놔|해\s*둬)/;
+const SIG_POLICY = /(당분간|계속|매일|매주|앞으로|지속|꾸준히|항상|주기적)/;
+const SIG_COUNSEL = /상담/;
+const SIG_ABSENCE = /(결석|빠[지진짐질져]|못\s*(와|옴|온|나와|가|간)|불참|안\s*(와|옴|나와|온))/;
+const SIG_URGENT = /(긴급|급하|급히|즉시|바로|당장)/;
+const SIG_ADMIN_MISC = /(전달|행정|안내|공지|원장|사무실|알려\s*드|말씀)/;
+
+export function writeGuardSignals(text: string) {
+  const t = text ?? "";
+  return {
+    correction: (SIG_REF.test(t) && SIG_CORR.test(t)) || SIG_CONTRAST.test(t),
+    query: SIG_QUERY.test(t) && !SIG_ACTION.test(t),
+    action: SIG_ACTION.test(t),
+    policy: SIG_POLICY.test(t),
+    counsel: SIG_COUNSEL.test(t),
+    absence: SIG_ABSENCE.test(t),
+    urgent: SIG_URGENT.test(t),
+    newStudent: EXPLICIT_NEW_STUDENT.test(t),
+    adminMisc: SIG_ADMIN_MISC.test(t),
+  };
+}
+
+const CREATE_ROUTES = new Set(["task", "student_action", "schedule", "admin_inbox", "counseling", "student_record", "class_progress"]);
+
+// 원문 정정 신호로 새 데이터 생성을 막고 정정 흐름으로 보낸다. 정정 흐름은 기존 기록만
+// 수정/취소하며, 대상이 없거나 여러 개면 저장 없이 되묻는다(새 기록을 만들지 않음).
+function toCorrection(i: UnifiedIntent, text: string): UnifiedIntent {
+  const op: UnifiedIntent["operation"] = /(취소|삭제|지워|지우|없던\s*걸로|없는\s*걸로)/.test(text)
+    ? "cancel"
+    : SIG_CONTRAST.test(text) || /(고쳐|고치|바꿔|바꾸|정정)/.test(text)
+      ? "modify"
+      : "unknown";
+  const score = text.match(/(\d+(?:\.\d+)?)\s*점?\s*(?:아니고|아니라|말고)\s*(\d+(?:\.\d+)?)\s*점/);
+  const contrast = text.match(/(\S+?)(?:까지)?\s*(?:아니고|아니라|말고)\s+(\S+?)(?:까지)?(?:야|이야|요|임)?\s*$/);
+  const targetIsClass = i.route === "class_progress";
+  return {
+    ...i,
+    intentClass: "correction",
+    route: "correction",
+    correctionTarget: targetIsClass ? "class_progress" : (i.students ?? []).length > 0 ? "student_record" : "recent",
+    operation: i.route === "correction" ? i.operation : op,
+    oldScore: score ? Number(score[1]) : i.oldScore,
+    newScore: score ? Number(score[2]) : i.newScore,
+    fromText: !score && targetIsClass && contrast ? contrast[1] : i.fromText,
+    toText: !score && targetIsClass && contrast ? contrast[2] : i.toText,
+  };
+}
+
+// 조회 신호가 있으면 쓰기 route를 읽기 전용 조회로 바꾼다(write 0건).
+function toQuery(i: UnifiedIntent, text: string): UnifiedIntent {
+  const scheduleLike = /(일정|할\s*일|업무|보강|재시)/.test(text) && !/(입력|넣)/.test(text);
+  return { ...i, intentClass: "query", route: scheduleLike ? "schedule_view" : "history_query" };
+}
+
+export function enforceIntentBoundaries(
+  intents: UnifiedIntent[],
+  text: string,
+  opts: { actionConfirmed?: boolean } = {}
+): UnifiedIntent[] {
+  const sig = writeGuardSignals(text);
   const correctionStudents = new Set(
     intents.filter((i) => i.route === "correction").flatMap((i) => (i.students ?? []).map((n) => n?.trim()).filter(Boolean) as string[])
   );
   const hasCorrection = intents.some((i) => i.route === "correction");
-  return intents.map((i) => {
+  return intents.map((orig) => {
+    let i = orig;
+    // ---- (A) 원문 기반 write guard — AI의 intentClass/route와 무관하게 판정 ----
+    if (CREATE_ROUTES.has(i.route)) {
+      const classEdit = i.route === "class_progress" && (i.editMode === "replace" || i.editMode === "delete");
+      // 1) 정정: 기존 기록을 가리키며 고치/취소 → 새 데이터 금지(반 진도 명시적 수정/삭제는 기존 행 변경이라 허용)
+      if (sig.correction && !classEdit) return toCorrection(i, text);
+      // 2) 조회: 보여줘/목록/뭐 있어(행동 요청 없음) → 읽기 전용으로
+      if (sig.query) return toQuery(i, text);
+    }
+    // 반 진도 교체/삭제는 원문에 정정 표현이 있을 때만(없으면 추가로 낮춘다 — 기존 내용 보존)
+    if (i.route === "class_progress" && (i.editMode === "replace" || i.editMode === "delete") && !SIG_CORR.test(text) && !SIG_CONTRAST.test(text)) {
+      i = { ...i, editMode: "append" };
+    }
+    // 3) 조치사항: 지속 관리 방침 근거가 원문에 있어야
+    if (i.route === "student_action" && !sig.policy) {
+      return toClarify(i, `"${text}"을(를) 조치사항으로 저장하지 않았습니다. 학습 결과 기록인가요, 아니면 앞으로 계속 관리할 방침(예: "당분간 단어시험 매일 체크")인가요?`);
+    }
+    // 4) 상담 기록: 원문에 상담 의미가 있어야
+    if (i.route === "counseling" && !sig.counsel) {
+      return toClarify(i, `"${text}"을(를) 상담 기록으로 저장하지 않았습니다. 상담 내용이면 "OO 어머니와 상담함 — …"처럼 알려주세요.`);
+    }
+    // 5) 행정 전달: 유형별 원문 근거
+    if (i.route === "admin_inbox") {
+      const t = i.inboxType || "기타";
+      const ok =
+        t === "결석예정" ? sig.absence : t === "긴급상담요청" ? sig.counsel && sig.urgent : t === "신규생문의" ? sig.newStudent : sig.adminMisc || sig.action;
+      if (!ok) return toClarify(i, `"${text}"을(를) 행정실 ${t}(으)로 전달하지 않았습니다. 행정실에 전달할 내용이면 조금 더 구체적으로 알려주세요.`);
+    }
+    // 6) 업무/일정: 명시적 행동 동사가 없으면 저장 전에 "등록할까요?" 확인(축약 명령형 보호)
+    if ((i.route === "task" || i.route === "schedule") && !sig.action && !opts.actionConfirmed) {
+      i = { ...i, needsActionConfirm: true };
+    }
+    // 학생 기록의 후속 업무도 원문 행동 요청이 있어야(AI의 actionRequested만 믿지 않음)
+    if (i.route === "student_record" && i.actionRequested && !sig.action) {
+      i = { ...i, actionRequested: false, guardNote: "후속 업무는 만들지 않았습니다 — 필요하면 \"확인해줘/재시험 시켜줘\"처럼 알려주세요." };
+    }
+
+    // ---- (B) AI 분류 간 일관성 검사(보조) ----
     const cls = i.intentClass;
     if (cls && ROUTES_BY_INTENT_CLASS[cls] && !ROUTES_BY_INTENT_CLASS[cls].includes(i.route)) {
       return toClarify(
@@ -1123,7 +1260,7 @@ export function enforceIntentBoundaries(intents: UnifiedIntent[], text: string):
       );
     }
     const newStudentRoute = (i.route === "schedule" && i.scheduleType === "신입생상담") || (i.route === "admin_inbox" && i.inboxType === "신규생문의");
-    if (newStudentRoute && !EXPLICIT_NEW_STUDENT.test(text)) {
+    if (newStudentRoute && !sig.newStudent) {
       const who = i.students?.[0] ? `${i.students[0]} ` : "";
       return toClarify(
         i,
@@ -1133,7 +1270,6 @@ export function enforceIntentBoundaries(intents: UnifiedIntent[], text: string):
     if (i.route === "student_action" && cls && cls !== "action") {
       return toClarify(i, `"${text}"을(를) 조치사항으로 저장하지 않았습니다. 학습 기록인지, 앞으로 계속 관리할 방침인지 알려주세요.`);
     }
-    // 같은 문장에 기록 정정이 있으면(우선순위 최상), 같은 학생에 대한 새 업무/조치/상담 생성은 하지 않는다.
     if (hasCorrection && i.route !== "correction" && ["task", "student_action", "schedule", "admin_inbox"].includes(i.route)) {
       const names = (i.students ?? []).map((n) => n?.trim()).filter(Boolean) as string[];
       if (names.length === 0 || names.some((n) => correctionStudents.has(n)) || correctionStudents.size === 0) {
@@ -1142,6 +1278,12 @@ export function enforceIntentBoundaries(intents: UnifiedIntent[], text: string):
     }
     return i;
   });
+}
+
+function describeConfirmIntent(i: UnifiedIntent): string {
+  const who = (i.students ?? []).filter(Boolean).join(", ");
+  if (i.route === "schedule") return `${who ? who + " " : ""}${i.scheduleType || "일정"} 일정`;
+  return `${i.taskType || "업무"} 업무${who ? ` (${who})` : ""}${i.ownerName ? ` → ${i.ownerName}` : ""}`;
 }
 
 // 일정·할 일 조회(schedule_view) — 읽기 전용. 대시보드가 쓰는 getTodaySchedule과
@@ -2050,6 +2192,15 @@ async function executeDraft(
     return { outcomes: r.outcomes, slackTasks: r.slackTasks };
   }
   if (draft.kind === "correction") return { outcomes: [await executeCorrection(draft, roster)], slackTasks: [] };
+  if (draft.kind === "confirm") {
+    if (draft.decision !== "yes") {
+      return { outcomes: [{ route: "confirm", label: draft.rawText, status: "완료", message: "등록하지 않았습니다." }], slackTasks: [] };
+    }
+    // 클라이언트가 돌려준 intent이므로 경계 검사를 다시 적용한다(행동 동사 확인만 면제).
+    const guarded = enforceIntentBoundaries([draft.intent], draft.rawText, { actionConfirmed: true });
+    const r = await processIntents(guarded, draft.rawText, { staffName: draft.enteredBy }, roster);
+    return { outcomes: r.outcomes, slackTasks: r.tasks };
+  }
   const t = taskInputFromDraft(draft, today);
   if (!t) return { outcomes: [{ route: "task", label: draft.taskType, status: "실패", message: "업무 유형을 확인할 수 없습니다." }], slackTasks: [] };
   return createTaskOutcomes([t], roster, studentNames);
@@ -2252,6 +2403,28 @@ export async function runUnifiedNlInput(
     return { ok: false, outcomes: [{ route: "clarify", label: text, status: "확인필요", message: "요청을 이해하지 못했습니다. 다시 입력해 주세요." }], tasks: [] };
   }
   intents = enforceIntentBoundaries(intents, text);
+  return processIntents(intents, text, opts, roster);
+}
+
+// 경계 검사를 통과한 intent들을 실제로 처리한다(저장/조회). runUnifiedNlInput과,
+// "업무로 등록할까요?" 확인 후 재실행(executeDraft confirm)이 같이 쓴다.
+async function processIntents(
+  intents: UnifiedIntent[],
+  text: string,
+  opts: { staffName?: string; staffId?: string; context?: ClassContext | null; historyToken?: string | null },
+  roster: Roster
+): Promise<{
+  ok: boolean;
+  outcomes: UnifiedOutcome[];
+  tasks: SlackTask[];
+  context?: ClassContext;
+  history?: string;
+}> {
+  const today = todayKST();
+  const { students: allStudents, classes, staff } = roster;
+  const activeStudents = allStudents.filter((s) => s.status === "재원" || !s.status);
+  const classNameById = new Map(classes.map((c) => [c.id, stripClassSuffix(c.name)]));
+  const studentNames = new Map(allStudents.map((s) => [s.id, s.name]));
 
   const outcomes: UnifiedOutcome[] = [];
   const taskInputs: { input: NewTaskInput; label: string }[] = [];
@@ -2308,6 +2481,11 @@ export async function runUnifiedNlInput(
           break;
         }
         case "task": {
+          if (intent.needsActionConfirm) {
+            const draft: ConfirmDraft = { kind: "confirm", intent: { ...intent, needsActionConfirm: false }, decision: null, enteredBy: opts.staffName, rawText: text };
+            outcomes.push(pendingOutcome(draft, await checkDraft(draft, roster), 0));
+            break;
+          }
           const strictNames = resolveNamesForIntent(intent.students ?? [], activeStudents, classNameById, text, true);
           const draft: TaskDraft = {
             kind: "task",
@@ -2353,6 +2531,11 @@ export async function runUnifiedNlInput(
           break;
         }
         case "schedule": {
+          if (intent.needsActionConfirm) {
+            const draft: ConfirmDraft = { kind: "confirm", intent: { ...intent, needsActionConfirm: false }, decision: null, enteredBy: opts.staffName, rawText: text };
+            outcomes.push(pendingOutcome(draft, await checkDraft(draft, roster), 0));
+            break;
+          }
           if (resolved.length === 0) {
             outcomes.push({ route: "schedule", label, status: "실패", message: `학생을 찾지 못해 일정을 저장하지 못했습니다${unresolvedNote}.` });
             break;
@@ -2556,6 +2739,7 @@ export async function runUnifiedNlInput(
             }
             try {
               const r = await saveStudentRecordOutcome(draft, roster, studentNames, today);
+              if (intent.guardNote && r.outcomes[0]) r.outcomes[0] = { ...r.outcomes[0], message: `${r.outcomes[0].message}\n${intent.guardNote}` };
               outcomes.push(...r.outcomes);
               recordSlackTasks.push(...r.slackTasks);
               r.taskKeys.forEach((k) => recordTaskKeys.add(k));
