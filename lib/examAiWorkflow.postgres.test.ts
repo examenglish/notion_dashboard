@@ -63,6 +63,8 @@ function matchClause(clause: string, row: Row): boolean {
   const decoded = decodeURIComponent(rawVal);
   if (op === "eq") {
     if (decoded === "true" || decoded === "false") return cell === (decoded === "true");
+    // PostgREST 배열 리터럴 비교(예: staff_notion_ids=eq.{})
+    if (Array.isArray(cell)) return `{${cell.join(",")}}` === decoded;
     return String(cell ?? "") === decoded;
   }
   if (op === "is") return rawVal === "null" ? cell === null || cell === undefined : false;
@@ -360,7 +362,7 @@ describe("2~5. 업무지시 → 배정/업무풀 → 진행 → 완료 → 원�
       ["암기확인", 0, true],
       ["전달", 0, true],
     ]);
-    expect(res.outcomes.every((o) => o.message.includes("조교 업무풀"))).toBe(true);
+    expect(res.outcomes.every((o) => o.message.includes("업무풀(근무 중인 조교에게 자동배정 대기)"))).toBe(true);
 
     const notion = await import("@/lib/notion");
     expect((await notion.listPoolTasks()).map((t) => t.status)).toEqual(["업무풀", "업무풀"]);
@@ -1386,5 +1388,69 @@ describe("hotfix: student_learning_records INSERT payload = 006 스키마(notion
     expect(tables.tasks[0]).toMatchObject({ complete: true, outcome: "취소" });
     await say("이태경 불규칙 기록 취소", { intentClass: "correction", route: "correction", correctionTarget: "student_record", operation: "cancel", students: ["이태경"] });
     expect(tables.student_learning_records[0].source_payload.cancelled).toBeTruthy();
+  });
+});
+
+describe("업무 Pool(학생관리/교재편집/출력·배부/행정) + 가져가기 + 선후관계", () => {
+  it("업무 유형 → Pool 매핑, 교재편집은 자동배정 금지", async () => {
+    const { taskPoolOf, isAutoAssignablePool, taskTypeFromLabel } = await import("@/lib/tasks");
+    expect(taskPoolOf(taskTypeFromLabel("암기확인"))).toBe("student");
+    expect(taskPoolOf(taskTypeFromLabel("교재편집"))).toBe("material");
+    expect(taskPoolOf(taskTypeFromLabel("출력"))).toBe("print");
+    expect(taskPoolOf(taskTypeFromLabel("학부모연락"))).toBe("admin");
+    expect(isAutoAssignablePool("material")).toBe(false);
+    expect(isAutoAssignablePool("student")).toBe(true);
+  });
+
+  it("'거성중2 어순배열 수정해줘' → 근무 중 조교가 있어도 교재편집 Pool에 남고, 자동배정 sweep도 건너뛴다", async () => {
+    const res = await say("거성중2 어순배열 수정해줘", { intentClass: "action", route: "task", taskType: "교재편집", instruction: "거성중2 어순배열 수정" });
+    expect(tables.tasks).toHaveLength(1);
+    expect(tables.tasks[0]).toMatchObject({ type: "교재편집", staff_notion_ids: [], pool: true });
+    expect(res.outcomes[0].message).toContain("교재편집 업무풀(가능한 직원이 '내가 할게요'로 가져가기)");
+    const notion = await import("@/lib/notion");
+    expect(await notion.autoAssignPoolTasks()).toEqual([]);
+    const pool = await notion.listPoolTasks();
+    expect(pool[0]).toMatchObject({ poolKind: "material", poolKindLabel: "교재편집", blocked: false, createdBy: "서도영" });
+  });
+
+  it("'민지쌤에게 거성중2 어순배열 수정 맡겨줘' → 민지에게 직접 할당", async () => {
+    await say("민지쌤에게 거성중2 어순배열 수정 맡겨줘", { intentClass: "action", route: "task", taskType: "교재편집", instruction: "거성중2 어순배열 수정", ownerName: "민지" });
+    expect(tables.tasks[0]).toMatchObject({ staff_notion_ids: ["staff-minji"], pool: false });
+    expect(tables.tasks[0].source_payload.workflow.assignedVia).toBe("direct");
+  });
+
+  it("'거성중2 어순배열 수정하고 15부 출력해줘' → 교재편집 + 출력(선행: 교재편집), 편집 완료 전 출력 시작 불가", async () => {
+    parseUnifiedInput.mockResolvedValueOnce([
+      intent({ intentClass: "action", route: "task", taskType: "교재편집", instruction: "거성중2 어순배열 수정" }),
+      intent({ intentClass: "action", route: "task", taskType: "출력", instruction: "거성중2 어순배열 출력", quantity: 15, afterPrevious: true }),
+    ]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const res = await runUnifiedNlInput("거성중2 어순배열 수정하고 15부 출력해줘", { staffName: "서도영", staffId: "staff-seo" });
+    expect(res.ok).toBe(true);
+    const edit = tables.tasks.find((t) => t.type === "교재편집")!;
+    const print = tables.tasks.find((t) => t.type === "출력")!;
+    expect(print.source_payload.workflow.dependsOn).toEqual([edit.id]);
+    expect(res.outcomes[1].message).toContain("앞 업무 완료 후");
+
+    const notion = await import("@/lib/notion");
+    const printerId = print.staff_notion_ids[0] ?? "staff-sora";
+    const blocked = await notion.startTask(print.id, printerId);
+    expect(blocked.ok).toBe(false);
+    expect(blocked.message).toContain("먼저 끝나야 하는 업무가 있습니다");
+    const board = await notion.listTaskBoard();
+    expect(board.find((t) => t.typeLabel === "출력")!.blocked).toBe(true);
+
+    expect(await notion.claimTask(edit.id, "staff-minji")).toEqual({ ok: true });
+    await notion.completeTaskEntry(edit.id, { outcome: "완료", completedBy: "staff-minji" });
+    expect(await notion.startTask(print.id, printerId)).toEqual({ ok: true });
+  });
+
+  it("두 직원이 동시에 '내가 할게요'를 눌러도 한 명만 가져간다(원자적 조건부 갱신)", async () => {
+    await say("거성중2 빈칸 문제 제작해줘", { intentClass: "action", route: "task", taskType: "교재편집", instruction: "거성중2 빈칸 문제 제작" });
+    const notion = await import("@/lib/notion");
+    const id = tables.tasks[0].id;
+    const [a, b] = await Promise.all([notion.claimTask(id, "staff-minji"), notion.claimTask(id, "staff-sora")]);
+    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
+    expect(tables.tasks[0].staff_notion_ids).toHaveLength(1);
   });
 });

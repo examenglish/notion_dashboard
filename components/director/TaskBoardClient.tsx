@@ -32,7 +32,46 @@ type TaskRecord = {
   startedAt?: string | null;
   completedAt?: string | null;
   completedByName?: string;
+  poolKind?: "student" | "material" | "print" | "admin";
+  poolKindLabel?: string;
+  blocked?: boolean;
+  refs?: { kind: string; id?: string; url?: string; label: string }[];
 };
+
+const POOL_FILTERS: { key: "all" | "student" | "material" | "print" | "admin"; label: string }[] = [
+  { key: "all", label: "전체" },
+  { key: "student", label: "학생 관리" },
+  { key: "material", label: "교재편집" },
+  { key: "print", label: "출력·배부" },
+  { key: "admin", label: "행정" },
+];
+type PoolFilter = (typeof POOL_FILTERS)[number]["key"];
+
+function FilterChips<T extends string>({ items, value, onChange }: { items: { key: T; label: string }[]; value: T; onChange: (v: T) => void }) {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, margin: "6px 0 10px" }}>
+      {items.map((it) => (
+        <button key={it.key} type="button" className={value === it.key ? "" : "secondary"} style={{ fontSize: 12, padding: "2px 10px" }} onClick={() => onChange(it.key)}>
+          {it.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function RefLinks({ task }: { task: TaskRecord }) {
+  const links = (task.refs ?? []).filter((r) => r.url);
+  if (links.length === 0) return null;
+  return (
+    <span style={{ fontSize: 12 }} onClick={(e) => e.stopPropagation()}>
+      {links.map((r, i) => (
+        <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ marginRight: 8 }}>
+          📎 {r.label}
+        </a>
+      ))}
+    </span>
+  );
+}
 
 const ASSIGNED_VIA_LABEL: Record<string, string> = { direct: "지정", auto: "자동배정", pool_auto: "업무풀→자동배정", claim: "직접 가져감" };
 
@@ -68,8 +107,9 @@ function TaskRow({
   return (
     <li className="schedule-item-row" onClick={onClick} style={{ cursor: "pointer" }}>
       <div>
-        <span className="badge">{task.typeLabel}</span>{" "}
+        {task.poolKindLabel && <span className="badge">{task.poolKindLabel}</span>} <span className="badge">{task.typeLabel}</span>{" "}
         {task.status === "진행중" && <span className="badge badge-success">진행중</span>}
+        {task.blocked && <span className="badge badge-urgent">선행 업무 대기</span>}
         {task.studentName && task.studentName !== "-" && <strong>{task.studentName}</strong>}
         {task.className && <span className="muted"> ({task.className})</span>}
         {task.urgent && <span className="badge badge-urgent">긴급</span>}
@@ -79,6 +119,7 @@ function TaskRow({
           {task.date ?? "날짜 미정"} {task.time} {task.ownerName ? `· 담당 ${task.ownerName}` : ""}
         </span>
         {task.note && <p className="muted" style={{ margin: "2px 0 0", fontSize: 13 }}>{task.note}</p>}
+        <RefLinks task={task} />
       </div>
       {!task.done && (
         <div style={{ display: "flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>
@@ -133,6 +174,9 @@ export default function TaskBoardClient({
   const [starting, setStarting] = useState<string | null>(null);
   const [boardTasks, setBoardTasks] = useState<TaskRecord[] | null>(null);
   const [showBoard, setShowBoard] = useState(false);
+  const [poolFilter, setPoolFilter] = useState<PoolFilter>("all");
+  const [boardPoolFilter, setBoardPoolFilter] = useState<PoolFilter>("all");
+  const [boardStatusFilter, setBoardStatusFilter] = useState<"all" | "업무풀" | "대기" | "진행중" | "완료" | "지연">("all");
 
   function reloadAll() {
     fetch("/api/tasks?scope=mine")
@@ -178,15 +222,19 @@ export default function TaskBoardClient({
     }
   }
 
-  // 진행현황 표: 미완료(업무풀→대기→진행중) 먼저, 그 다음 최근 완료.
+  // 진행현황 표: 미완료(업무풀→대기→진행중) 먼저, 그 다음 최근 완료. 상태·업무 종류 필터 적용.
   const boardRows = useMemo(() => {
     const order: Record<string, number> = { 업무풀: 0, 대기: 1, 진행중: 2, 완료: 3 };
-    return [...(boardTasks ?? [])].sort(
+    const isLate = (t: TaskRecord) => !t.done && !!t.date && t.date < today;
+    return [...(boardTasks ?? [])]
+      .filter((t) => boardPoolFilter === "all" || t.poolKind === boardPoolFilter)
+      .filter((t) => (boardStatusFilter === "all" ? true : boardStatusFilter === "지연" ? isLate(t) : t.status === boardStatusFilter))
+      .sort(
       (a, b) =>
         (order[a.status ?? "대기"] ?? 1) - (order[b.status ?? "대기"] ?? 1) ||
         String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? ""))
     );
-  }, [boardTasks]);
+  }, [boardTasks, boardPoolFilter, boardStatusFilter, today]);
 
   function loadByStaff() {
     fetch("/api/tasks?scope=byStaff")
@@ -356,25 +404,39 @@ export default function TaskBoardClient({
       </div>
 
       <div className="card">
-        <h2>공용업무 {poolTasks.length}</h2>
-        {poolTasks.length === 0 ? (
-          <p className="muted">공용업무가 없습니다.</p>
-        ) : (
-          <ul className="schedule-list">
-            {poolTasks.map((t) => (
-              <li key={t.id} className="schedule-item-row">
-                <div style={{ cursor: "pointer" }} onClick={() => setOpenTaskId(t.id)}>
-                  <span className="badge">{t.typeLabel}</span> {t.note || t.title}
-                  <br />
-                  <span className="muted">{t.date} {t.time}</span>
-                </div>
-                <button type="button" disabled={claiming === t.id} onClick={() => claim(t.id)}>
-                  {claiming === t.id ? "처리 중..." : "내가 할게요"}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+        <h2>가져올 수 있는 업무 {poolTasks.length}</h2>
+        <p className="muted" style={{ fontSize: 12, margin: 0 }}>담당자가 정해지지 않은 업무입니다. 할 수 있는 업무를 "내가 할게요"로 가져가세요.</p>
+        <FilterChips items={POOL_FILTERS} value={poolFilter} onChange={setPoolFilter} />
+        {(() => {
+          const list = poolTasks.filter((t) => poolFilter === "all" || t.poolKind === poolFilter);
+          if (list.length === 0) return <p className="muted">가져올 수 있는 업무가 없습니다.</p>;
+          return (
+            <ul className="schedule-list">
+              {list.map((t) => (
+                <li key={t.id} className="schedule-item-row">
+                  <div style={{ cursor: "pointer" }} onClick={() => setOpenTaskId(t.id)}>
+                    {t.poolKindLabel && <span className="badge">{t.poolKindLabel}</span>} <span className="badge">{t.typeLabel}</span>{" "}
+                    {t.urgent || t.priority === "긴급" ? <span className="badge badge-urgent">긴급</span> : null}
+                    {t.blocked && <span className="badge badge-urgent">선행 업무 대기</span>}
+                    {t.studentName && t.studentName !== "-" && <strong> {t.studentName}</strong>}
+                    {t.className && <span className="muted"> ({t.className})</span>}
+                    <br />
+                    <span>{t.note || t.title}</span>
+                    <br />
+                    <span className="muted" style={{ fontSize: 12 }}>
+                      마감 {t.date ?? "-"} {t.time} · 지시 {t.createdBy || "-"} · 생성 {fmtDateTime(t.createdAt)}
+                    </span>
+                    <br />
+                    <RefLinks task={t} />
+                  </div>
+                  <button type="button" disabled={claiming === t.id} onClick={() => claim(t.id)}>
+                    {claiming === t.id ? "처리 중..." : "내가 할게요"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          );
+        })()}
       </div>
 
       {isManager && (
@@ -390,6 +452,23 @@ export default function TaskBoardClient({
           >
             {showBoard ? "접기" : "업무별 진행상황 보기 (미완료 + 최근 7일)"}
           </button>
+          {showBoard && (
+            <>
+              <FilterChips items={POOL_FILTERS} value={boardPoolFilter} onChange={setBoardPoolFilter} />
+              <FilterChips
+                items={[
+                  { key: "all" as const, label: "전체 상태" },
+                  { key: "업무풀" as const, label: "미배정(업무풀)" },
+                  { key: "대기" as const, label: "배정·대기" },
+                  { key: "진행중" as const, label: "진행 중" },
+                  { key: "완료" as const, label: "완료" },
+                  { key: "지연" as const, label: "지연" },
+                ]}
+                value={boardStatusFilter}
+                onChange={setBoardStatusFilter}
+              />
+            </>
+          )}
           {showBoard && (
             <div className="table-scroll" style={{ marginTop: 10, maxHeight: 480, overflowY: "auto" }}>
               {boardTasks === null ? (
@@ -412,7 +491,8 @@ export default function TaskBoardClient({
                     {boardRows.map((t) => (
                       <tr key={t.id} onClick={() => setOpenTaskId(t.id)} style={{ cursor: "pointer" }}>
                         <td>
-                          <span className="badge">{t.typeLabel}</span> {t.studentName && t.studentName !== "-" ? t.studentName + " " : ""}
+                          {t.poolKindLabel && <span className="badge">{t.poolKindLabel}</span>} <span className="badge">{t.typeLabel}</span>{" "}
+                          {t.blocked && <span className="badge badge-urgent">선행 업무 대기</span>} {t.studentName && t.studentName !== "-" ? t.studentName + " " : ""}
                           {t.className ? `(${t.className}) ` : ""}
                           <span className="muted">{t.note}</span>
                         </td>

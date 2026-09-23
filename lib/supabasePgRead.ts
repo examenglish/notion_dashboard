@@ -14,7 +14,7 @@
 // 중 "출결≠결석"이면 출석, "과제여부" 체크박스, "단어테스트결과=통과"
 // 비율 — 분모는 그 학생의 전체 일일기록 수(기간 제한 없음, "누적"이므로).
 import { branchCode } from "./supabaseRepo";
-import { taskTypeFromLabel, TASK_TYPE_LABEL_LIST, classifyFeedback, isReviewOutcome, taskStatusOf, type TaskWorkflow } from "./tasks";
+import { taskTypeFromLabel, TASK_TYPE_LABEL_LIST, classifyFeedback, isReviewOutcome, taskStatusOf, taskPoolOf, TASK_POOL_LABELS, type TaskWorkflow } from "./tasks";
 import { todayKST, isoDateKST } from "./date";
 import { stripClassSuffix } from "./format";
 
@@ -188,7 +188,13 @@ function workflowFields(r: PgTaskRow, staffNames: Map<string, string>) {
   const wf: TaskWorkflow = r.source_payload?.workflow ?? {};
   const ownerId = r.staff_notion_ids?.[0] ?? null;
   const nameOf = (id?: string) => (id ? staffNames.get(id) ?? "" : "");
+  const pool = taskPoolOf(taskTypeFromLabel(r.type ?? ""));
   return {
+    poolKind: pool,
+    poolKindLabel: TASK_POOL_LABELS[pool],
+    dependsOn: wf.dependsOn ?? [],
+    refs: wf.refs ?? [],
+    blocked: false,
     status: taskStatusOf({ done: !!r.complete, ownerId, startedAt: wf.startedAt }),
     createdAt: (r as { created_at?: string }).created_at ?? null,
     createdBy: wf.createdBy ?? "",
@@ -201,6 +207,17 @@ function workflowFields(r: PgTaskRow, staffNames: Map<string, string>) {
   };
 }
 
+// 선행 업무(workflow.dependsOn)가 아직 미완료인지 표시 — rows는 미완료 업무를 모두 포함해야 한다.
+function markBlocked<T extends { dependsOn: string[]; blocked: boolean }>(mapped: T[], rows: PgTaskRow[]): T[] {
+  const open = new Set<string>();
+  for (const r of rows) {
+    if (r.complete || !notArchived(r)) continue;
+    open.add(r.id);
+    if (r.notion_id) open.add(r.notion_id);
+  }
+  return mapped.map((t) => ({ ...t, blocked: t.dependsOn.some((d) => open.has(d)) }));
+}
+
 // 원장 "지시업무 진행현황" — 미완료 전체 + 최근 sinceIso 이후 생성/완료된
 // 업무. 담당자/상태/생성·마감·완료 시각을 한 표로 보여주기 위한 조회.
 export async function pgListTaskBoard(
@@ -211,10 +228,11 @@ export async function pgListTaskBoard(
 ) {
   const enc = encodeURIComponent(sinceIso);
   const rows = (await pgFetch("tasks", `select=*&or=(complete.eq.false,updated_at.gte.${enc})`)) as PgTaskRow[];
-  return rows
+  const mapped = rows
     .filter(notArchived)
     .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
     .map((r) => mapPgTask(r, studentNames, staffNames, classNames));
+  return markBlocked(mapped, rows);
 }
 
 export async function pgListMyTasks(
@@ -224,11 +242,12 @@ export async function pgListMyTasks(
   classNames?: Map<string, string>
 ) {
   const rows = (await pgFetch("tasks", "select=*&complete=eq.false")) as PgTaskRow[];
-  return rows
+  const mapped = rows
     .filter(notArchived)
     .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
     .filter((r) => r.staff_notion_ids?.includes(staffNotionId))
     .map((r) => mapPgTask(r, studentNames, staffNames, classNames));
+  return markBlocked(mapped, rows);
 }
 
 // 관리자용 "담당자별 전체 현황"(원장/행정 전용) — pgListMyTasks(특정
@@ -242,10 +261,11 @@ export async function pgListAllOpenTasks(
   classNames?: Map<string, string>
 ) {
   const rows = (await pgFetch("tasks", "select=*&complete=eq.false")) as PgTaskRow[];
-  return rows
+  const mapped = rows
     .filter(notArchived)
     .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
     .map((r) => mapPgTask(r, studentNames, staffNames, classNames));
+  return markBlocked(mapped, rows);
 }
 
 export async function pgListPoolTasks(
@@ -253,12 +273,15 @@ export async function pgListPoolTasks(
   staffNames: Map<string, string>,
   classNames?: Map<string, string>
 ) {
-  const rows = (await pgFetch("tasks", "select=*&pool=eq.true&complete=eq.false")) as PgTaskRow[];
-  return rows
+  // 선행 업무 표시를 위해 미완료 업무 전체를 읽고, Pool(담당자 없음) 것만 돌려준다.
+  const rows = (await pgFetch("tasks", "select=*&complete=eq.false")) as PgTaskRow[];
+  const mapped = rows
     .filter(notArchived)
+    .filter((r) => r.pool === true)
     .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
     .filter((r) => !r.staff_notion_ids || r.staff_notion_ids.length === 0)
     .map((r) => mapPgTask(r, studentNames, staffNames, classNames));
+  return markBlocked(mapped, rows);
 }
 
 // listReviewInbox(lib/notion.ts)의 postgres 버전 — 완료됐지만 아직 원장이

@@ -3,7 +3,7 @@
 // 테스트 가능한 순수 함수로 둔다: 호출부(lib/notion.ts 쪽 createTasks)가
 // listStaff()/listClasses()/미완료 업무 카운트를 미리 조회해 넘긴다.
 import type { WorkHours } from "./format";
-import { isPoolableType, type TaskType } from "./tasks";
+import { isPoolableType, isAutoAssignablePool, taskPoolOf, type TaskType } from "./tasks";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
@@ -49,6 +49,9 @@ function pickLeastBusy(candidates: StaffCandidate[]): StaffCandidate {
 }
 
 export function routeTask(input: RouteInput, ctx: { staff: StaffCandidate[]; classes: ClassInfo[] }): RouteResult {
+  // 직원별 처리 가능 업무 정보가 없는 전문 Pool(교재편집)은 사람을 고르지 않고 Pool에 둔다.
+  if (!isAutoAssignablePool(taskPoolOf(input.type))) return { assigned: false, pool: true };
+
   // 자동배정 대상은 조교/행정으로 한정한다(원장/강사는 자동배정 풀에서 제외).
   const pool = ctx.staff.filter((s) => s.role === "조교" || s.role === "행정");
 

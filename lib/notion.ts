@@ -52,6 +52,8 @@ import {
   type NewTaskInput,
   type TaskStatus,
   type TaskWorkflow,
+  type TaskPool,
+  type TaskRef,
 } from "./tasks";
 import { routeTask, type StaffCandidate, type ClassInfo } from "./task-routing";
 import { hashPin, verifyPin } from "./pinAuth";
@@ -70,6 +72,7 @@ import {
   pgResolveRelationIds,
   getMaterialStorageProvider,
   pgGetByNotionId,
+  pgPatchWhere,
   pgFindByExactColumn,
   pgArchiveByNotionId,
   pgQuery,
@@ -7241,6 +7244,12 @@ export type TaskRecord = {
   startedByName?: string;
   completedAt?: string | null;
   completedByName?: string;
+  // 업무 Pool(유형에서 결정)·선행 업무·관련 자료 링크
+  poolKind?: TaskPool;
+  poolKindLabel?: string;
+  dependsOn?: string[];
+  blocked?: boolean;
+  refs?: TaskRef[];
 };
 
 function mapTaskPage(
@@ -7595,15 +7604,19 @@ export async function listPoolTasks(): Promise<TaskRecord[]> {
 export async function claimTask(taskId: string, staffId: string): Promise<{ ok: boolean; message?: string }> {
   if (getDbProvider() === "postgres") {
     const row = await pgGetByNotionId("TODO", taskId);
-    if ((row?.staff_notion_ids as string[] | null)?.length) {
+    if (!row) return { ok: false, message: "업무를 찾을 수 없습니다." };
+    if ((row.staff_notion_ids as string[] | null)?.length) {
       return { ok: false, message: "이미 다른 직원이 가져간 업무입니다." };
     }
     const staffPgId = await pgResolveRelationId("STAFF", staffId);
-    await pgPatchByNotionId("TODO", taskId, {
+    // 담당자가 "여전히 비어있고 미완료일 때만" 한 번의 PATCH로 가져간다 — 동시에 두 명이
+    // 눌러도 DB에서 한 명만 성공한다(바뀐 행 0개면 다른 사람이 먼저 가져간 것).
+    const changed = await pgPatchWhere("TODO", taskId, UNASSIGNED_OPEN_FILTER, {
       staff_notion_ids: [staffId],
       staff_id: staffPgId,
       source_payload: mergeWorkflow(row, { assignedVia: "claim", assignedAt: new Date().toISOString() }),
     });
+    if (changed === 0) return { ok: false, message: "이미 다른 직원이 가져간 업무입니다." };
     fireAndForget("notion:claimTask", () =>
       notion.pages.update({ page_id: taskId, properties: { 담당자: { relation: [{ id: staffId }] } } as any })
     );
@@ -7626,6 +7639,30 @@ function mergeWorkflow(row: Record<string, unknown> | null, patch: TaskWorkflow)
   return { ...payload, workflow: { ...workflow, ...patch } };
 }
 
+// 담당자 없음 + 미완료 — 가져가기/자동배정의 원자적 조건.
+const UNASSIGNED_OPEN_FILTER = `staff_notion_ids=eq.${encodeURIComponent("{}")}&complete=eq.false`;
+
+// 선행 업무(workflow.dependsOn) 중 아직 안 끝난 것들의 이름. 없으면 [].
+async function pendingDependencies(row: Record<string, unknown>): Promise<string[]> {
+  const deps = ((row.source_payload as { workflow?: TaskWorkflow } | null)?.workflow?.dependsOn ?? []).filter(Boolean);
+  const waiting: string[] = [];
+  for (const id of deps) {
+    const dep = await pgGetByNotionId("TODO", id);
+    if (dep && pgNotArchived(dep) && !dep.complete) waiting.push(String(dep.title ?? dep.type ?? "선행 업무"));
+  }
+  return waiting;
+}
+
+// 같은 입력에서 "A 하고 B"처럼 순서가 있는 업무 — B.workflow.dependsOn에 A를 기록한다.
+export async function setTaskDependency(taskPgId: string, dependsOnPgId: string): Promise<void> {
+  if (getDbProvider() !== "postgres") return;
+  const row = await pgGetByNotionId("TODO", taskPgId);
+  if (!row) return;
+  const wf = ((row.source_payload as { workflow?: TaskWorkflow } | null)?.workflow ?? {}) as TaskWorkflow;
+  const dependsOn = Array.from(new Set([...(wf.dependsOn ?? []), dependsOnPgId]));
+  await pgPatchById("TODO", row.id as string, { source_payload: mergeWorkflow(row, { dependsOn }) });
+}
+
 // 조교 "진행 시작" — 담당자가 비어있으면(업무풀) 먼저 가져가기와 같은 검사로
 // 자기에게 배정한 뒤 시작 시각을 남긴다. 다른 사람 업무는 시작할 수 없다.
 // 상태 정본: 완료=tasks.complete, 진행중=workflow.startedAt(새 컬럼 없음).
@@ -7636,6 +7673,8 @@ export async function startTask(taskId: string, staffId: string): Promise<{ ok: 
   if (row.complete) return { ok: false, message: "이미 완료된 업무입니다." };
   const owners = (row.staff_notion_ids as string[] | null) ?? [];
   if (owners.length > 0 && !owners.includes(staffId)) return { ok: false, message: "다른 직원에게 배정된 업무입니다." };
+  const waiting = await pendingDependencies(row);
+  if (waiting.length > 0) return { ok: false, message: `먼저 끝나야 하는 업무가 있습니다: ${waiting.join(", ")}` };
   const nowIso = new Date().toISOString();
   const patch: Record<string, unknown> = {
     source_payload: mergeWorkflow(row, {
@@ -7647,9 +7686,12 @@ export async function startTask(taskId: string, staffId: string): Promise<{ ok: 
   if (owners.length === 0) {
     patch.staff_notion_ids = [staffId];
     patch.staff_id = await pgResolveRelationId("STAFF", staffId);
+    const changed = await pgPatchWhere("TODO", taskId, UNASSIGNED_OPEN_FILTER, patch);
+    if (changed === 0) return { ok: false, message: "이미 다른 직원이 가져간 업무입니다." };
     fireAndForget("notion:startTask", () =>
       notion.pages.update({ page_id: taskId, properties: { 담당자: { relation: [{ id: staffId }] } } as any })
     );
+    return { ok: true };
   }
   await pgPatchByNotionId("TODO", taskId, patch);
   return { ok: true };
@@ -7707,14 +7749,17 @@ export async function autoAssignPoolTasks(): Promise<{ id: string; typeLabel: st
     const route = routeTask({ type, studentId, date: today, time: now }, { staff: candidates, classes: classInfos });
     if (!route.assigned) continue;
     const id = (row.notion_id as string | null) ?? (row.id as string);
-    // 가져가기(claimTask)와 같은 직전 재확인 — 그 사이 누가 가져갔으면 건너뛴다.
+    // 선행 업무가 안 끝난 업무는 아직 사람에게 보내지 않는다.
+    if ((await pendingDependencies(row)).length > 0) continue;
     const fresh = await pgGetByNotionId("TODO", id);
-    if (!fresh || fresh.complete || ((fresh.staff_notion_ids as string[] | null) ?? []).length > 0) continue;
-    await pgPatchByNotionId("TODO", id, {
+    if (!fresh) continue;
+    // 가져가기와 같은 원자적 조건 — 그 사이 누가 가져갔으면(바뀐 행 0) 건너뛴다.
+    const changed = await pgPatchWhere("TODO", id, UNASSIGNED_OPEN_FILTER, {
       staff_notion_ids: [route.staffId],
       staff_id: await pgResolveRelationId("STAFF", route.staffId),
       source_payload: mergeWorkflow(fresh, { assignedVia: "pool_auto", assignedAt: new Date().toISOString(), assignReason: route.reason }),
     });
+    if (changed === 0) continue;
     const c = candidates.find((c) => c.id === route.staffId);
     if (c) c.openTaskCount += 1;
     if (row.notion_id) {

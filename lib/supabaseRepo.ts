@@ -300,6 +300,25 @@ export async function pgPatchByNotionId(entityKey: EntityKey, notionId: string, 
   }
 }
 
+/**
+ * 조건부 원자적 갱신 — dual-id로 찾은 행 중 extraFilter(PostgREST 필터)도 만족하는 행만
+ * 한 번의 PATCH로 바꾸고, 실제로 바뀐 행 수를 돌려준다. "담당자가 아직 비어있을 때만
+ * 가져가기"처럼 읽고-쓰기 사이 경쟁(race)을 DB 한 문장으로 막을 때 쓴다.
+ */
+export async function pgPatchWhere(entityKey: EntityKey, notionId: string, extraFilter: string, patch: Record<string, unknown>): Promise<number> {
+  const { env, branchId } = await requireEnvAndBranch();
+  const r = await fetch(
+    `${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${eitherIdFilter(notionId)}&${extraFilter}`,
+    { method: "PATCH", headers: { ...authHeaders(env.key), "Content-Type": "application/json", Prefer: "return=representation" }, body: JSON.stringify(patch) }
+  );
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    throw new Error(`Postgres patch ${entityKey} failed (${r.status}): ${body.slice(0, 300)}`);
+  }
+  const rows = (await r.json().catch(() => [])) as unknown[];
+  return Array.isArray(rows) ? rows.length : 0;
+}
+
 /** id(uuid)로 특정 행의 컬럼을 직접 갱신한다(아직 notion_id가 없는, Postgres에서 생성된 신규 행용). */
 export async function pgPatchById(entityKey: EntityKey, id: string, patch: Record<string, unknown>): Promise<void> {
   const { env, branchId } = await requireEnvAndBranch();

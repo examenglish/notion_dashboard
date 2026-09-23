@@ -435,6 +435,7 @@ export type UnifiedIntent = {
   toText?: string;
   field?: "progress" | "homework" | "";
   itemNumber?: number;
+  afterPrevious?: boolean;
   historyFrom?: string;
   historyTo?: string;
   historyRecent?: boolean;
@@ -532,6 +533,10 @@ const UNIFIED_INTENTS_TOOL = (taskTypeLabels: string[]): Anthropic.Tool => ({
             newPeriod: { type: "string", description: "correction: '1교시 아니고 2교시'면 'N교시' 형식의 새 교시. 없으면 빈 문자열." },
             fromText: { type: "string", description: "correction(class_progress): 틀린/지울 부분 원문('25쪽 아니고 27쪽'의 '25쪽', '관계대명사 한 거 삭제'의 '관계대명사'). 없으면 빈 문자열." },
             toText: { type: "string", description: "correction(class_progress): 바꿀 부분('27쪽'). 삭제면 빈 문자열." },
+            afterPrevious: {
+              type: "boolean",
+              description: "route가 task일 때: 같은 문장에서 바로 앞 task가 끝난 뒤에 해야 하는 업무면 true(예: '어순배열 수정하고 15부 출력해줘'의 출력). 순서가 없으면 생략.",
+            },
             itemNumber: {
               type: "number",
               description: "correction: 직전에 보여준 입력 목록의 번호로 가리킬 때('2번 94점으로'의 2, '첫 번째 거'는 1, '마지막 거'는 -1). 없으면 생략.",
@@ -594,6 +599,7 @@ intent 분리 예시:
 - 목록 번호로 고치는 문장("2번 94점으로", "3번 취소", "첫 번째 거 잘못됐어", "마지막 거 삭제", "2번 재시험 아니야")은 route:"correction" + itemNumber. "3번 과제 27쪽까지로 바꿔" → itemNumber:3, correctionTarget:"class_progress", field:"homework", toText:"27쪽", operation:"modify".
 - route:"clarify"를 쓸 때 message에는 "무엇을 해야 할지 명확하지 않습니다" 같은 일반 문구 대신, 문장에서 이해한 부분과 부족한 정보를 구체적으로 묻는 한국어 질문을 쓴다.
 - route:"class_progress"의 기본 editMode는 append다. "추가로 ~ 진행"은 append. 명시적인 수정/교체/삭제 표현이 있을 때만 replace/delete.
+- 교재 제작·편집(시험지·어순배열·빈칸 문제·단어시험·워크북·정답지 제작/수정, PDF/문서 편집, OCR/원문 확인, 교재 검수)은 taskType:"교재편집"이고 instruction에 대상(학교/학년/반/시험)과 세부 작업을 적는다. 프린트 출력·제본은 "출력", 학생에게 나눠주기·전달은 "전달". "A 하고 B 해줘"처럼 순서가 있는 여러 업무는 각각 task로 나누고 뒤 업무에 afterPrevious:true. 예: "거성중2 어순배열 수정하고 15부 출력해줘" → 1) taskType:"교재편집", instruction:"거성중2 어순배열 수정" 2) taskType:"출력", quantity:15, afterPrevious:true. 담당자가 없으면 ownerName은 빈 문자열(교재편집은 시스템이 Pool에 둔다).
 - route:"task"에서 "OO에게 맡겨/OO가 해줘"처럼 담당 직원이 명시되면 ownerName에 그 직원 이름을 넣는다. 명시가 없으면 ownerName은 빈 문자열(시스템이 조교 업무풀/자동배정으로 처리). "8시까지"처럼 마감 시각이 있으면 time에 넣는다.
 - intents 배열은 최소 1개 이상이어야 한다.
 

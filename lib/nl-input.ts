@@ -18,6 +18,7 @@ import {
   getAttendanceOnDate,
   saveClassProgressFromText,
   listClassProgressPeriods,
+  setTaskDependency,
   saveStudentLearningRecord,
   linkLearningRecordTask,
   type ProgressEditMode,
@@ -42,7 +43,15 @@ import {
 import { createHash, createHmac, timingSafeEqual } from "crypto";
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
-import { TASK_TYPE_LABELS, TASK_TYPE_LABEL_LIST, taskTypeFromLabel, type NewTaskInput } from "@/lib/tasks";
+import {
+  TASK_TYPE_LABELS,
+  TASK_TYPE_LABEL_LIST,
+  TASK_POOL_LABELS,
+  taskTypeFromLabel,
+  taskPoolOf,
+  isAutoAssignablePool,
+  type NewTaskInput,
+} from "@/lib/tasks";
 import { mark } from "@/lib/timing";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
@@ -1096,7 +1105,9 @@ async function createTaskOutcomes(
         message: `업무 등록: ${taskInputs[i].label} → ${
           c.ownerId
             ? `${staffNameById.get(c.ownerId) ?? "담당자"} ${taskInputs[i].input.ownerId ? "지정 배정" : "자동배정"}`
-            : "조교 업무풀(근무 중인 조교에게 자동배정 대기)"
+            : isAutoAssignablePool(taskPoolOf(c.type))
+              ? `${TASK_POOL_LABELS[taskPoolOf(c.type)]} 업무풀(근무 중인 조교에게 자동배정 대기)`
+              : `${TASK_POOL_LABELS[taskPoolOf(c.type)]} 업무풀(가능한 직원이 '내가 할게요'로 가져가기)`
         }`,
       });
       const rawStudentId = taskInputs[i].input.studentId;
@@ -2430,7 +2441,8 @@ async function processIntents(
   const studentNames = new Map(allStudents.map((s) => [s.id, s.name]));
 
   const outcomes: UnifiedOutcome[] = [];
-  const taskInputs: { input: NewTaskInput; label: string }[] = [];
+  type TaskInputEntry = { input: NewTaskInput; label: string; after?: TaskInputEntry };
+  const taskInputs: TaskInputEntry[] = [];
   const recordSlackTasks: SlackTask[] = [];
   const recordTaskKeys = new Set<string>();
   let historyToken: string | undefined;
@@ -2513,7 +2525,11 @@ async function processIntents(
             break;
           }
           const t = taskInputFromDraft(draft, today);
-          if (t) taskInputs.push(t);
+          if (t) {
+            // "A 하고 B": 바로 앞 업무가 끝난 뒤에 할 업무 — 생성 후 dependsOn으로 연결
+            const prev = intent.afterPrevious ? taskInputs[taskInputs.length - 1] : undefined;
+            taskInputs.push(prev ? { ...t, after: prev, label: `${t.label} (앞 업무 완료 후)` } : t);
+          }
           break;
         }
         case "admin_inbox": {
@@ -2775,6 +2791,21 @@ async function processIntents(
   });
   const created = await createTaskOutcomes(dedupedTaskInputs, roster, studentNames);
   outcomes.push(...created.outcomes);
+  // 선후관계 기록(생성 순서 = dedupedTaskInputs 순서)
+  if (created.createdIds.length === dedupedTaskInputs.length) {
+    const idOf = new Map(dedupedTaskInputs.map((t, i) => [t, created.createdIds[i]]));
+    for (const t of dedupedTaskInputs) {
+      const predId = t.after ? idOf.get(t.after) : undefined;
+      const selfId = idOf.get(t);
+      if (predId && selfId) {
+        try {
+          await setTaskDependency(selfId, predId);
+        } catch (err) {
+          console.error("[exam-ai] setTaskDependency failed", { message: err instanceof Error ? err.message : String(err) });
+        }
+      }
+    }
+  }
   const slackTasks = [...recordSlackTasks, ...created.slackTasks];
 
   const ok = outcomes.length > 0 && outcomes.every((o) => o.status !== "실패");

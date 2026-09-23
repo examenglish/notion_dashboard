@@ -18,6 +18,7 @@ export type TaskType =
   | "SUPPLEMENT_TEACHING"
   | "EXAM_RANGE_CHECK"
   | "MATERIAL_PREP"
+  | "MATERIAL_EDIT"
   | "COUNSELING_TASK"
   | "GENERAL_TASK";
 
@@ -34,6 +35,9 @@ export const TASK_TYPE_LABELS: Record<TaskType, string> = {
   SUPPLEMENT_TEACHING: "보충지도",
   EXAM_RANGE_CHECK: "시험범위확인",
   MATERIAL_PREP: "자료준비",
+  // 교재 제작·편집(시험지·어순배열·빈칸·단어시험·워크북·정답지 제작/수정, PDF/문서 편집,
+  // OCR/원문 확인, 검수) — 세부 작업은 업무 내용(memo)에 적는다.
+  MATERIAL_EDIT: "교재편집",
   COUNSELING_TASK: "업무상담",
   GENERAL_TASK: "기타업무",
 };
@@ -54,9 +58,44 @@ export const POOLABLE_TASK_TYPES: TaskType[] = [
   "DELIVERY",
   "MATERIAL_COLLECTION",
   "MATERIAL_PREP",
+  "MATERIAL_EDIT",
   "EXAM_RANGE_CHECK",
   "GENERAL_TASK",
 ];
+
+// 업무 Pool(작업 대기열) — 새 DB 필드 없이 업무 유형(tasks.type)에서 결정론적으로 정한다.
+// Pool = "담당자 없는(staff 비어있는) 해당 유형 업무들"이고, 직원이 "내가 할게요"로 가져간다.
+export type TaskPool = "student" | "material" | "print" | "admin";
+export const TASK_POOL_LABELS: Record<TaskPool, string> = {
+  student: "학생 관리",
+  material: "교재편집",
+  print: "출력·배부",
+  admin: "행정",
+};
+const POOL_BY_TYPE: Record<TaskType, TaskPool> = {
+  MEMORIZATION_CHECK: "student",
+  HOMEWORK_CHECK: "student",
+  VOCAB_RETEST: "student",
+  RETEST: "student",
+  SUPPLEMENT_TEACHING: "student",
+  MATERIAL_EDIT: "material",
+  MATERIAL_PREP: "material",
+  MATERIAL_COLLECTION: "material",
+  EXAM_RANGE_CHECK: "material",
+  PRINT: "print",
+  DELIVERY: "print",
+  PARENT_CONTACT: "admin",
+  COUNSELING_TASK: "admin",
+  GENERAL_TASK: "admin",
+};
+export function taskPoolOf(type: TaskType | null | undefined): TaskPool {
+  return type ? POOL_BY_TYPE[type] ?? "admin" : "admin";
+}
+// 자동배정 금지 Pool: 직원별 처리 가능 업무(capability) 정보가 없어서, 전문 작업(교재편집)은
+// 아무 조교에게나 배정하지 않고 Pool에 남겨 가능한 직원이 가져가게 한다.
+export function isAutoAssignablePool(pool: TaskPool): boolean {
+  return pool !== "material";
+}
 export function isPoolableType(type: TaskType): boolean {
   return POOLABLE_TASK_TYPES.includes(type);
 }
@@ -72,6 +111,7 @@ const TASK_OUTCOME_OPTIONS: Partial<Record<TaskType, string[]>> = {
   DELIVERY: ["전달완료", "전달실패"],
   MATERIAL_COLLECTION: ["완료"],
   MATERIAL_PREP: ["완료"],
+  MATERIAL_EDIT: ["완료", "검수 필요"],
   EXAM_RANGE_CHECK: ["확인완료"],
   PARENT_CONTACT: ["통화완료", "부재", "재연락필요"],
   COUNSELING_TASK: ["완료"],
@@ -126,7 +166,13 @@ export type NewTaskInput = {
   createdBy?: string;
   // 이 업무를 만든 학생 학습 기록(student_learning_records.id) — 기록↔업무 추적용.
   sourceRecordId?: string;
+  // 이 업무보다 먼저 끝나야 하는 업무 id들(예: 교재편집 → 출력). 선행 업무가 끝나기 전엔 시작 불가.
+  dependsOn?: string[];
+  // 관련 자료/프로젝트 링크(향후 ATF·ExamPrep·생성 파일 연결용). 예: {kind:"atf_project", id, url, label}
+  refs?: TaskRef[];
 };
+
+export type TaskRef = { kind: string; id?: string; url?: string; label: string };
 
 // 업무 진행 이력 — 새 컬럼/마이그레이션 없이 tasks.source_payload.workflow에
 // 병합 저장한다(source_payload.archived와 같은 기존 관례). 완료 여부의 정본은
@@ -134,6 +180,8 @@ export type NewTaskInput = {
 export type TaskWorkflow = {
   createdBy?: string;
   sourceRecordId?: string;
+  dependsOn?: string[];
+  refs?: TaskRef[];
   // direct=지시자가 담당자 지정, auto=생성 즉시 자동배정, pool_auto=업무풀에
   // 있다가 나중에 자동배정, claim=조교가 업무풀에서 직접 가져감
   assignedVia?: "direct" | "auto" | "pool_auto" | "claim";
