@@ -344,6 +344,43 @@ export async function findStaffByNameAndPin(name: string, pin: string) {
   };
 }
 
+// 원장 직원 계정 관리 — 로그인 ID는 이름(로그인이 이름+PIN, 이름 중복은 생성 시 차단).
+// 퇴사자(비활성)까지 포함하고, pin_hash 등 인증 정보는 절대 돌려주지 않는다.
+export type StaffAccount = { id: string; name: string; role: string | null; loginId: string; active: boolean; mustChangePin: boolean };
+export async function listStaffAccounts(): Promise<StaffAccount[]> {
+  if (getDbProvider() !== "postgres") return [];
+  const rows = await pgQueryRaw("STAFF", "id=not.is.null");
+  return rows
+    .map((r) => ({
+      id: (r.notion_id as string | null) ?? (r.id as string),
+      name: String(r.name ?? ""),
+      role: (r.role as string | null) ?? null,
+      loginId: String(r.name ?? ""),
+      active: !r.resigned,
+      mustChangePin: !!r.must_change_password,
+    }))
+    .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, "ko"));
+}
+
+// 현재 지점(branch)의 직원인지 — 다른 지점 id면 null(변경 대상 아님).
+export async function getStaffInBranch(staffId: string): Promise<{ id: string; name: string; role: string | null; active: boolean } | null> {
+  if (getDbProvider() !== "postgres") return null;
+  const row = await pgGetByNotionId("STAFF", staffId);
+  if (!row) return null;
+  return { id: (row.notion_id as string | null) ?? (row.id as string), name: String(row.name ?? ""), role: (row.role as string | null) ?? null, active: !row.resigned };
+}
+
+// 원장의 비밀번호(PIN) 재설정 — 기존 hashPin(scrypt) 그대로, 평문은 저장·로그·응답·Notion
+// 어디에도 남기지 않는다. 재설정 후 첫 로그인에서 본인이 새 PIN으로 바꾸게 한다.
+export async function resetStaffPin(staffId: string, newPin: string): Promise<void> {
+  if (getDbProvider() !== "postgres") throw new Error("비밀번호 재설정은 Postgres 모드에서만 지원합니다.");
+  await pgPatchByNotionId("STAFF", staffId, { pin_hash: await hashPin(newPin), must_change_password: true });
+  revalidateTag(STAFF_CACHE_TAG);
+  fireAndForget("notion:resetStaffPin", () =>
+    notion.pages.update({ page_id: staffId, properties: { 비번변경필요: { checkbox: true } } as any })
+  );
+}
+
 // 퇴사 처리 — Notion 페이지를 지우거나 보관(archive)하지 않고 "퇴사" 체크박스만
 // 켠다. 페이지를 지우면 그 직원이 relation으로 연결된 과거 기록(클리닉 등)에서
 // 조교 이름이 더 이상 뜨지 않게 되므로(관계가 가리키는 페이지 자체가 없어짐),
@@ -365,6 +402,15 @@ export async function setStaffResigned(staffId: string, resigned: boolean) {
 }
 
 export async function updateStaffPin(staffId: string, newPin: string) {
+  if (getDbProvider() === "postgres") {
+    // 로그인은 Postgres pin_hash만 검증(82e70b3) — 해시만 저장하고, 평문 PIN은 어디에도 쓰지 않는다.
+    await pgPatchByNotionId("STAFF", staffId, { pin_hash: await hashPin(newPin), must_change_password: false });
+    revalidateTag(STAFF_CACHE_TAG);
+    fireAndForget("notion:updateStaffPin", () =>
+      notion.pages.update({ page_id: staffId, properties: { 비번변경필요: { checkbox: false } } as any })
+    );
+    return;
+  }
   const updated = await notion.pages.update({
     page_id: staffId,
     properties: {
@@ -427,7 +473,7 @@ export async function createStaff(name: string, role: "강사" | "조교" | "행
         properties: {
           이름: { title: [{ text: { content: name } }] },
           역할: { select: { name: role } },
-          PIN: { rich_text: [{ text: { content: pin } }] },
+          // 평문 PIN은 Notion에 적지 않는다 — 로그인은 Postgres staff.pin_hash로만 검증한다.
           비번변경필요: { checkbox: true },
         } as any,
       });

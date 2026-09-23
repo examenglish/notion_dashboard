@@ -11,6 +11,7 @@ import ClassAssistantAssignForm from "./ClassAssistantAssignForm";
 import StaffScheduleForm from "./StaffScheduleForm";
 import StaffRegisterForm from "./StaffRegisterForm";
 import StaffResignForm from "./StaffResignForm";
+import StaffAccountTable from "./StaffAccountTable";
 import AssistantClinicPrintModal from "./AssistantClinicPrintModal";
 import ClassManageForm from "./ClassManageForm";
 import AssignClinicTaskForm from "./AssignClinicTaskForm";
@@ -1471,8 +1472,10 @@ export default function InputClient({
           {isAdminLike && <ClassManageForm />}
           {isAdminLike && <ClassAssistantAssignForm />}
           {isAdminLike && <StaffScheduleForm />}
-          {isAdminLike && <StaffRegisterForm />}
-          {isAdminLike && <StaffResignForm />}
+          {/* 계정 생성·비활성화·비밀번호 재설정은 원장만(서버에서도 원장만 허용) */}
+          {role === "원장" && <StaffAccountTable />}
+          {role === "원장" && <StaffRegisterForm />}
+          {role === "원장" && <StaffResignForm />}
           {!isAssistant && <AssignClinicTaskForm />}
           {isAdminLike && (
             <div className="card">

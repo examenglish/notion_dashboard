@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { updateStaffSchedule, setStaffResigned } from "@/lib/notion";
-import { readStaffRole } from "@/lib/session";
+import { updateStaffSchedule, setStaffResigned, getStaffInBranch } from "@/lib/notion";
+import { readStaffRole, readStaffId } from "@/lib/session";
 import type { WorkHours } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +15,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const body = await req.json().catch(() => null);
 
   if (typeof body?.resigned === "boolean") {
+    // 계정 활성/비활성(퇴사)은 원장만. 다른 지점 직원은 대상이 아니고, 본인 계정은 잠그지 않는다.
+    if (role !== "원장") {
+      return NextResponse.json({ error: "원장만 계정 상태를 바꿀 수 있습니다." }, { status: 403 });
+    }
+    const target = await getStaffInBranch(params.id);
+    if (!target) return NextResponse.json({ error: "직원을 찾을 수 없습니다." }, { status: 404 });
+    if (body.resigned && target.id === readStaffId(req)) {
+      return NextResponse.json({ error: "본인 계정은 비활성화할 수 없습니다." }, { status: 400 });
+    }
     try {
       await setStaffResigned(params.id, body.resigned);
       return NextResponse.json({ ok: true });
