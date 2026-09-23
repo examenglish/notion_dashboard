@@ -2796,10 +2796,39 @@ export async function getClassProgressForEdit(classId: string, date: string, per
 // EXAM AI 자연어 "반 진도/과제" 입력(runUnifiedNlInput class_progress) 전용.
 // 반 단위 class_progress 한 행만 쓴다 — createClassProgress처럼 학생별
 // 일일기록/브리핑을 만들지 않는다(자연어 한 줄로는 출결·단어·과제 여부를 알 수
-// 없어 전원 "출석"으로 복제하면 오히려 틀린 기록이 된다). 같은 반·같은 날
-// (교시 없음) 기록이 이미 있으면 진도/과제 칸만 갱신해 중복 행을 만들지 않는다.
-// 이후 강사가 수업기록 화면에서 같은 반/날짜를 열면 이 행이 불러와지고, 저장
+// 없어 전원 "출석"으로 복제하면 오히려 틀린 기록이 된다). 날짜+반+교시가 한 행.
+//
+// 같은 행에 다시 입력하면 기본은 APPEND(줄 추가)다 — 기존 진도/과제를 절대 자동으로
+// 지우지 않는다. 이미 있는 내용을 또 입력하면 중복 추가하지 않는다. 사용자가
+// 명시적으로 수정/교체(replace) 또는 삭제(delete)를 지시했을 때만 기존 내용을 바꾼다.
+// 변경 이력은 class_progress.source_payload.examAiLog에 누적한다(새 컬럼 없음).
+// 이후 강사가 수업기록 화면에서 같은 반/날짜/교시를 열면 이 행이 불러와지고, 저장
 // 시 updateClassProgress가 빠진 학생 기록/브리핑을 그때 만든다.
+export type ProgressEditMode = "append" | "replace" | "delete";
+export type LineChange = "added" | "duplicate" | "replaced" | "deleted" | "notfound" | "none";
+
+const normLine = (v: string) => v.replace(/\s+/g, "").toLowerCase();
+
+// 순수 함수(테스트 대상): 기존 텍스트(줄 단위)에 새 내용을 mode대로 반영한다.
+export function mergeProgressText(existing: string, incoming: string, mode: ProgressEditMode): { value: string; change: LineChange } {
+  const cur = (existing ?? "").trim();
+  const inc = (incoming ?? "").trim();
+  if (!inc) return { value: cur, change: "none" };
+  const lines = cur.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (mode === "replace") return { value: inc, change: normLine(cur) === normLine(inc) ? "duplicate" : "replaced" };
+  if (mode === "delete") {
+    const target = normLine(inc);
+    const kept = lines.filter((l) => {
+      const n = normLine(l);
+      return !(n === target || n.includes(target) || target.includes(n));
+    });
+    return kept.length === lines.length ? { value: cur, change: "notfound" } : { value: kept.join("\n"), change: "deleted" };
+  }
+  const target = normLine(inc);
+  if (lines.some((l) => normLine(l) === target) || normLine(cur).includes(target)) return { value: cur, change: "duplicate" };
+  return { value: cur ? `${cur}\n${inc}` : inc, change: "added" };
+}
+
 export async function saveClassProgressFromText(input: {
   classId: string;
   date: string;
@@ -2808,14 +2837,27 @@ export async function saveClassProgressFromText(input: {
   // "1교시" 등 — 수업기록 화면(InputClient)과 같은 값. 없으면 "교시 구분 없음" 행.
   // 날짜+반+교시가 한 단위라, 교시가 다르면 같은 날 같은 반이어도 별개 행이다.
   period?: string | null;
-}): Promise<{ mode: "created" | "updated"; className: string; progress: string; homework: string }> {
+  mode?: ProgressEditMode;
+  enteredBy?: string;
+  rawText?: string;
+}): Promise<{
+  mode: "created" | "updated" | "unchanged";
+  className: string;
+  progress: string;
+  homework: string;
+  progressChange: LineChange;
+  homeworkChange: LineChange;
+}> {
   if (getDbProvider() !== "postgres") throw new Error("반 진도 자연어 입력은 Postgres 모드에서만 지원합니다.");
+  const mode = input.mode ?? "append";
   const classes = await listClasses();
   const cls = classes.find((c) => c.id === input.classId);
   if (!cls) throw new Error("반을 찾을 수 없습니다.");
   const classPgId = await pgResolveRelationId("CLASS", input.classId);
   const progress = input.progress.trim();
   const homework = input.homework.trim();
+  const className = stripClassSuffix(cls.name);
+  const nowIso = new Date().toISOString();
 
   const existing = classPgId
     ? (
@@ -2825,24 +2867,47 @@ export async function saveClassProgressFromText(input: {
         )
       ).filter(pgNotArchived)[0]
     : undefined;
+
   if (existing) {
-    const patch: Record<string, unknown> = {};
-    if (progress) patch.progress_content = progress;
-    if (homework) patch.homework_content = homework;
-    if (Object.keys(patch).length > 0) await pgPatchById("CLASS_PROGRESS", existing.id as string, patch);
-    // 학생 기록이 이미 만들어진 날이면 그 기록들의 진도 칸도 맞춰준다(updateClassProgressPg와 동일).
-    if (progress) {
-      const dailyRows = await pgFindDailyRecordsForProgress(existing);
-      await Promise.all(dailyRows.map((d) => pgPatchById("DAILY_RECORD", d.id as string, { progress_content: progress })));
+    const beforeProgress = (existing.progress_content as string) ?? "";
+    const beforeHomework = (existing.homework_content as string) ?? "";
+    const p = mergeProgressText(beforeProgress, progress, mode);
+    const h = mergeProgressText(beforeHomework, homework, mode);
+    if (mode === "delete" && p.change !== "deleted" && h.change !== "deleted") {
+      throw new Error("삭제할 내용을 기존 기록에서 찾지 못했습니다.");
     }
-    return {
-      mode: "updated",
-      className: stripClassSuffix(cls.name),
-      progress: progress || ((existing.progress_content as string) ?? ""),
-      homework: homework || ((existing.homework_content as string) ?? ""),
+    const patch: Record<string, unknown> = {};
+    if (p.value !== beforeProgress.trim()) patch.progress_content = p.value;
+    if (h.value !== beforeHomework.trim()) patch.homework_content = h.value;
+    if (Object.keys(patch).length === 0) {
+      return { mode: "unchanged", className, progress: p.value, homework: h.value, progressChange: p.change, homeworkChange: h.change };
+    }
+    const payload = ((existing.source_payload as Record<string, unknown> | null) ?? {}) as Record<string, unknown>;
+    const log = Array.isArray(payload.examAiLog) ? (payload.examAiLog as unknown[]) : [];
+    patch.source_payload = {
+      ...payload,
+      examAiLog: [
+        ...log,
+        {
+          at: nowIso,
+          by: input.enteredBy ?? "",
+          mode,
+          raw: input.rawText ?? "",
+          progress: { before: beforeProgress, after: p.value, change: p.change },
+          homework: { before: beforeHomework, after: h.value, change: h.change },
+        },
+      ].slice(-50),
     };
+    await pgPatchById("CLASS_PROGRESS", existing.id as string, patch);
+    // 학생 기록이 이미 만들어진 날이면 그 기록들의 진도 칸도 합쳐진 전체 진도로 맞춘다.
+    if (patch.progress_content !== undefined) {
+      const dailyRows = await pgFindDailyRecordsForProgress(existing);
+      await Promise.all(dailyRows.map((d) => pgPatchById("DAILY_RECORD", d.id as string, { progress_content: p.value })));
+    }
+    return { mode: "updated", className, progress: p.value, homework: h.value, progressChange: p.change, homeworkChange: h.change };
   }
 
+  if (mode === "delete") throw new Error("삭제할 기존 수업 기록이 없습니다.");
   await pgInsertRow("CLASS_PROGRESS", {
     title: `${input.date} ${cls.name}${input.period ? ` ${input.period}` : ""} 진도`,
     class_id: classPgId,
@@ -2855,8 +2920,133 @@ export async function saveClassProgressFromText(input: {
     notice: "",
     period: input.period || null,
     student_records_created: false,
+    source_payload: {
+      origin: "exam_ai",
+      examAiLog: [{ at: nowIso, by: input.enteredBy ?? "", mode: "create", raw: input.rawText ?? "", progress: { after: progress }, homework: { after: homework } }],
+    },
   });
-  return { mode: "created", className: stripClassSuffix(cls.name), progress, homework };
+  return {
+    mode: "created",
+    className,
+    progress,
+    homework,
+    progressChange: progress ? "added" : "none",
+    homeworkChange: homework ? "added" : "none",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// EXAM AI 학생별 학습 기록(student_learning_records, 006 migration). daily_records/
+// exam_scores와 별개 저장소라 기존 출결·과제·단어 통계를 오염시키지 않는다.
+// Postgres 전용(Notion 미러 없음).
+// ---------------------------------------------------------------------------
+export type LearningRecordType =
+  | "assessment"
+  | "vocab"
+  | "homework"
+  | "memorization"
+  | "retest"
+  | "attitude"
+  | "makeup"
+  | "followup"
+  | "memo";
+
+export type NewLearningRecord = {
+  studentId: string;
+  classId: string | null;
+  date: string;
+  period: string | null;
+  recordType: LearningRecordType;
+  assessmentName?: string | null;
+  score?: number | null;
+  maxScore?: number | null;
+  passed?: boolean | null;
+  retestRequired?: boolean | null;
+  completed?: boolean | null;
+  note?: string | null;
+  followUp?: string | null;
+  enteredBy?: string;
+  rawText?: string;
+  inputHash: string;
+  interpretation?: Record<string, unknown>;
+};
+
+// 같은 입력 재전송이면 기존 행을 돌려주고(duplicate) 새로 만들지 않는다.
+export async function saveStudentLearningRecord(
+  input: NewLearningRecord
+): Promise<{ status: "created" | "duplicate"; id: string; taskId: string | null }> {
+  if (getDbProvider() !== "postgres") throw new Error("학생 학습 기록은 Postgres 모드에서만 지원합니다.");
+  const dup = await pgFindByExactColumn("STUDENT_LEARNING_RECORD", "input_hash", input.inputHash);
+  if (dup) return { status: "duplicate", id: dup.id as string, taskId: (dup.task_id as string | null) ?? null };
+
+  const [studentPgId, classPgId] = await Promise.all([
+    pgResolveRelationId("STUDENT", input.studentId),
+    input.classId ? pgResolveRelationId("CLASS", input.classId) : Promise.resolve(null),
+  ]);
+  if (!studentPgId) throw new Error("학생을 찾을 수 없습니다.");
+  let classProgressId: string | null = null;
+  if (classPgId) {
+    const rows = await pgQueryRaw(
+      "CLASS_PROGRESS",
+      `class_id=eq.${classPgId}&record_date=eq.${input.date}&${input.period ? `period=eq.${encodeURIComponent(input.period)}` : "period=is.null"}`
+    );
+    classProgressId = (rows.filter(pgNotArchived)[0]?.id as string | undefined) ?? null;
+  }
+  try {
+    const row = await pgInsertRow("STUDENT_LEARNING_RECORD", {
+      student_id: studentPgId,
+      student_notion_ids: [input.studentId],
+      class_id: classPgId,
+      class_notion_ids: input.classId ? [input.classId] : [],
+      class_progress_id: classProgressId,
+      record_date: input.date,
+      period: input.period,
+      record_type: input.recordType,
+      assessment_name: input.assessmentName ?? null,
+      score: input.score ?? null,
+      max_score: input.maxScore ?? null,
+      passed: input.passed ?? null,
+      retest_required: input.retestRequired ?? null,
+      completed: input.completed ?? null,
+      note: input.note ?? null,
+      follow_up: input.followUp ?? null,
+      entered_by: input.enteredBy ?? null,
+      raw_text: input.rawText ?? null,
+      input_hash: input.inputHash,
+      source_payload: { origin: "exam_ai", interpretation: input.interpretation ?? {} },
+    });
+    return { status: "created", id: row.id, taskId: null };
+  } catch (err) {
+    // 동시 재전송으로 유니크 인덱스(branch_id,input_hash)에 걸린 경우 — 먼저 들어간 행을 돌려준다.
+    const again = await pgFindByExactColumn("STUDENT_LEARNING_RECORD", "input_hash", input.inputHash).catch(() => null);
+    if (again) return { status: "duplicate", id: again.id as string, taskId: (again.task_id as string | null) ?? null };
+    throw err;
+  }
+}
+
+// 학생 기록 ↔ 후속 업무 양방향 연결: 기록.task_id = 업무 pg id(업무 쪽은
+// createTasks가 workflow.sourceRecordId로 이미 기록).
+export async function linkLearningRecordTask(recordId: string, taskPgId: string): Promise<void> {
+  await pgPatchById("STUDENT_LEARNING_RECORD", recordId, { task_id: taskPgId });
+}
+
+// 조회용(향후 "김민수 최근 기록", "이번 주 88점 미만" 등). 필터는 전부 인덱스 컬럼.
+export async function listStudentLearningRecords(filter: {
+  studentId?: string;
+  classId?: string;
+  from?: string;
+  to?: string;
+  recordType?: LearningRecordType;
+}): Promise<Record<string, unknown>[]> {
+  if (getDbProvider() !== "postgres") return [];
+  const parts: string[] = [];
+  if (filter.studentId) parts.push(`student_notion_ids=cs.{${encodeURIComponent(filter.studentId)}}`);
+  if (filter.classId) parts.push(`class_notion_ids=cs.{${encodeURIComponent(filter.classId)}}`);
+  if (filter.from) parts.push(`record_date=gte.${filter.from}`);
+  if (filter.to) parts.push(`record_date=lte.${filter.to}`);
+  if (filter.recordType) parts.push(`record_type=eq.${filter.recordType}`);
+  const rows = await pgQueryRaw("STUDENT_LEARNING_RECORD", parts.join("&") || "id=not.is.null");
+  return rows.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
 }
 
 // 그 반·그 날짜에 이미 저장된 교시 목록("1교시" 등) — EXAM AI 반 진도 입력이
@@ -6963,6 +7153,7 @@ export async function createTasks(
       const poolFlag = !direct;
       const workflow: TaskWorkflow = {
         ...(input.createdBy ? { createdBy: input.createdBy } : {}),
+        ...(input.sourceRecordId ? { sourceRecordId: input.sourceRecordId } : {}),
         ...(poolFlag ? { pooledAt: nowIso } : {}),
         ...(route.assigned
           ? { assignedVia: direct ? "direct" : "auto", assignedAt: nowIso, assignReason: route.reason }

@@ -10,7 +10,13 @@ import {
   getAttendanceOnDate,
   saveClassProgressFromText,
   listClassProgressPeriods,
+  saveStudentLearningRecord,
+  linkLearningRecordTask,
+  type ProgressEditMode,
+  type LineChange,
+  type LearningRecordType,
 } from "@/lib/notion";
+import { createHash } from "crypto";
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
 import { TASK_TYPE_LABELS, TASK_TYPE_LABEL_LIST, taskTypeFromLabel, type NewTaskInput } from "@/lib/tasks";
@@ -495,7 +501,13 @@ export type UnifiedOutcome = {
   // 실행에 꼭 필요한 정보가 부족할 때 — 화면이 이 값을 보관했다가 다음 답변과
   // 함께 /api/ai-input { pending }으로 돌려보낸다(continuePendingInput).
   pending?: PendingAction;
+  // 이 결과가 확정한 반/날짜/교시 — 화면이 다음 입력의 반 문맥으로 재사용한다.
+  context?: ClassContext;
 };
+
+// 직전 입력의 반 문맥(화면이 보관했다가 다음 요청에 함께 보낸다). 같은 날짜일 때만
+// 쓰고, 학생이 그 반 소속이 아니면 쓰지 않는다(다른 반에 잘못 기록 방지).
+export type ClassContext = { classId: string; className: string; date: string; period: string };
 
 // ---------------------------------------------------------------------------
 // 대화형 보완(pending action). 무거운 대화 세션 없이, 이미 구조화한 draft와
@@ -519,6 +531,34 @@ export type ClassProgressDraft = {
   progress: string;
   homework: string;
   period: string;
+  mode?: ProgressEditMode;
+  enteredBy?: string;
+  rawText?: string;
+};
+export type StudentRecordDraft = {
+  kind: "student_record";
+  studentName: string;
+  studentId: string | null;
+  className: string;
+  classId: string | null;
+  // 반이 직전 입력 문맥에서 온 것이면, 학생이 그 반 소속이 아닐 때 추측하지 않고 버린다.
+  classFromContext?: boolean;
+  date: string;
+  period: string;
+  recordType: LearningRecordType;
+  assessmentName: string;
+  score: number | null;
+  maxScore: number | null;
+  passed: boolean | null;
+  retestRequired: boolean | null;
+  completed: boolean | null;
+  note: string;
+  followUp: string;
+  actionRequested: boolean;
+  taskType: string;
+  instruction: string;
+  enteredBy?: string;
+  rawText: string;
 };
 export type TaskDraft = {
   kind: "task";
@@ -538,7 +578,8 @@ export type TaskDraft = {
   ownerToPool?: boolean;
   createdBy?: string;
 };
-export type PendingAction = { draft: ClassProgressDraft | TaskDraft; missing: MissingInfo[]; question: string; attempts: number };
+export type AnyDraft = ClassProgressDraft | TaskDraft | StudentRecordDraft;
+export type PendingAction = { draft: AnyDraft; missing: MissingInfo[]; question: string; attempts: number };
 
 type Roster = Awaited<ReturnType<typeof getNlRoster>>;
 const POOL_ANSWER = /업무풀|풀로|아무나|미지정|없음/;
@@ -546,7 +587,7 @@ const norm = (v: string) => v.replace(/\s+/g, "").toLowerCase();
 
 // draft를 보고 비어있는 필수 항목을 채울 수 있으면 채우고(결정론적 매칭),
 // 그래도 비어있는 것만 missing으로 돌려준다.
-async function checkDraft(draft: ClassProgressDraft | TaskDraft, roster: Roster): Promise<MissingInfo[]> {
+async function checkDraft(draft: AnyDraft, roster: Roster): Promise<MissingInfo[]> {
   const missing: MissingInfo[] = [];
   if (draft.kind === "class_progress") {
     if (!draft.classId) {
@@ -593,6 +634,8 @@ async function checkDraft(draft: ClassProgressDraft | TaskDraft, roster: Roster)
     }
     return missing;
   }
+
+  if (draft.kind === "student_record") return checkStudentRecordDraft(draft, roster);
 
   if (!taskTypeFromLabel(draft.taskType)) {
     missing.push({ key: "taskType", field: "taskType", question: `어떤 작업인가요? (예: ${TASK_TYPE_LABEL_LIST.slice(0, 6).join(", ")} …)` });
@@ -646,6 +689,107 @@ function scheduledPeriods(classId: string, date: string, roster: Roster): string
     .sort((a, b) => parseInt(a) - parseInt(b));
 }
 
+// 직전 입력 반 문맥은 같은 날짜 + 지금도 존재하는 반일 때만 쓴다.
+function usableContext(ctx: ClassContext | null | undefined, date: string, roster: Roster): ClassContext | null {
+  if (!ctx || !ctx.classId || ctx.date !== date) return null;
+  return roster.classes.some((c) => c.id === ctx.classId) ? ctx : null;
+}
+
+function studentInClass(studentId: string, classId: string, roster: Roster): boolean {
+  const cls = roster.classes.find((c) => c.id === classId);
+  const st = roster.students.find((x) => x.id === studentId);
+  return !!cls?.studentIds.includes(studentId) || !!st?.classIds?.includes(classId);
+}
+
+function classIdsOfStudent(studentId: string, roster: Roster): string[] {
+  const st = roster.students.find((x) => x.id === studentId);
+  const ids = new Set<string>(st?.classIds ?? []);
+  for (const c of roster.classes) if (c.studentIds.includes(studentId)) ids.add(c.id);
+  return Array.from(ids).filter((id) => roster.classes.some((c) => c.id === id));
+}
+
+// 학생 기록: 반(명시) → 학생 → 반(학생 소속) 순으로 확정. 학생 A 기록이 학생 B에게
+// 가지 않도록 동명이인·반 불일치는 추측하지 않고 되묻는다. 명단에 없는 학생은 만들지 않는다.
+function checkStudentRecordDraft(draft: StudentRecordDraft, roster: Roster): MissingInfo[] {
+  const missing: MissingInfo[] = [];
+  const classNameById = new Map(roster.classes.map((c) => [c.id, stripClassSuffix(c.name)]));
+  if (!draft.classId && draft.className) {
+    const found = resolveClassCandidates(draft.className, roster.classes);
+    if (found.length === 1) {
+      draft.classId = found[0].id;
+      draft.className = found[0].name;
+    } else {
+      missing.push({
+        key: "class",
+        field: "class",
+        question: found.length > 1 ? `"${draft.className}"에 해당하는 반이 여러 개입니다. 어느 반인가요?` : `"${draft.className}" 반을 찾지 못했습니다. 어느 반인가요?`,
+        candidates: found.length > 1 ? found.map((c) => ({ id: c.id, label: c.name })) : undefined,
+      });
+      return missing;
+    }
+  }
+
+  if (!draft.studentId) {
+    const active = roster.students.filter((x) => x.status === "재원" || !x.status);
+    const name = draft.studentName.trim();
+    const exact = active.filter((x) => x.name === name);
+    let cands = exact.length > 0 ? exact : active.filter((x) => !!name && (x.name.includes(name) || name.includes(x.name)));
+    if (draft.classId) {
+      const inClass = cands.filter((x) => studentInClass(x.id, draft.classId!, roster));
+      if (inClass.length > 0) cands = inClass;
+      else if (draft.classFromContext) {
+        // 직전 입력의 반 문맥은 추측일 뿐 — 그 반 학생이 아니면 문맥을 버리고 학생 소속 반으로 판단한다.
+        draft.classId = null;
+        draft.className = "";
+        draft.period = "";
+        draft.classFromContext = false;
+      }
+    }
+    if (cands.length > 1) {
+      const narrowed = narrowCandidates(draft.rawText, cands, classNameById);
+      if (narrowed.length >= 1) cands = narrowed;
+    }
+    if (cands.length === 1 && (!draft.classId || studentInClass(cands[0].id, draft.classId, roster))) {
+      draft.studentId = cands[0].id;
+      draft.studentName = cands[0].name;
+    } else if (cands.length === 1) {
+      missing.push({
+        key: "student",
+        field: "student",
+        ref: name,
+        question: `${cands[0].name} 학생은 ${draft.className} 소속이 아닙니다(${candidateLabel(cands[0], classNameById)}). 이 학생이 맞나요?`,
+        candidates: [{ id: cands[0].id, label: candidateLabel(cands[0], classNameById) }],
+      });
+    } else if (cands.length > 1) {
+      missing.push({
+        key: "student",
+        field: "student",
+        ref: name,
+        question: `${name} 학생이 여러 명입니다(${cands.map((c) => candidateLabel(c, classNameById)).join(" / ")}). 어느 학생인가요?`,
+        candidates: cands.map((c) => ({ id: c.id, label: candidateLabel(c, classNameById) })),
+      });
+    } else {
+      missing.push({ key: "student", field: "student", ref: name, question: `명단에서 "${name}" 학생을 찾지 못했습니다. 학생 이름을 다시 알려주세요.` });
+    }
+  }
+
+  if (draft.studentId && !draft.classId) {
+    const ids = classIdsOfStudent(draft.studentId, roster);
+    if (ids.length === 1) {
+      draft.classId = ids[0];
+      draft.className = classNameById.get(ids[0]) ?? "";
+    } else if (ids.length > 1) {
+      missing.push({
+        key: "class",
+        field: "class",
+        question: `${draft.studentName} 학생이 여러 반에 있습니다. 어느 반 수업 기록인가요?`,
+        candidates: ids.map((id) => ({ id, label: classNameById.get(id) ?? id })),
+      });
+    }
+  }
+  return missing;
+}
+
 function staffCandidates(name: string, staff: { id: string; name: string; role?: string | null }[]): Choice[] {
   const n = name.trim().replace(/(쌤|선생님|조교님|조교|님)$/, "");
   return staff
@@ -653,22 +797,22 @@ function staffCandidates(name: string, staff: { id: string; name: string; role?:
     .map((s) => ({ id: s.id, label: `${s.name}${s.role ? ` (${s.role})` : ""}` }));
 }
 
-function buildQuestion(draft: ClassProgressDraft | TaskDraft, missing: MissingInfo[]): string {
+function buildQuestion(draft: AnyDraft, missing: MissingInfo[]): string {
   const prefix =
     draft.kind === "class_progress" && draft.progress && missing.every((m) => m.field !== "content")
       ? `오늘 진도는 "${draft.progress}"(으)로 확인했습니다. `
       : "";
   if (missing.length === 1) return prefix + missing[0].question;
-  const what = draft.kind === "class_progress" ? "진도를 저장하려면" : "업무를 등록하려면";
+  const what = draft.kind === "class_progress" ? "진도를 저장하려면" : draft.kind === "student_record" ? "학생 기록을 저장하려면" : "업무를 등록하려면";
   const marks = ["①", "②", "③", "④", "⑤"];
   return `${prefix}${what} ${missing.length}가지 정보가 더 필요합니다.\n${missing.map((m, i) => `${marks[i] ?? `${i + 1}.`} ${m.question}`).join("\n")}`;
 }
 
-function pendingOutcome(draft: ClassProgressDraft | TaskDraft, missing: MissingInfo[], attempts: number, note = ""): UnifiedOutcome {
+function pendingOutcome(draft: AnyDraft, missing: MissingInfo[], attempts: number, note = ""): UnifiedOutcome {
   const question = buildQuestion(draft, missing);
   return {
     route: draft.kind,
-    label: draft.kind === "class_progress" ? draft.className || "반 진도" : draft.taskType || "업무",
+    label: draft.kind === "class_progress" ? draft.className || "반 진도" : draft.kind === "student_record" ? draft.studentName || "학생 기록" : draft.taskType || "업무",
     status: "확인필요",
     message: note ? `${note}\n${question}` : question,
     pending: { draft, missing, question, attempts },
@@ -676,7 +820,7 @@ function pendingOutcome(draft: ClassProgressDraft | TaskDraft, missing: MissingI
 }
 
 // 답변 값 하나를 missing 항목 하나에 적용한다. 적용됐으면 true.
-function applyValue(draft: ClassProgressDraft | TaskDraft, m: MissingInfo, value: string, roster: Roster, choiceId?: string): boolean {
+function applyValue(draft: AnyDraft, m: MissingInfo, value: string, roster: Roster, choiceId?: string): boolean {
   const v = value.trim();
   const pick = (cands: Choice[] | undefined): Choice | null => {
     if (!cands || cands.length === 0) return null;
@@ -687,7 +831,7 @@ function applyValue(draft: ClassProgressDraft | TaskDraft, m: MissingInfo, value
   if (!v && !choiceId) return false;
   switch (m.field) {
     case "class": {
-      if (draft.kind !== "class_progress") return false;
+      if (draft.kind !== "class_progress" && draft.kind !== "student_record") return false;
       const chosen = pick(m.candidates);
       const found = chosen ? [{ id: chosen.id, name: chosen.label }] : resolveClassCandidates(v, roster.classes);
       const inCands = m.candidates ? found.filter((f) => m.candidates!.some((c) => c.id === f.id)) : found;
@@ -695,6 +839,7 @@ function applyValue(draft: ClassProgressDraft | TaskDraft, m: MissingInfo, value
       if (final.length !== 1) return false;
       draft.classId = final[0].id;
       draft.className = final[0].name;
+      if (draft.kind === "student_record") draft.classFromContext = false;
       return true;
     }
     case "content": {
@@ -718,6 +863,26 @@ function applyValue(draft: ClassProgressDraft | TaskDraft, m: MissingInfo, value
       return true;
     }
     case "student": {
+      if (draft.kind === "student_record") {
+        let chosen = pick(m.candidates);
+        if (!chosen && m.candidates) {
+          const infos = roster.students.filter((st) => m.candidates!.some((c) => c.id === st.id));
+          const classNameById = new Map(roster.classes.map((c) => [c.id, stripClassSuffix(c.name)]));
+          const narrowed = narrowCandidates(v, infos, classNameById);
+          if (narrowed.length === 1) chosen = m.candidates.find((c) => c.id === narrowed[0].id) ?? null;
+        }
+        if (chosen) {
+          draft.studentId = chosen.id;
+          draft.studentName = roster.students.find((st) => st.id === chosen!.id)?.name ?? draft.studentName;
+          return true;
+        }
+        // 명단에서 못 찾아 이름을 다시 받은 경우 — 새 이름으로 다시 확정 시도(checkDraft).
+        if (!m.candidates && v) {
+          draft.studentName = v;
+          return true;
+        }
+        return false;
+      }
       if (draft.kind !== "task") return false;
       const idx = draft.ambiguous.findIndex((a) => a.name === m.ref);
       if (idx < 0) return false;
@@ -787,16 +952,18 @@ async function createTaskOutcomes(
   taskInputs: { input: NewTaskInput; label: string }[],
   roster: Roster,
   studentNames: Map<string, string>
-): Promise<{ outcomes: UnifiedOutcome[]; slackTasks: SlackTask[] }> {
+): Promise<{ outcomes: UnifiedOutcome[]; slackTasks: SlackTask[]; createdIds: string[] }> {
   const outcomes: UnifiedOutcome[] = [];
   const slackTasks: SlackTask[] = [];
-  if (taskInputs.length === 0) return { outcomes, slackTasks };
+  const createdIds: string[] = [];
+  if (taskInputs.length === 0) return { outcomes, slackTasks, createdIds };
   mark("unified:before_createTasks_write");
   try {
     const created = await createTasks(taskInputs.map((t) => t.input), { staff: roster.staff, classes: roster.classes, studentNames });
     mark("unified:after_createTasks_write");
     const staffNameById = new Map(roster.staff.map((st) => [st.id, st.name]));
     created.forEach((c, i) => {
+      createdIds.push(c.id);
       outcomes.push({
         route: "task",
         label: taskInputs[i].label,
@@ -819,11 +986,135 @@ async function createTaskOutcomes(
     const message = err instanceof Error ? err.message : "업무 저장 중 오류가 발생했습니다.";
     taskInputs.forEach((t) => outcomes.push({ route: "task", label: t.label, status: "실패", message }));
   }
-  return { outcomes, slackTasks };
+  return { outcomes, slackTasks, createdIds };
+}
+
+const RECORD_TYPE_LABEL: Record<LearningRecordType, string> = {
+  assessment: "시험",
+  vocab: "단어시험",
+  homework: "과제",
+  memorization: "암기",
+  retest: "재시험",
+  attitude: "태도/특이사항",
+  makeup: "보강 필요",
+  followup: "추가 확인",
+  memo: "메모",
+};
+const DEFAULT_FOLLOWUP_TASK: Partial<Record<LearningRecordType, string>> = {
+  homework: "숙제확인",
+  memorization: "암기확인",
+  vocab: "단어재시",
+  assessment: "재시험",
+  retest: "재시험",
+};
+
+export function describeLearningRecord(d: StudentRecordDraft): string {
+  const parts = [d.assessmentName || RECORD_TYPE_LABEL[d.recordType]];
+  if (d.score !== null && d.score !== undefined) parts.push(d.maxScore ? `${d.score}/${d.maxScore}` : `${d.score}점`);
+  if (d.passed === true) parts.push("통과");
+  if (d.passed === false) parts.push("미통과");
+  if (d.completed === true) parts.push("완료");
+  if (d.completed === false) parts.push("미완료");
+  if (d.retestRequired) parts.push("재시험 필요");
+  if (d.note) parts.push(d.note);
+  if (d.followUp) parts.push(`후속: ${d.followUp}`);
+  return parts.join(" · ");
+}
+
+// 재전송 중복 방지 키 — 같은 날짜·교시·학생·유형·시험명·점수·결과 + 같은 원문일 때만
+// 같다. 다른 수업/다른 입력에서 같은 학생에게 같은 유형 기록이 또 생기는 건 정상 기록된다.
+export function learningInputHash(d: StudentRecordDraft): string {
+  const key = [
+    d.date,
+    d.period,
+    d.studentId,
+    d.recordType,
+    norm(d.assessmentName),
+    d.score ?? "",
+    d.passed ?? "",
+    d.completed ?? "",
+    d.retestRequired ?? "",
+    norm(d.rawText),
+  ].join("|");
+  return createHash("sha256").update(key).digest("hex");
+}
+
+// 학생 기록 저장 → (행동 지시가 있을 때만) 후속 업무 생성 → 기록↔업무 연결.
+// 기록 저장이 실패하면 업무를 만들지 않는다. 중복 입력이면 기록도 업무도 새로 만들지 않는다.
+async function saveStudentRecordOutcome(
+  d: StudentRecordDraft,
+  roster: Roster,
+  studentNames: Map<string, string>,
+  today: string
+): Promise<{ outcomes: UnifiedOutcome[]; slackTasks: SlackTask[]; taskKeys: string[] }> {
+  const where = d.className ? ` (${d.className}${d.period ? ` ${d.period}` : ""})` : "";
+  const desc = describeLearningRecord(d);
+  const label = `${d.studentName}${where}`;
+  const context: ClassContext | undefined = d.classId ? { classId: d.classId, className: d.className, date: d.date, period: d.period } : undefined;
+  const typeLabel = RECORD_TYPE_LABEL[d.recordType];
+  const saved = await saveStudentLearningRecord({
+    studentId: d.studentId as string,
+    classId: d.classId,
+    date: d.date,
+    period: d.period || null,
+    recordType: d.recordType,
+    assessmentName: d.assessmentName || null,
+    score: d.score,
+    maxScore: d.maxScore,
+    passed: d.passed,
+    retestRequired: d.retestRequired,
+    completed: d.completed,
+    note: d.note || null,
+    followUp: d.followUp || null,
+    enteredBy: d.enteredBy,
+    rawText: d.rawText,
+    inputHash: learningInputHash(d),
+    interpretation: { studentName: d.studentName, className: d.className, classFromContext: !!d.classFromContext, actionRequested: d.actionRequested },
+  });
+  if (saved.status === "duplicate") {
+    return {
+      outcomes: [{ route: "student_record", label, status: "완료", message: `${label} ${typeLabel}: 이미 기록된 입력입니다(중복 — 새로 저장하지 않음)`, context }],
+      slackTasks: [],
+      taskKeys: [],
+    };
+  }
+  const outcomes: UnifiedOutcome[] = [
+    { route: "student_record", label, status: "완료", message: `${label} ${typeLabel} 기록: ${desc}`, context },
+  ];
+  if (!d.actionRequested) return { outcomes, slackTasks: [], taskKeys: [] };
+
+  const taskLabel = taskTypeFromLabel(d.taskType) ? d.taskType : DEFAULT_FOLLOWUP_TASK[d.recordType] ?? "기타업무";
+  const type = taskTypeFromLabel(taskLabel)!;
+  const t = {
+    input: {
+      type,
+      studentId: d.studentId,
+      classIds: d.classId ? [d.classId] : undefined,
+      content: [d.instruction, desc].filter(Boolean).join(" / "),
+      date: today,
+      time: "",
+      createdBy: d.enteredBy,
+      sourceRecordId: saved.id,
+    } as NewTaskInput,
+    label: `${taskLabel} · ${d.studentName}`,
+  };
+  const created = await createTaskOutcomes([t], roster, studentNames);
+  if (created.createdIds[0]) {
+    try {
+      await linkLearningRecordTask(saved.id, created.createdIds[0]);
+    } catch (err) {
+      console.error("[exam-ai] linkLearningRecordTask failed", { recordId: saved.id, message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return {
+    outcomes: [...outcomes, ...created.outcomes.map((o) => ({ ...o, message: `후속 ${o.message}` }))],
+    slackTasks: created.slackTasks,
+    taskKeys: created.createdIds.length > 0 ? [`${d.studentId}|${type}`] : [],
+  };
 }
 
 async function executeDraft(
-  draft: ClassProgressDraft | TaskDraft,
+  draft: AnyDraft,
   roster: Roster,
   studentNames: Map<string, string>,
   today: string
@@ -837,10 +1128,17 @@ async function executeDraft(
           progress: draft.progress,
           homework: draft.homework,
           period: draft.period,
+          mode: draft.mode,
+          enteredBy: draft.enteredBy,
+          rawText: draft.rawText,
         }),
       ],
       slackTasks: [],
     };
+  }
+  if (draft.kind === "student_record") {
+    const r = await saveStudentRecordOutcome(draft, roster, studentNames, today);
+    return { outcomes: r.outcomes, slackTasks: r.slackTasks };
   }
   const t = taskInputFromDraft(draft, today);
   if (!t) return { outcomes: [{ route: "task", label: draft.taskType, status: "실패", message: "업무 유형을 확인할 수 없습니다." }], slackTasks: [] };
@@ -852,7 +1150,7 @@ export async function continuePendingInput(
   pending: PendingAction,
   answer: string,
   opts: { choiceId?: string } = {}
-): Promise<{ ok: boolean; outcomes: UnifiedOutcome[]; tasks: SlackTask[] }> {
+): Promise<{ ok: boolean; outcomes: UnifiedOutcome[]; tasks: SlackTask[]; context?: ClassContext }> {
   const today = todayKST();
   const roster = await getNlRoster();
   const studentNames = new Map(roster.students.map((st) => [st.id, st.name]));
@@ -891,7 +1189,12 @@ export async function continuePendingInput(
     return { ok: false, outcomes: [pendingOutcome(draft, remaining, attempts, note)], tasks: [] };
   }
   const { outcomes, slackTasks } = await executeDraft(draft, roster, studentNames, today);
-  return { ok: outcomes.every((o) => o.status !== "실패"), outcomes, tasks: slackTasks };
+  return {
+    ok: outcomes.every((o) => o.status !== "실패"),
+    outcomes,
+    tasks: slackTasks,
+    context: [...outcomes].reverse().find((o) => o.context)?.context,
+  };
 }
 
 // class_progress 전용 반 매칭. 띄어쓰기를 무시하고 정확 일치 → 부분 일치 순으로
@@ -914,22 +1217,42 @@ export function resolveClassCandidates(className: string | undefined, classes: {
   return partial.filter((c) => score(c) === best);
 }
 
-// 반 진도/과제 저장 + 화면 표시용 결과 문구(선택 후 재요청 경로도 같이 쓴다).
+// 반 진도/과제 저장 + 화면 표시용 결과 문구(되묻기 후 재요청 경로도 같이 쓴다).
+const CHANGE_LABEL: Record<LineChange, string> = {
+  added: "추가",
+  duplicate: "이미 기록된 내용(변경 없음)",
+  replaced: "수정",
+  deleted: "삭제",
+  notfound: "지울 내용 없음",
+  none: "",
+};
 export async function saveClassProgressOutcome(input: {
   classId: string;
   date: string;
   progress: string;
   homework: string;
   period?: string;
+  mode?: ProgressEditMode;
+  enteredBy?: string;
+  rawText?: string;
 }): Promise<UnifiedOutcome> {
   const saved = await saveClassProgressFromText({ ...input, period: input.period || null });
-  const lines = [
-    `${saved.className}${input.period ? ` ${input.period}` : ""}`,
-    `${input.date === todayKST() ? "오늘" : input.date} 진도: ${saved.progress || "-"}`,
-    `과제: ${saved.homework || "-"}`,
-    saved.mode === "updated" ? "기존 수업기록에 반영 완료" : "저장 완료",
-  ];
-  return { route: "class_progress", label: saved.className, status: "완료", message: lines.join("\n") };
+  const header = `${saved.className}${input.period ? ` ${input.period}` : ""}`;
+  const multi = (v: string) => (v ? v.split("\n").join(" / ") : "-");
+  const changes = [
+    saved.progressChange !== "none" ? `진도 ${CHANGE_LABEL[saved.progressChange]}` : "",
+    saved.homeworkChange !== "none" ? `과제 ${CHANGE_LABEL[saved.homeworkChange]}` : "",
+  ].filter(Boolean);
+  const status =
+    saved.mode === "created" ? "저장 완료" : saved.mode === "unchanged" ? "이미 기록된 내용입니다(변경 없음)" : `기존 수업기록에 반영 완료(${changes.join(", ")})`;
+  const lines = [header, `${input.date === todayKST() ? "오늘" : input.date} 진도: ${multi(saved.progress)}`, `과제: ${multi(saved.homework)}`, status];
+  return {
+    route: "class_progress",
+    label: header,
+    status: "완료",
+    message: lines.join("\n"),
+    context: { classId: input.classId, className: saved.className, date: input.date, period: input.period ?? "" },
+  };
 }
 
 // "민지" → "김민지"처럼 직원 이름을 찾는다. 정확 일치 우선, 아니면 부분 일치가
@@ -971,11 +1294,12 @@ function resolveNamesForIntent(
 
 export async function runUnifiedNlInput(
   text: string,
-  opts: { staffName?: string } = {}
+  opts: { staffName?: string; context?: ClassContext | null } = {}
 ): Promise<{
   ok: boolean;
   outcomes: UnifiedOutcome[];
   tasks: { typeLabel: string; studentName: string; ownerName: string | null; pool: boolean }[];
+  context?: ClassContext;
 }> {
   mark("unified:start");
   const today = todayKST();
@@ -1014,6 +1338,8 @@ export async function runUnifiedNlInput(
 
   const outcomes: UnifiedOutcome[] = [];
   const taskInputs: { input: NewTaskInput; label: string }[] = [];
+  const recordSlackTasks: SlackTask[] = [];
+  const recordTaskKeys = new Set<string>();
 
   for (const intent of intents) {
     const label = intent.instruction || intent.taskType || intent.route;
@@ -1166,14 +1492,21 @@ export async function runUnifiedNlInput(
           break;
         }
         case "class_progress": {
+          const date = intent.date || today;
+          const ctx = usableContext(opts.context, date, roster);
+          const explicitClass = intent.className?.trim() || "";
           const draft: ClassProgressDraft = {
             kind: "class_progress",
-            className: intent.className?.trim() || "",
-            classId: null,
-            date: intent.date || today,
+            className: explicitClass || ctx?.className || "",
+            // 반 이름이 없으면 직전 입력의 반/교시를 이어 쓴다("추가로 관계대명사 진행").
+            classId: explicitClass ? null : ctx?.classId ?? null,
+            date,
             progress: intent.progress?.trim() || "",
             homework: intent.homework?.trim() || "",
-            period: normalizePeriod(intent.period),
+            period: normalizePeriod(intent.period) || (!explicitClass && ctx ? ctx.period : ""),
+            mode: intent.editMode === "replace" || intent.editMode === "delete" ? intent.editMode : "append",
+            enteredBy: opts.staffName,
+            rawText: text,
           };
           const missing = await checkDraft(draft, roster);
           if (missing.length > 0) {
@@ -1181,6 +1514,66 @@ export async function runUnifiedNlInput(
             break;
           }
           outcomes.push(...(await executeDraft(draft, roster, studentNames, today)).outcomes);
+          break;
+        }
+        case "student_record": {
+          const names = (intent.students ?? []).map((n) => n?.trim()).filter((n): n is string => !!n);
+          if (names.length === 0) {
+            outcomes.push({ route: "student_record", label, status: "실패", message: `학생 이름을 찾지 못해 기록하지 않았습니다: ${intent.instruction || text}` });
+            break;
+          }
+          const date = intent.date || today;
+          const ctx = usableContext(opts.context, date, roster);
+          const explicitClass = intent.className?.trim() || "";
+          const recordType = (Object.keys(RECORD_TYPE_LABEL) as LearningRecordType[]).includes(intent.recordType as LearningRecordType)
+            ? (intent.recordType as LearningRecordType)
+            : "memo";
+          // 학생마다 따로 기록한다(여러 학생이 한 intent에 묶여 와도 한 명도 빠뜨리지 않는다).
+          for (const name of names) {
+            const draft: StudentRecordDraft = {
+              kind: "student_record",
+              studentName: name,
+              studentId: null,
+              className: explicitClass || ctx?.className || "",
+              classId: explicitClass ? null : ctx?.classId ?? null,
+              classFromContext: !explicitClass && !!ctx,
+              date,
+              period: normalizePeriod(intent.period) || (!explicitClass && ctx ? ctx.period : ""),
+              recordType,
+              assessmentName: intent.assessmentName?.trim() || "",
+              score: typeof intent.score === "number" && Number.isFinite(intent.score) ? intent.score : null,
+              maxScore: typeof intent.maxScore === "number" && intent.maxScore > 0 ? intent.maxScore : null,
+              passed: typeof intent.passed === "boolean" ? intent.passed : null,
+              retestRequired: typeof intent.retestRequired === "boolean" ? intent.retestRequired : null,
+              completed: typeof intent.completed === "boolean" ? intent.completed : null,
+              note: intent.note?.trim() || "",
+              followUp: intent.followUp?.trim() || "",
+              actionRequested: intent.actionRequested === true,
+              taskType: intent.taskType ?? "",
+              instruction: intent.instruction ?? "",
+              enteredBy: opts.staffName,
+              rawText: text,
+            };
+            const missing = await checkDraft(draft, roster);
+            if (missing.length > 0) {
+              outcomes.push(pendingOutcome(draft, missing, 0));
+              continue;
+            }
+            try {
+              const r = await saveStudentRecordOutcome(draft, roster, studentNames, today);
+              outcomes.push(...r.outcomes);
+              recordSlackTasks.push(...r.slackTasks);
+              r.taskKeys.forEach((k) => recordTaskKeys.add(k));
+            } catch (err) {
+              // 학생 기록 저장 실패 — 후속 업무도 만들지 않는다(saveStudentRecordOutcome이 기록 먼저 저장).
+              outcomes.push({
+                route: "student_record",
+                label: name,
+                status: "실패",
+                message: `${name} 학생 기록 저장 실패: ${err instanceof Error ? err.message : "오류"}`,
+              });
+            }
+          }
           break;
         }
         default: {
@@ -1192,10 +1585,17 @@ export async function runUnifiedNlInput(
     }
   }
 
-  const created = await createTaskOutcomes(taskInputs, roster, studentNames);
+  // AI가 학생 기록의 후속 업무와 같은 업무를 별도 task로 또 뽑은 경우 중복 생성하지 않는다.
+  const dedupedTaskInputs = taskInputs.filter((t) => {
+    const dup = !!t.input.studentId && recordTaskKeys.has(`${t.input.studentId}|${t.input.type}`);
+    if (dup) outcomes.push({ route: "task", label: t.label, status: "완료", message: `업무 생략: ${t.label} — 학생 기록의 후속 업무로 이미 생성됨` });
+    return !dup;
+  });
+  const created = await createTaskOutcomes(dedupedTaskInputs, roster, studentNames);
   outcomes.push(...created.outcomes);
-  const slackTasks = created.slackTasks;
+  const slackTasks = [...recordSlackTasks, ...created.slackTasks];
 
   const ok = outcomes.length > 0 && outcomes.every((o) => o.status !== "실패");
-  return { ok, outcomes, tasks: slackTasks };
+  const lastContext = [...outcomes].reverse().find((o) => o.context)?.context;
+  return { ok, outcomes, tasks: slackTasks, context: lastContext };
 }

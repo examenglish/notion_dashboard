@@ -13,6 +13,15 @@ type CreatedTask = { id: string; typeLabel: string; studentName: string; ownerNa
 // 돌려보낸다 — 화면은 question/missing[].candidates만 읽는다.
 type Pending = { question: string; missing: { candidates?: Candidate[] }[]; [key: string]: unknown };
 type Outcome = { route: string; label: string; status: "완료" | "확인필요" | "실패"; message: string; pending?: Pending };
+// 직전 입력에서 확정된 반/날짜/교시 — 다음 입력에 이어 쓰도록 서버에 함께 보낸다.
+type ClassContext = { classId: string; className: string; date: string; period: string };
+
+function summarize(outcomes: Outcome[]): string {
+  const done = outcomes.filter((o) => o.status === "완료").length;
+  const check = outcomes.filter((o) => o.status === "확인필요").length;
+  const failed = outcomes.filter((o) => o.status === "실패").length;
+  return [`처리 완료 ${done}건`, check ? `확인 필요 ${check}건` : "", failed ? `실패 ${failed}건` : ""].filter(Boolean).join(" · ");
+}
 
 type AiResponse = {
   ok: boolean;
@@ -24,6 +33,7 @@ type AiResponse = {
   tasks?: CreatedTask[];
   warnings?: string[];
   outcomes?: Outcome[];
+  context?: ClassContext | null;
 };
 
 const ROLE_PLACEHOLDER: Record<string, string> = {
@@ -69,6 +79,7 @@ export default function AiUnifiedInput({
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   // 정보가 부족해 되물은 요청들(대화형 보완). 맨 앞 것부터 답변을 받는다.
   const [pendingQueue, setPendingQueue] = useState<Pending[]>([]);
+  const [classContext, setClassContext] = useState<ClassContext | null>(null);
   const currentPending = pendingQueue[0] ?? null;
   const pendingChoices = currentPending?.missing.find((m) => m.candidates && m.candidates.length > 0)?.candidates ?? null;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -91,7 +102,7 @@ export default function AiUnifiedInput({
     const res = await fetch("/api/ai-input", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: currentText, ...opts }),
+      body: JSON.stringify({ text: currentText, ...opts, context: opts.pending ? undefined : classContext }),
     });
     return res.json();
   }
@@ -115,6 +126,7 @@ export default function AiUnifiedInput({
       setCreatedTasks(null);
       const newPending = (data.outcomes ?? []).flatMap((o) => (o.pending ? [o.pending] : []));
       setPendingQueue((cur) => [...(answeredPending ? cur.slice(1) : []), ...newPending]);
+      if (data.context) setClassContext(data.context);
       setOutcomes((data.outcomes ?? []).filter((o) => !o.pending));
       setMessage(null);
       setText("");
@@ -188,6 +200,19 @@ export default function AiUnifiedInput({
     } finally {
       setSaving(false);
     }
+  }
+
+  function renderContext() {
+    if (!classContext) return null;
+    return (
+      <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>
+        반 문맥: {classContext.className}
+        {classContext.period ? ` ${classContext.period}` : ""} ({classContext.date}) — 반 이름 없이 입력하면 이 반 기준으로 기록합니다(소속이 다르면 확인 질문).{" "}
+        <button type="button" className="secondary" style={{ fontSize: 12, padding: "0 6px" }} onClick={() => setClassContext(null)}>
+          해제
+        </button>
+      </p>
+    );
   }
 
   function cancelPending() {
@@ -297,10 +322,11 @@ export default function AiUnifiedInput({
             <button type="button" disabled={saving} onClick={registerAsNew}>새로운 학생으로 등록</button>
           </div>
         )}
+        {renderContext()}
         {renderPending(true)}
         {outcomes && outcomes.length > 0 && (
           <div className={`landing-result ${outcomes.every((outcome) => outcome.status === "완료") ? "landing-result-success" : "landing-result-error"}`} role="status">
-            요청 {outcomes.length}건 처리 결과
+            {summarize(outcomes)}
             <ul>
               {outcomes.map((outcome, index) => (
                 <li key={index} style={{ whiteSpace: "pre-line" }}>
@@ -401,10 +427,11 @@ export default function AiUnifiedInput({
           </div>
         )}
 
+        {renderContext()}
         {renderPending(false)}
         {outcomes && outcomes.length > 0 && (
           <div className={outcomes.every((o) => o.status === "완료") ? "success-box" : "error-text"} style={{ marginTop: 10, textAlign: "left", maxWidth: 480, marginLeft: "auto", marginRight: "auto" }}>
-            요청 {outcomes.length}건 처리 결과
+            {summarize(outcomes)}
             <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
               {outcomes.map((o, i) => (
                 <li key={i} style={{ whiteSpace: "pre-line" }}>

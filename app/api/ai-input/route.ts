@@ -3,7 +3,15 @@ import { resolveRelativeDate } from "@/lib/anthropic";
 import { createPersonalTodo } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
 import { readStaffName, readStaffId } from "@/lib/session";
-import { runNaturalLanguageCommand, runUnifiedNlInput, continuePendingInput, parseSlashCommand, matchToDoListShortcut, type PendingAction } from "@/lib/nl-input";
+import {
+  runNaturalLanguageCommand,
+  runUnifiedNlInput,
+  continuePendingInput,
+  parseSlashCommand,
+  matchToDoListShortcut,
+  type PendingAction,
+  type ClassContext,
+} from "@/lib/nl-input";
 import { notifyTaskAssignments } from "@/lib/slack";
 import { mark } from "@/lib/timing";
 
@@ -35,7 +43,13 @@ export async function POST(req: NextRequest) {
     try {
       const result = await continuePendingInput(pending as PendingAction, text, { choiceId });
       if (result.tasks.length > 0) notifyTaskAssignments(result.tasks);
-      return NextResponse.json({ ok: result.ok, mode: "multi", message: result.outcomes.map((o) => o.message).join("\n"), outcomes: result.outcomes });
+      return NextResponse.json({
+        ok: result.ok,
+        mode: "multi",
+        message: result.outcomes.map((o) => o.message).join("\n"),
+        outcomes: result.outcomes,
+        context: result.context ?? null,
+      });
     } catch (err) {
       console.error("/api/ai-input pending failed", err);
       const message = err instanceof Error ? err.message : "처리 중 오류가 발생했습니다.";
@@ -119,7 +133,14 @@ export async function POST(req: NextRequest) {
     }
 
     mark("route:before_unified");
-    const result = await runUnifiedNlInput(text, { staffName });
+    // 직전 입력의 반 문맥(화면이 보관). 형태가 맞을 때만 쓰고, 실제 사용 여부는
+    // runUnifiedNlInput이 날짜·반 존재·학생 소속으로 다시 검증한다.
+    const rawCtx = body?.context;
+    const context: ClassContext | null =
+      rawCtx && typeof rawCtx.classId === "string" && typeof rawCtx.date === "string"
+        ? { classId: rawCtx.classId, className: String(rawCtx.className ?? ""), date: rawCtx.date, period: String(rawCtx.period ?? "") }
+        : null;
+    const result = await runUnifiedNlInput(text, { staffName, context });
     mark("route:after_unified");
     if (result.tasks.length > 0) notifyTaskAssignments(result.tasks);
     const summary =
@@ -127,7 +148,7 @@ export async function POST(req: NextRequest) {
         ? result.outcomes[0].message
         : result.outcomes.map((o) => `${o.status === "완료" ? "✅" : o.status === "확인필요" ? "❓" : "⚠️"} ${o.message}`).join("\n");
     mark("route:before_response");
-    return NextResponse.json({ ok: result.ok, mode: "multi", message: summary, outcomes: result.outcomes });
+    return NextResponse.json({ ok: result.ok, mode: "multi", message: summary, outcomes: result.outcomes, context: result.context ?? null });
   } catch (err) {
     console.error("/api/ai-input failed", err);
     const message = err instanceof Error ? err.message : "처리 중 오류가 발생했습니다.";

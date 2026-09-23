@@ -373,6 +373,7 @@ export type UnifiedIntentRoute =
   | "student_action"
   | "attendance_check"
   | "class_progress"
+  | "student_record"
   | "clarify";
 
 export type UnifiedIntent = {
@@ -396,6 +397,17 @@ export type UnifiedIntent = {
   progress?: string;
   homework?: string;
   period?: string;
+  editMode?: "append" | "replace" | "delete";
+  recordType?: "assessment" | "vocab" | "homework" | "memorization" | "retest" | "attitude" | "makeup" | "followup" | "memo";
+  assessmentName?: string;
+  score?: number | null;
+  maxScore?: number | null;
+  passed?: boolean | null;
+  retestRequired?: boolean | null;
+  completed?: boolean | null;
+  note?: string;
+  followUp?: string;
+  actionRequested?: boolean;
 };
 
 const UNIFIED_INTENTS_TOOL = (taskTypeLabels: string[]): Anthropic.Tool => ({
@@ -413,9 +425,9 @@ const UNIFIED_INTENTS_TOOL = (taskTypeLabels: string[]): Anthropic.Tool => ({
           properties: {
             route: {
               type: "string",
-              enum: ["task", "admin_inbox", "schedule", "counseling", "student_action", "attendance_check", "class_progress", "clarify"],
+              enum: ["task", "admin_inbox", "schedule", "counseling", "student_action", "attendance_check", "class_progress", "student_record", "clarify"],
               description:
-                "task=업무 생성(아래 taskType 13종 중 하나), admin_inbox=행정실 기록(결석예정/긴급상담요청/신규생문의/기타), schedule=예정된 일정(보강/재시/신입생상담/레벨체크), counseling=이미 진행한 상담 기록, student_action=학생 조치사항 메모, attendance_check=이미 입력된 출결/결석 여부를 조회만 하는 확인 요청(새로 기록하지 않음), class_progress=반 전체의 오늘 수업 진도/과제(숙제) 기록, clarify=위 어디에도 명확히 해당하지 않을 때.",
+                "task=업무 생성(아래 taskType 13종 중 하나), admin_inbox=행정실 기록(결석예정/긴급상담요청/신규생문의/기타), schedule=예정된 일정(보강/재시/신입생상담/레벨체크), counseling=이미 진행한 상담 기록, student_action=학생 조치사항 메모, attendance_check=이미 입력된 출결/결석 여부를 조회만 하는 확인 요청(새로 기록하지 않음), class_progress=반 전체의 오늘 수업 진도/과제(숙제) 기록, student_record=학생 한 명의 학습 결과/상태 기록(시험·단어시험 점수, 과제 완료/미완료, 암기, 재시험, 태도, 보강 필요, 추가 확인, 메모), clarify=위 어디에도 명확히 해당하지 않을 때.",
             },
             taskType: { type: "string", enum: taskTypeLabels, description: "route가 task일 때만. 업무 유형 한글 라벨." },
             inboxType: { type: "string", enum: ["결석예정", "긴급상담요청", "신규생문의", "기타"], description: "route가 admin_inbox일 때만." },
@@ -442,7 +454,29 @@ const UNIFIED_INTENTS_TOOL = (taskTypeLabels: string[]): Anthropic.Tool => ({
             message: { type: "string", description: "route가 clarify일 때만, 무엇이 불명확한지 한국어 설명." },
             progress: { type: "string", description: "route가 class_progress일 때만. 오늘 수업한 진도 내용(예: '3과 본문 1~4번'). 없으면 빈 문자열." },
             homework: { type: "string", description: "route가 class_progress일 때만. 내준 과제/숙제 내용(예: '워크북 22~25쪽'). 없으면 빈 문자열." },
-            period: { type: "string", description: "route가 class_progress일 때만. 문장에 'N교시'(예: 1교시, 2교시)가 있을 때만 그대로 'N교시' 형식으로. 없으면 빈 문자열(추측 금지)." },
+            period: { type: "string", description: "route가 class_progress/student_record일 때. 문장에 'N교시'(예: 1교시, 2교시)가 있을 때만 그대로 'N교시' 형식으로. 없으면 빈 문자열(추측 금지)." },
+            editMode: {
+              type: "string",
+              enum: ["append", "replace", "delete"],
+              description: "route가 class_progress일 때. 기본 append(추가). '수정해/바꿔/잘못 입력했어/이걸로 교체'처럼 기존 내용을 바꾸라는 명시가 있으면 replace, '삭제해/지워'면 delete(progress/homework에 지울 내용). 애매하면 append.",
+            },
+            recordType: {
+              type: "string",
+              enum: ["assessment", "vocab", "homework", "memorization", "retest", "attitude", "makeup", "followup", "memo"],
+              description: "route가 student_record일 때. assessment=시험(단원평가/모의고사 등), vocab=단어시험, homework=과제, memorization=암기(본문/대화문), retest=재시험을 치른 결과, attitude=수업 태도/특이사항, makeup=보강 필요, followup=추가 확인 필요, memo=그 외 일반 메모.",
+            },
+            assessmentName: { type: "string", description: "student_record: 시험/과제/암기 대상 이름(예: '단어시험 3과', '워크북', '본문 암기'). 없으면 빈 문자열." },
+            score: { type: "number", description: "student_record: 점수(예: 84). 없으면 생략." },
+            maxScore: { type: "number", description: "student_record: 만점/문항수(예: '17/20'이면 20). 없으면 생략(시스템이 100점 만점으로 보지 않음)." },
+            passed: { type: "boolean", description: "student_record: '통과/합격'이면 true, '불합격/미통과/재시험'이면 false. 언급 없으면 생략." },
+            retestRequired: { type: "boolean", description: "student_record: 재시험이 필요하다고 했으면 true. 언급 없으면 생략." },
+            completed: { type: "boolean", description: "student_record: 과제/암기/재시험을 '완료/했음'이면 true, '미완료/안 함'이면 false. 해당 없으면 생략." },
+            note: { type: "string", description: "student_record: 특이사항/메모 원문 요약. 없으면 빈 문자열." },
+            followUp: { type: "string", description: "student_record: '다음 시간 재확인'처럼 언급된 후속조치. 없으면 빈 문자열." },
+            actionRequested: {
+              type: "boolean",
+              description: "student_record: 직원에게 행동을 지시하는 표현('확인해줘/확인시켜/재시험 시켜/다음 시간 체크해줘/맡겨')이 있으면 true — 이때 taskType에 알맞은 업무 유형도 넣는다. 단순 상태 기록('미완료', '다음 시간 재확인' 메모)은 false.",
+            },
           },
           required: ["route", "students", "instruction"],
         },
@@ -476,6 +510,8 @@ intent 분리 예시:
 - 학생 이름은 재원생 명단과 최대한 정확히 일치시킨다. 명단에 없어도 clarify를 쓰지 말고 문장 그대로 students에 넣는다(신입생일 수 있음 — 이후 처리는 시스템이 담당).
 - 문장 전체가 어디에도 해당하지 않을 때만 그 부분을 route:"clarify"로 남긴다(문장 전체를 통째로 포기하지 말고, 해석 가능한 다른 부분은 정상 분류한다).
 - route:"class_progress"는 반 이름 + 그 반의 오늘 수업 진도/과제(숙제)를 기록하는 문장일 때(학생 개인이 아니라 반 전체 기록). className은 반 목록에서 가장 가까운 이름을 그대로 쓰고(학년 표기 '고2/중2' 등은 반 이름에 있을 때만 포함), progress에 진도, homework에 과제를 나눠 넣는다. students는 빈 배열. 예: "고2 이사벨A 오늘 3과 본문 1~4번 했고 숙제는 워크북 22~25쪽" → route:"class_progress", className:"이사벨A"(반 목록의 실제 이름), progress:"3과 본문 1~4번", homework:"워크북 22~25쪽". 이것을 task로 분류하지 않는다. "1교시/2교시"가 있으면 period에 넣는다(같은 반이라도 교시가 다르면 별개 수업 — 한 문장에 여러 교시가 있으면 교시별로 intent를 나눈다).
+- route:"student_record"는 학생 한 명당 intent 하나다(여러 학생이 나오면 학생마다 따로, 한 학생도 빠뜨리지 말 것). students에는 그 학생 이름 하나만. 여러 줄 입력에서 첫 줄의 반/교시("고2 이사벨A 1교시")는 아래 모든 줄(진도·과제·학생 기록)에 className/period로 똑같이 넣는다. 예: "김민수 단어시험 84점 재시험" → recordType:"vocab", score:84, passed:false, retestRequired:true. "박지훈 워크북 과제 미완료" → recordType:"homework", assessmentName:"워크북", completed:false, actionRequested:false. "박지훈 과제 미완료, 다음 시간 확인해줘" → 같은 기록 + actionRequested:true, taskType:"숙제확인". 학생 기록을 task로 따로 중복 생성하지 않는다.
+- route:"class_progress"의 기본 editMode는 append다. "추가로 ~ 진행"은 append. 명시적인 수정/교체/삭제 표현이 있을 때만 replace/delete.
 - route:"task"에서 "OO에게 맡겨/OO가 해줘"처럼 담당 직원이 명시되면 ownerName에 그 직원 이름을 넣는다. 명시가 없으면 ownerName은 빈 문자열(시스템이 조교 업무풀/자동배정으로 처리). "8시까지"처럼 마감 시각이 있으면 time에 넣는다.
 - intents 배열은 최소 1개 이상이어야 한다.
 

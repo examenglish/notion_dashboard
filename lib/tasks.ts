@@ -124,6 +124,8 @@ export type NewTaskInput = {
   ownerId?: string | null;
   // 지시한 직원 이름(진행현황의 "지시자" 표시용, tasks.source_payload.workflow).
   createdBy?: string;
+  // 이 업무를 만든 학생 학습 기록(student_learning_records.id) — 기록↔업무 추적용.
+  sourceRecordId?: string;
 };
 
 // 업무 진행 이력 — 새 컬럼/마이그레이션 없이 tasks.source_payload.workflow에
@@ -131,6 +133,7 @@ export type NewTaskInput = {
 // 여전히 tasks.complete이고, 여기엔 "누가/언제"만 둔다.
 export type TaskWorkflow = {
   createdBy?: string;
+  sourceRecordId?: string;
   // direct=지시자가 담당자 지정, auto=생성 즉시 자동배정, pool_auto=업무풀에
   // 있다가 나중에 자동배정, claim=조교가 업무풀에서 직접 가져감
   assignedVia?: "direct" | "auto" | "pool_auto" | "claim";

@@ -115,7 +115,7 @@ const B = "branch-sajik";
 function seed() {
   tables = {
     classes: [
-      { id: "cls-isabel-a", notion_id: "cls-isabel-a", branch_id: B, name: "고2 이사벨A", student_notion_ids: ["stu-minsu-2b-x"], assistant_notion_ids: [], days: [] },
+      { id: "cls-isabel-a", notion_id: "cls-isabel-a", branch_id: B, name: "고2 이사벨A", student_notion_ids: ["stu-minsu-2b", "stu-jiho", "stu-seoyeon", "stu-jihun"], assistant_notion_ids: [], days: [] },
       { id: "cls-isabel-b", notion_id: "cls-isabel-b", branch_id: B, name: "고2 이사벨B", student_notion_ids: [], assistant_notion_ids: [], days: [] },
       { id: "cls-1a", notion_id: "cls-1a", branch_id: B, name: "고1A", student_notion_ids: ["stu-minsu-1a"], assistant_notion_ids: [], days: [] },
       { id: "cls-2b", notion_id: "cls-2b", branch_id: B, name: "고2B", student_notion_ids: ["stu-minsu-2b"], assistant_notion_ids: [], days: [] },
@@ -124,6 +124,8 @@ function seed() {
       { id: "stu-minsu-1a", notion_id: "stu-minsu-1a", branch_id: B, name: "김민수", school: "금정고", grade: "고1", status: "재원", class_notion_ids: ["cls-1a"] },
       { id: "stu-minsu-2b", notion_id: "stu-minsu-2b", branch_id: B, name: "김민수", school: "부산고", grade: "고2", status: "재원", class_notion_ids: ["cls-2b"] },
       { id: "stu-jiho", notion_id: "stu-jiho", branch_id: B, name: "이지호", school: "부산고", grade: "고2", status: "재원", class_notion_ids: ["cls-isabel-a"] },
+      { id: "stu-seoyeon", notion_id: "stu-seoyeon", branch_id: B, name: "이서연", school: "부산고", grade: "고2", status: "재원", class_notion_ids: ["cls-isabel-a"] },
+      { id: "stu-jihun", notion_id: "stu-jihun", branch_id: B, name: "박지훈", school: "부산고", grade: "고2", status: "재원", class_notion_ids: ["cls-isabel-a"] },
     ],
     staff: [
       { id: "staff-director", notion_id: "staff-director", branch_id: B, name: "원장님", role: "원장", work_schedule: "" },
@@ -134,6 +136,7 @@ function seed() {
     daily_records: [],
     briefings: [],
     tasks: [],
+    student_learning_records: [],
   };
 }
 
@@ -388,7 +391,8 @@ describe("교시 구분(날짜+반+교시 단위)", () => {
     expect(r1.outcomes[0].message).toBe("고2 이사벨A 1교시\n오늘 진도: 본문 3과 1~4번\n과제: 워크북 22쪽\n저장 완료");
     expect(tables.class_progress.map((r) => [r.period, r.progress_content, r.homework_content])).toEqual([
       ["1교시", "본문 3과 1~4번", "워크북 22쪽"],
-      ["2교시", "문법 관계대명사", "문법책 35~40쪽"],
+      // 같은 교시 재입력은 기존 과제를 지우지 않고 한 줄 추가(append)한다.
+      ["2교시", "문법 관계대명사", "문법책 35~38쪽\n문법책 35~40쪽"],
       ["3교시", "모의고사 29~32번", "오답"],
     ]);
     // 수업기록 화면(getClassProgressForEdit)도 교시별로 따로 불러온다.
@@ -496,5 +500,216 @@ describe("retryDualWriteFailures — PostgreSQL 정본에서 TODO 재동기화 �
     expect(tables.dual_write_failures[0].resolved).toBe(false);
     expect(tables.tasks[0]).toMatchObject({ staff_notion_ids: ["staff-minji"], complete: false });
     expect(tables.tasks[0].source_payload.workflow.startedBy).toBe("staff-minji");
+  });
+});
+
+describe("누적 기록: class_progress append / 수정·삭제는 명시할 때만", () => {
+  it("같은 반·날짜·교시 추가 입력은 기존 진도를 보존하고 줄을 추가한다(동일 내용 반복은 추가 안 함)", async () => {
+    parseUnifiedInput
+      .mockResolvedValueOnce([intent({ route: "class_progress", className: "고2 이사벨A", period: "1교시", progress: "본문 3과 1~4번", homework: "" })])
+      .mockResolvedValueOnce([intent({ route: "class_progress", className: "고2 이사벨A", period: "1교시", progress: "관계대명사", homework: "", editMode: "append" })])
+      .mockResolvedValueOnce([intent({ route: "class_progress", className: "고2 이사벨A", period: "1교시", progress: "관계대명사", homework: "" })]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    await runUnifiedNlInput("고2 이사벨A 1교시 본문 3과 1~4번", { staffName: "원장님" });
+    const second = await runUnifiedNlInput("고2 이사벨A 1교시 추가로 관계대명사 진행", { staffName: "원장님" });
+    const third = await runUnifiedNlInput("고2 이사벨A 1교시 관계대명사", { staffName: "원장님" });
+
+    expect(tables.class_progress).toHaveLength(1);
+    expect(tables.class_progress[0].progress_content).toBe("본문 3과 1~4번\n관계대명사");
+    expect(second.outcomes[0].message).toContain("진도 추가");
+    expect(third.outcomes[0].message).toContain("이미 기록된 내용입니다");
+    // 변경 이력(source_payload.examAiLog): 생성 + 추가 1건(변경 없음은 기록 안 함)
+    const log = tables.class_progress[0].source_payload.examAiLog;
+    expect(log.map((l: any) => l.mode)).toEqual(["create", "append"]);
+    expect(log[1]).toMatchObject({ by: "원장님", raw: "고2 이사벨A 1교시 추가로 관계대명사 진행", progress: { before: "본문 3과 1~4번" } });
+  });
+
+  it("'수정해'(replace)·'삭제해'(delete)일 때만 기존 내용을 바꾸고, 지울 내용이 없으면 실패로 표시한다", async () => {
+    parseUnifiedInput
+      .mockResolvedValueOnce([intent({ route: "class_progress", className: "고2 이사벨A", period: "1교시", progress: "본문 3과", homework: "워크북 22쪽" })])
+      .mockResolvedValueOnce([intent({ route: "class_progress", className: "고2 이사벨A", period: "1교시", progress: "", homework: "워크북 22~25쪽", editMode: "replace" })])
+      .mockResolvedValueOnce([intent({ route: "class_progress", className: "고2 이사벨A", period: "1교시", progress: "본문 3과", homework: "", editMode: "delete" })])
+      .mockResolvedValueOnce([intent({ route: "class_progress", className: "고2 이사벨A", period: "1교시", progress: "없는 내용", homework: "", editMode: "delete" })]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    await runUnifiedNlInput("고2 이사벨A 1교시 본문 3과, 과제 워크북 22쪽");
+    await runUnifiedNlInput("고2 이사벨A 1교시 과제 잘못 입력했어, 워크북 22~25쪽으로 수정해");
+    expect(tables.class_progress[0]).toMatchObject({ progress_content: "본문 3과", homework_content: "워크북 22~25쪽" });
+    await runUnifiedNlInput("고2 이사벨A 1교시 진도 본문 3과 삭제해");
+    expect(tables.class_progress[0]).toMatchObject({ progress_content: "", homework_content: "워크북 22~25쪽" });
+    const bad = await runUnifiedNlInput("고2 이사벨A 1교시 진도 없는 내용 삭제해");
+    expect(bad.ok).toBe(false);
+    expect(bad.outcomes[0].status).toBe("실패");
+  });
+
+  it("mergeProgressText 순수 규칙", async () => {
+    const { mergeProgressText } = await import("@/lib/notion");
+    expect(mergeProgressText("A", "B", "append")).toEqual({ value: "A\nB", change: "added" });
+    expect(mergeProgressText("A\nB", "b", "append")).toEqual({ value: "A\nB", change: "duplicate" });
+    expect(mergeProgressText("A", "", "append")).toEqual({ value: "A", change: "none" });
+    expect(mergeProgressText("A\nB", "C", "replace")).toEqual({ value: "C", change: "replaced" });
+    expect(mergeProgressText("A\nB", "B", "delete")).toEqual({ value: "A", change: "deleted" });
+  });
+});
+
+describe("학생별 학습 기록(student_learning_records)", () => {
+  it("'고2 이사벨A 김민수 단어시험 84점 재시험' → 학생·반·점수·결과·후속상태·입력자·원문 구조화 저장(동명이인은 반으로 확정)", async () => {
+    parseUnifiedInput.mockResolvedValue([
+      intent({ route: "student_record", className: "고2 이사벨A", students: ["김민수"], recordType: "vocab", assessmentName: "단어시험", score: 84, passed: false, retestRequired: true }),
+    ]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const res = await runUnifiedNlInput("고2 이사벨A 김민수 단어시험 84점 재시험", { staffName: "원장님" });
+    expect(res.ok).toBe(true);
+    expect(tables.student_learning_records).toHaveLength(1);
+    expect(tables.student_learning_records[0]).toMatchObject({
+      branch_id: B,
+      student_notion_ids: ["stu-minsu-2b"],
+      class_notion_ids: ["cls-isabel-a"],
+      record_type: "vocab",
+      assessment_name: "단어시험",
+      score: 84,
+      passed: false,
+      retest_required: true,
+      entered_by: "원장님",
+      raw_text: "고2 이사벨A 김민수 단어시험 84점 재시험",
+    });
+    expect(tables.student_learning_records[0].task_id ?? null).toBeNull();
+    expect(tables.student_learning_records[0].input_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(res.outcomes[0].message).toContain("김민수 (고2 이사벨A) 단어시험 기록: 단어시험 · 84점 · 미통과 · 재시험 필요");
+    // 기존 통계 원천(daily_records/exam_scores)은 건드리지 않는다.
+    expect(tables.daily_records).toHaveLength(0);
+    expect(tables.exam_scores ?? []).toHaveLength(0);
+    expect(tables.tasks).toHaveLength(0);
+  });
+
+  it("'박지훈 워크북 과제 미완료' → 학생 기록만(업무 없음)", async () => {
+    parseUnifiedInput.mockResolvedValue([
+      intent({ route: "student_record", className: "고2 이사벨A", students: ["박지훈"], recordType: "homework", assessmentName: "워크북", completed: false }),
+    ]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    await runUnifiedNlInput("고2 이사벨A 박지훈 워크북 과제 미완료");
+    expect(tables.student_learning_records[0]).toMatchObject({ student_notion_ids: ["stu-jihun"], record_type: "homework", completed: false });
+    expect(tables.tasks).toHaveLength(0);
+  });
+
+  it("'박지훈 워크북 과제 미완료, 다음 시간 확인해줘' → 학생 기록 + 숙제확인 업무, 서로 연결(중복 task intent는 생략)", async () => {
+    parseUnifiedInput.mockResolvedValue([
+      intent({ route: "student_record", className: "고2 이사벨A", students: ["박지훈"], recordType: "homework", assessmentName: "워크북", completed: false, actionRequested: true, taskType: "숙제확인", instruction: "워크북 과제 다음 시간 확인" }),
+      intent({ route: "task", taskType: "숙제확인", students: ["박지훈"], instruction: "워크북 과제 확인" }),
+    ]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const res = await runUnifiedNlInput("고2 이사벨A 박지훈 워크북 과제 미완료, 다음 시간 확인해줘", { staffName: "원장님" });
+    expect(res.ok).toBe(true);
+    expect(tables.tasks).toHaveLength(1);
+    const rec = tables.student_learning_records[0];
+    const task = tables.tasks[0];
+    expect(task).toMatchObject({ type: "숙제확인", student_notion_ids: ["stu-jihun"], class_notion_ids: ["cls-isabel-a"] });
+    expect(task.source_payload.workflow.sourceRecordId).toBe(rec.id);
+    expect(rec.task_id).toBe(task.id);
+    expect(res.outcomes.some((o) => o.message.startsWith("업무 생략"))).toBe(true);
+  });
+
+  it("다건 입력: 진도+과제+학생 3명+업무 지시가 모두 분리 처리되고, 같은 입력 재전송은 중복 생성하지 않는다", async () => {
+    const text = "고2 이사벨A 1교시\n진도 본문 3과\n과제 워크북 22~25\n김민수 단어시험 84점 재시험\n이서연 96점 통과\n박지훈 과제 미완료\n민지에게 시험지 15부 출력";
+    const intents = [
+      intent({ route: "class_progress", className: "고2 이사벨A", period: "1교시", progress: "본문 3과", homework: "워크북 22~25" }),
+      intent({ route: "student_record", className: "고2 이사벨A", period: "1교시", students: ["김민수"], recordType: "vocab", score: 84, passed: false, retestRequired: true }),
+      intent({ route: "student_record", className: "고2 이사벨A", period: "1교시", students: ["이서연"], recordType: "vocab", score: 96, passed: true }),
+      intent({ route: "student_record", className: "고2 이사벨A", period: "1교시", students: ["박지훈"], recordType: "homework", completed: false }),
+      intent({ route: "task", taskType: "출력", instruction: "시험지 출력", quantity: 15, ownerName: "민지" }),
+    ];
+    parseUnifiedInput.mockResolvedValue(intents);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const first = await runUnifiedNlInput(text, { staffName: "원장님" });
+    expect(first.ok).toBe(true);
+    expect(first.outcomes.map((o) => [o.route, o.status])).toEqual([
+      ["class_progress", "완료"],
+      ["student_record", "완료"],
+      ["student_record", "완료"],
+      ["student_record", "완료"],
+      ["task", "완료"],
+    ]);
+    expect(tables.student_learning_records.map((r) => [r.student_notion_ids[0], r.record_type, r.score, r.period])).toEqual([
+      ["stu-minsu-2b", "vocab", 84, "1교시"],
+      ["stu-seoyeon", "vocab", 96, "1교시"],
+      ["stu-jihun", "homework", null, "1교시"],
+    ]);
+    // 같은 날 같은 교시의 반 진도 행과 연결
+    expect(tables.student_learning_records.every((r) => r.class_progress_id === tables.class_progress[0].id)).toBe(true);
+    expect(tables.tasks).toHaveLength(1);
+    expect(first.context).toMatchObject({ classId: "cls-isabel-a", period: "1교시" });
+
+    // 재전송: 반 진도는 변경 없음, 학생 기록은 중복으로 건너뜀
+    const again = await runUnifiedNlInput(text, { staffName: "원장님" });
+    expect(tables.student_learning_records).toHaveLength(3);
+    expect(tables.class_progress).toHaveLength(1);
+    expect(again.outcomes.filter((o) => o.message.includes("중복"))).toHaveLength(3);
+    expect(again.outcomes[0].message).toContain("이미 기록된 내용입니다");
+    // 행동 지시가 있던 기록의 재전송도 업무를 다시 만들지 않는다.
+    parseUnifiedInput.mockResolvedValue([
+      intent({ route: "student_record", className: "고2 이사벨A", students: ["박지훈"], recordType: "homework", completed: false, actionRequested: true, taskType: "숙제확인" }),
+    ]);
+    await runUnifiedNlInput("박지훈 과제 미완료 확인해줘", { staffName: "원장님" });
+    await runUnifiedNlInput("박지훈 과제 미완료 확인해줘", { staffName: "원장님" });
+    expect(tables.tasks.filter((t) => t.type === "숙제확인")).toHaveLength(1);
+  });
+
+  it("동명이인은 임의 선택하지 않고 후보 선택으로 확정한다", async () => {
+    parseUnifiedInput.mockResolvedValue([intent({ route: "student_record", students: ["김민수"], recordType: "vocab", score: 84 })]);
+    const { runUnifiedNlInput, continuePendingInput } = await import("@/lib/nl-input");
+    const first = await runUnifiedNlInput("김민수 단어 84점");
+    const pending = first.outcomes[0].pending!;
+    expect(pending.question).toContain("김민수 학생이 여러 명입니다");
+    expect(pending.missing[0].candidates).toHaveLength(2);
+    expect(tables.student_learning_records).toHaveLength(0);
+    await continuePendingInput(JSON.parse(JSON.stringify(pending)), "", { choiceId: "stu-minsu-1a" });
+    expect(tables.student_learning_records[0]).toMatchObject({ student_notion_ids: ["stu-minsu-1a"], class_notion_ids: ["cls-1a"] });
+  });
+
+  it("반 문맥: 직전 반의 학생이면 이어 쓰고, 그 반 학생이 아니면 문맥을 쓰지 않는다", async () => {
+    const { todayKST } = await import("@/lib/date");
+    const ctx = { classId: "cls-isabel-a", className: "고2 이사벨A", date: todayKST(), period: "1교시" };
+    parseUnifiedInput
+      .mockResolvedValueOnce([intent({ route: "student_record", students: ["박지훈"], recordType: "homework", completed: false })])
+      .mockResolvedValueOnce([intent({ route: "student_record", students: ["김민수"], recordType: "vocab", score: 70 })]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    await runUnifiedNlInput("박지훈 과제 미완료", { context: ctx });
+    expect(tables.student_learning_records[0]).toMatchObject({ class_notion_ids: ["cls-isabel-a"], period: "1교시" });
+
+    // 김민수는 이사벨A에 한 명(고2B 김민수)뿐 → 문맥 반 안에서 확정(다른 반 김민수로 가지 않음)
+    await runUnifiedNlInput("김민수 단어 70점", { context: ctx });
+    expect(tables.student_learning_records[1]).toMatchObject({ student_notion_ids: ["stu-minsu-2b"], class_notion_ids: ["cls-isabel-a"] });
+
+    // 문맥 반 소속이 아닌 학생(고1A 전용 학생)은 문맥을 버리고 자기 반으로 기록
+    tables.students.push({ id: "stu-only1a", notion_id: "stu-only1a", branch_id: B, name: "최유진", school: "금정고", grade: "고1", status: "재원", class_notion_ids: ["cls-1a"] });
+    parseUnifiedInput.mockResolvedValueOnce([intent({ route: "student_record", students: ["최유진"], recordType: "memorization", completed: false })]);
+    await runUnifiedNlInput("최유진 본문 암기 미완료", { context: ctx });
+    expect(tables.student_learning_records[2]).toMatchObject({ student_notion_ids: ["stu-only1a"], class_notion_ids: ["cls-1a"], period: null });
+  });
+
+  it("명단에 없는 학생은 만들지 않고 되묻는다", async () => {
+    parseUnifiedInput.mockResolvedValue([intent({ route: "student_record", className: "고2 이사벨A", students: ["홍길동"], recordType: "memo", note: "지각" })]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const res = await runUnifiedNlInput("고2 이사벨A 홍길동 지각");
+    expect(res.outcomes[0].pending?.question).toContain('명단에서 "홍길동" 학생을 찾지 못했습니다');
+    expect(tables.student_learning_records).toHaveLength(0);
+    expect(tables.students.some((s) => s.name === "홍길동")).toBe(false);
+  });
+
+  it("학생 기록 저장이 실패하면 후속 업무를 만들지 않고 실패로 표시한다", async () => {
+    const baseFetch = globalThis.fetch as any;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: any) => {
+      if (String(url).includes("/student_learning_records") && (init?.method ?? "GET").toUpperCase() === "POST") {
+        return new Response('{"message":"relation does not exist"}', { status: 404 });
+      }
+      return baseFetch(url, init);
+    }));
+    parseUnifiedInput.mockResolvedValue([
+      intent({ route: "student_record", className: "고2 이사벨A", students: ["박지훈"], recordType: "homework", completed: false, actionRequested: true, taskType: "숙제확인" }),
+    ]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const res = await runUnifiedNlInput("고2 이사벨A 박지훈 과제 미완료 확인해줘");
+    expect(res.ok).toBe(false);
+    expect(res.outcomes[0]).toMatchObject({ status: "실패" });
+    expect(tables.tasks).toHaveLength(0);
   });
 });
