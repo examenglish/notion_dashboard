@@ -971,7 +971,7 @@ describe("입력 이력 조회(읽기 전용) + 번호로 이어서 정정", () 
     expect(msg).toContain("박지훈 · 고2 이사벨A\n   과제 · 미완료");
     expect(msg).toContain("업무 · 출력");
     expect(msg).not.toContain("이서연");
-    expect(msg).toContain("총 4건");
+    expect(msg).toContain('총 4건 — "1번 94점으로", "4번 취소"처럼 번호로 고칠 수 있어요.');
     expect(res.history).toBeTruthy();
   });
 
@@ -993,7 +993,7 @@ describe("입력 이력 조회(읽기 전용) + 번호로 이어서 정정", () 
     expect(all.outcomes[0].message).toContain("고2B (작성: 작성자 기록 없음)\n   진도: 모의고사 29~32번");
     const y = await showHistory({ historyFrom: new Date(Date.now() - 86400000 + 9 * 3600000).toISOString().slice(0, 10) });
     expect(y.outcomes[0].message).toContain("김민수 · 고2 이사벨A\n   단어시험 · 70점");
-    expect(y.outcomes[0].message).toContain("총 1건");
+    expect(y.outcomes[0].message).toContain('총 1건 — "1번 94점으로", "1번 취소"처럼 번호로 고칠 수 있어요.');
 
     await seedRecord("고2 이사벨A 김민수 단어 84점", { students: ["김민수"], recordType: "vocab", score: 84 });
     const byStudent = await showHistory({ students: ["김민수"] });

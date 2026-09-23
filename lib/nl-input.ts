@@ -1479,7 +1479,10 @@ async function runHistoryQuery(
     return [`${i + 1}. ${time} · ${it.lines[0]}${by}`, ...it.lines.slice(1).map((l) => `   ${l}`)].join("\n");
   });
   const more = items.length > shown.length ? ` (최근 ${shown.length}건만 표시)` : "";
-  const message = [`${title} ${scope}`, ...body, `총 ${items.length}건${more} — "2번 94점으로", "3번 취소"처럼 번호로 고칠 수 있어요.`].join("\n");
+  // 번호 안내는 실제 목록 번호로(1건이면 1번만).
+  const last = shown.length;
+  const hint = last === 1 ? `"1번 94점으로", "1번 취소"` : `"1번 94점으로", "${last}번 취소"`;
+  const message = [`${title} ${scope}`, ...body, `총 ${items.length}건${more} — ${hint}처럼 번호로 고칠 수 있어요.`].join("\n");
   return {
     outcome: { route: "history_query", label: title, status: "완료", message },
     token: signHistoryToken(opts.staffId ?? "", shown.map((it) => ({ ref: it.ref, label: it.label }))),
