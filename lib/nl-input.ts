@@ -1,4 +1,12 @@
-import { parseNaturalLanguageInput, parseCreateTasksInput, parseUnifiedInput, parsePendingAnswer, resolveRelativeDate, type UnifiedIntent } from "@/lib/anthropic";
+import {
+  parseNaturalLanguageInput,
+  parseCreateTasksInput,
+  parseUnifiedInput,
+  parsePendingAnswer,
+  resolveRelativeDate,
+  type UnifiedIntent,
+  type IntentClass,
+} from "@/lib/anthropic";
 import {
   createAdminInboxEntry,
   createScheduleEntry,
@@ -28,6 +36,8 @@ import {
   getActiveLearningRecord,
   getClassProgressRowById,
   listExamAiHistoryRows,
+  getTodaySchedule,
+  listMyTasks,
 } from "@/lib/notion";
 import { createHash, createHmac, timingSafeEqual } from "crypto";
 import { todayKST } from "@/lib/date";
@@ -1068,6 +1078,103 @@ async function createTaskOutcomes(
     taskInputs.forEach((t) => outcomes.push({ route: "task", label: t.label, status: "실패", message }));
   }
   return { outcomes, slackTasks, createdIds };
+}
+
+// ---------------------------------------------------------------------------
+// 최상위 의도 경계(AI 출력 검증). 모델이 고른 intentClass와 route 조합이 어긋나거나,
+// 명시어 없이 신입생/신규 상담을 고르거나, 기록 정정과 같은 대상에 새 업무를 함께
+// 만들려 하면 — 저장하지 않고 구체적으로 되묻는(clarify) intent로 바꾼다.
+// 특정 문장이 아니라 "의미 경계"를 검사한다(잘못 저장하는 것보다 묻는 것이 낫다).
+// ---------------------------------------------------------------------------
+export const ROUTES_BY_INTENT_CLASS: Record<IntentClass, UnifiedIntent["route"][]> = {
+  correction: ["correction"],
+  query: ["history_query", "schedule_view", "attendance_check"],
+  record: ["class_progress", "student_record", "counseling"],
+  action: ["task", "schedule", "student_action"],
+  special: ["schedule", "admin_inbox"],
+  unclear: ["clarify"],
+};
+const INTENT_CLASS_LABEL: Record<IntentClass, string> = {
+  correction: "기존 기록 수정·취소",
+  query: "조회",
+  record: "수업/학습 기록",
+  action: "업무·일정 요청",
+  special: "상담·행정 전달",
+  unclear: "확인 필요",
+};
+// 신입생/신규 상담은 사용자가 그런 뜻을 직접 말했을 때만(명단에 없는 학생 ≠ 신입생).
+const EXPLICIT_NEW_STUDENT = /(신입|신규|입학|첫\s*상담|처음\s*(상담|왔|방문|등원)|등록\s*문의|체험\s*수업|새로\s*(온|들어온|등록))/;
+
+function toClarify(i: UnifiedIntent, message: string): UnifiedIntent {
+  return { ...i, intentClass: "unclear", route: "clarify", message };
+}
+
+export function enforceIntentBoundaries(intents: UnifiedIntent[], text: string): UnifiedIntent[] {
+  const correctionStudents = new Set(
+    intents.filter((i) => i.route === "correction").flatMap((i) => (i.students ?? []).map((n) => n?.trim()).filter(Boolean) as string[])
+  );
+  const hasCorrection = intents.some((i) => i.route === "correction");
+  return intents.map((i) => {
+    const cls = i.intentClass;
+    if (cls && ROUTES_BY_INTENT_CLASS[cls] && !ROUTES_BY_INTENT_CLASS[cls].includes(i.route)) {
+      return toClarify(
+        i,
+        `"${text}"을(를) ${INTENT_CLASS_LABEL[cls]}(으)로 이해했지만 처리 방식이 맞지 않아 아무것도 저장하지 않았습니다. 원하시는 것을 조금만 더 알려주세요 — 예: 학습 기록이면 "OO 단어시험 84점", 업무면 "OO 재시험 시켜줘", 수정이면 "방금 입력한 거 취소".`
+      );
+    }
+    const newStudentRoute = (i.route === "schedule" && i.scheduleType === "신입생상담") || (i.route === "admin_inbox" && i.inboxType === "신규생문의");
+    if (newStudentRoute && !EXPLICIT_NEW_STUDENT.test(text)) {
+      const who = i.students?.[0] ? `${i.students[0]} ` : "";
+      return toClarify(
+        i,
+        `${who}학생을 신입생 상담으로 처리하지 않았습니다(신입생·신규·입학 상담이라는 말이 없어서요). "${text}"을(를) 학습 기록으로 남길까요, 아니면 신입생 상담을 잡을까요? 원하는 쪽으로 다시 알려주세요.`
+      );
+    }
+    if (i.route === "student_action" && cls && cls !== "action") {
+      return toClarify(i, `"${text}"을(를) 조치사항으로 저장하지 않았습니다. 학습 기록인지, 앞으로 계속 관리할 방침인지 알려주세요.`);
+    }
+    // 같은 문장에 기록 정정이 있으면(우선순위 최상), 같은 학생에 대한 새 업무/조치/상담 생성은 하지 않는다.
+    if (hasCorrection && i.route !== "correction" && ["task", "student_action", "schedule", "admin_inbox"].includes(i.route)) {
+      const names = (i.students ?? []).map((n) => n?.trim()).filter(Boolean) as string[];
+      if (names.length === 0 || names.some((n) => correctionStudents.has(n)) || correctionStudents.size === 0) {
+        return toClarify(i, `기록 수정·취소 요청으로 이해해 새 업무/조치는 만들지 않았습니다. 새 업무도 필요하면 따로 알려주세요.`);
+      }
+    }
+    return i;
+  });
+}
+
+// 일정·할 일 조회(schedule_view) — 읽기 전용. 대시보드가 쓰는 getTodaySchedule과
+// 내 업무(listMyTasks)를 그대로 읽어 요약하고, 자세한 화면으로 안내한다.
+async function runScheduleView(date: string, staffId: string | undefined): Promise<UnifiedOutcome> {
+  const [sched, mine] = await Promise.all([
+    getTodaySchedule(date, staffId || undefined) as Promise<Record<string, unknown>>,
+    staffId ? listMyTasks(staffId) : Promise.resolve([]),
+  ]);
+  const sections: [string, string][] = [
+    ["makeupClasses", "보강"],
+    ["retests", "재시"],
+    ["newStudentEvents", "신입생상담/레벨체크"],
+    ["clinicTasks", "클리닉"],
+    ["reviewTasks", "복습"],
+    ["counseling", "상담"],
+    ["personalTodos", "개인 할일"],
+  ];
+  const lines: string[] = [`${date === todayKST() ? "오늘" : date} 일정`];
+  for (const [key, label] of sections) {
+    const list = (Array.isArray(sched?.[key]) ? (sched[key] as Record<string, unknown>[]) : []);
+    if (list.length === 0) continue;
+    const preview = list
+      .slice(0, 5)
+      .map((x) => [x.studentName && x.studentName !== "-" ? x.studentName : x.title, x.time].filter(Boolean).join(" "))
+      .join(", ");
+    lines.push(`· ${label} ${list.length}건${preview ? `: ${preview}${list.length > 5 ? " …" : ""}` : ""}`);
+  }
+  const dueToday = mine.filter((t) => t.date === date).length;
+  lines.push(`· 내 미완료 업무 ${mine.length}건(오늘 예정 ${dueToday}건)`);
+  if (lines.length === 2 && mine.length === 0) lines.splice(1, 0, "· 등록된 일정이 없습니다.");
+  lines.push("자세히 보기: 대시보드(/director/dashboard) · 내 업무(/director/tasks)");
+  return { route: "schedule_view", label: "일정 조회", status: "완료", message: lines.join("\n") };
 }
 
 // ---------------------------------------------------------------------------
@@ -2144,6 +2251,7 @@ export async function runUnifiedNlInput(
   if (intents.length === 0) {
     return { ok: false, outcomes: [{ route: "clarify", label: text, status: "확인필요", message: "요청을 이해하지 못했습니다. 다시 입력해 주세요." }], tasks: [] };
   }
+  intents = enforceIntentBoundaries(intents, text);
 
   const outcomes: UnifiedOutcome[] = [];
   const taskInputs: { input: NewTaskInput; label: string }[] = [];
@@ -2331,6 +2439,11 @@ export async function runUnifiedNlInput(
             break;
           }
           outcomes.push(...(await executeDraft(draft, roster, studentNames, today)).outcomes);
+          break;
+        }
+        case "schedule_view": {
+          // 조회 전용 — 저장 함수 호출 없음.
+          outcomes.push(await runScheduleView(intent.date || today, opts.staffId));
           break;
         }
         case "history_query": {

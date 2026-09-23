@@ -1003,3 +1003,191 @@ describe("입력 이력 조회(읽기 전용) + 번호로 이어서 정정", () 
     expect(res2.outcomes[0].message).toContain("먼저");
   });
 });
+
+// ---------------------------------------------------------------------------
+// 최상위 의도 경계(correction > query > record > action, special은 명시어 필요)
+// 실제 Haiku 호출 없이: (a) 올바른 분류가 오면 안전하게 처리되는지, (b) 과거 장애처럼
+// 잘못된 분류가 와도 경계 검사가 저장 없이 되묻기로 막는지 고정한다.
+// ---------------------------------------------------------------------------
+describe("의도 경계 — prompt", () => {
+  it("우선순위·신입생 명시어 규칙이 들어 있고 '신입생일 수 있음' 추측 문구가 없다", async () => {
+    const { unifiedSystemPromptText } = await import("@/lib/anthropic");
+    const text = unifiedSystemPromptText({ today: "2026-09-23", weekday: "수", students: [], classes: [], staff: [] }, ["출력"]);
+    expect(text).not.toContain("신입생일 수 있음");
+    expect(text).toContain("최상위 의도 판단");
+    expect(text.indexOf("1) correction")).toBeLessThan(text.indexOf("2) query"));
+    expect(text.indexOf("2) query")).toBeLessThan(text.indexOf("3) record"));
+    expect(text.indexOf("3) record")).toBeLessThan(text.indexOf("4) action"));
+    expect(text).toContain("학생이 명단에 없다는 사실만으로 신입생·신규 상담을 추측하지 않는다");
+    expect(text).toContain("student_action은 fallback이 아니다");
+  });
+});
+
+describe("의도 경계 — 잘못된 분류는 저장하지 않고 되묻는다", () => {
+  const writes = () => tables.tasks.length + tables.student_learning_records.length + tables.class_progress.length + (tables.admin_inbox_entries?.length ?? 0);
+
+  it.each([
+    // [입력, 잘못된 AI 출력(과거 장애 유형), 사유]
+    ["이태경 불규칙동사 테스트", { intentClass: "special", route: "schedule", scheduleType: "신입생상담", students: ["이태경"] }, "명시어 없는 신입생상담"],
+    ["박지훈 문법 퀴즈 봤어", { intentClass: "special", route: "admin_inbox", inboxType: "신규생문의", students: ["박지훈"] }, "명시어 없는 신규생문의"],
+    ["이태경 불규칙동사 테스트", { intentClass: "record", route: "student_action", students: ["이태경"], instruction: "불규칙동사 테스트" }, "기록인데 조치사항"],
+    ["불규칙 관련 입력한 것 취소", { intentClass: "correction", route: "student_action", students: [], instruction: "불규칙 취소" }, "정정인데 조치사항"],
+    ["오늘 입력한 내용 보여줘", { intentClass: "query", route: "task", taskType: "기타업무", instruction: "오늘 입력 내용" }, "조회인데 업무"],
+    ["오늘 일정 보여줘", { intentClass: "query", route: "schedule", scheduleType: "보강", students: [] }, "조회인데 일정 생성"],
+  ] as [string, Partial<UnifiedIntent>, string][])("%s — %s → clarify, 저장 0건 (%s)", async (text, bad) => {
+    parseUnifiedInput.mockResolvedValueOnce([intent(bad)]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const before = writes();
+    const res = await runUnifiedNlInput(text, { staffName: "서도영", staffId: "staff-seo" });
+    expect(res.outcomes).toHaveLength(1);
+    expect(res.outcomes[0].route).toBe("clarify");
+    expect(res.outcomes[0].status).toBe("확인필요");
+    expect(res.outcomes[0].message).not.toContain("무엇을 해야 할지 명확하지 않습니다");
+    expect(writes()).toBe(before);
+  });
+
+  it("같은 문장에 정정이 있으면 같은 대상의 새 조치/업무는 만들지 않는다", async () => {
+    await seedRecord("고2 이사벨A 김민수 불규칙동사 테스트 84점", { students: ["김민수"], recordType: "vocab", assessmentName: "불규칙동사 테스트", score: 84 });
+    parseUnifiedInput.mockResolvedValueOnce([
+      intent({ intentClass: "correction", route: "correction", correctionTarget: "student_record", operation: "cancel", students: ["김민수"], assessmentName: "불규칙" }),
+      intent({ intentClass: "action", route: "student_action", students: ["김민수"], instruction: "불규칙 취소" }),
+    ]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const res = await runUnifiedNlInput("김민수 불규칙 관련 입력한 것 취소", { staffName: "서도영", staffId: "staff-seo" });
+    expect(res.outcomes.map((o) => o.route)).toEqual(["correction", "clarify"]);
+    expect(active()).toHaveLength(0);
+    expect(tables.tasks).toHaveLength(0);
+  });
+
+  it.each([
+    ["이태경 신입생 상담 잡아줘"],
+    ["최유진 입학 상담 예약해줘"],
+    ["김하늘 처음 상담 잡아줘"],
+    ["등록 문의 온 학생 상담 일정"],
+  ])("명시어가 있으면 신입생상담은 막지 않는다: %s", async (text) => {
+    const { enforceIntentBoundaries } = await import("@/lib/nl-input");
+    const [out] = enforceIntentBoundaries([intent({ intentClass: "special", route: "schedule", scheduleType: "신입생상담", students: ["이태경"] })], text);
+    expect(out.route).toBe("schedule");
+  });
+});
+
+describe("의도 경계 — 올바른 분류 회귀 fixture(12문장 + 유사 표현)", () => {
+  const TODAY_STUDENT = { id: "stu-lee", notion_id: "stu-lee", branch_id: B, name: "이태경", school: "부산고", grade: "고2", status: "재원", class_notion_ids: ["cls-isabel-a"] };
+  beforeEach(() => {
+    tables.students.push(TODAY_STUDENT);
+    tables.classes[0].student_notion_ids.push("stu-lee");
+  });
+
+  it.each([
+    ["이태경 불규칙동사 테스트", { intentClass: "record", route: "student_record", students: ["이태경"], recordType: "vocab", assessmentName: "불규칙동사 테스트" }],
+    ["이태경 불규칙동사 퀴즈 봤음", { intentClass: "record", route: "student_record", students: ["이태경"], recordType: "vocab", assessmentName: "불규칙동사 퀴즈" }],
+    ["이태경 불규칙동사 테스트 84점", { intentClass: "record", route: "student_record", students: ["이태경"], recordType: "vocab", assessmentName: "불규칙동사 테스트", score: 84 }],
+    ["이태경 불규칙동사 84점 받음", { intentClass: "record", route: "student_record", students: ["이태경"], recordType: "vocab", assessmentName: "불규칙동사", score: 84 }],
+  ] as [string, Partial<UnifiedIntent>][])("기록: %s → student_record 1건, 업무/상담/조치 0건", async (text, good) => {
+    parseUnifiedInput.mockResolvedValueOnce([intent(good)]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const res = await runUnifiedNlInput(text, { staffName: "서도영", staffId: "staff-seo" });
+    expect(res.outcomes[0]).toMatchObject({ route: "student_record", status: "완료" });
+    expect(active()).toHaveLength(1);
+    expect(active()[0]).toMatchObject({ student_notion_ids: ["stu-lee"], record_type: "vocab" });
+    expect(tables.tasks).toHaveLength(0);
+  });
+
+  it("이태경 불규칙동사 테스트 84점 재시험 → 기록 + 재시험 상태(업무 아님)", async () => {
+    parseUnifiedInput.mockResolvedValueOnce([
+      intent({ intentClass: "record", route: "student_record", students: ["이태경"], recordType: "vocab", assessmentName: "불규칙동사 테스트", score: 84, passed: false, retestRequired: true }),
+    ]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    await runUnifiedNlInput("이태경 불규칙동사 테스트 84점 재시험", { staffName: "서도영", staffId: "staff-seo" });
+    expect(active()[0]).toMatchObject({ score: 84, retest_required: true });
+    expect(tables.tasks).toHaveLength(0);
+  });
+
+  it.each([
+    ["이태경 불규칙동사 다시 테스트해줘", "단어재시"],
+    ["이태경 불규칙 재시험 시켜줘", "재시험"],
+  ])("명시적 행동: %s → 업무(%s)", async (text, taskType) => {
+    parseUnifiedInput.mockResolvedValueOnce([intent({ intentClass: "action", route: "task", taskType, students: ["이태경"], instruction: text })]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const res = await runUnifiedNlInput(text, { staffName: "서도영", staffId: "staff-seo" });
+    expect(res.outcomes[0]).toMatchObject({ route: "task", status: "완료" });
+    expect(tables.tasks).toHaveLength(1);
+    expect(tables.tasks[0]).toMatchObject({ type: taskType, student_notion_ids: ["stu-lee"] });
+  });
+
+  it.each([
+    ["불규칙 관련 입력한 것 취소", { correctionTarget: "student_record", operation: "cancel", assessmentName: "불규칙" }],
+    ["불규칙동사 기록 지워줘", { correctionTarget: "student_record", operation: "cancel", assessmentName: "불규칙동사" }],
+    ["방금 입력한 거 취소해", { correctionTarget: "recent", operation: "cancel" }],
+    ["아까 넣은 거 없던 걸로 해줘", { correctionTarget: "recent", operation: "cancel" }],
+  ] as [string, Partial<UnifiedIntent>][])("정정(취소): %s → 기존 기록 취소, 새 업무/조치 0건", async (text, fields) => {
+    await seedRecord("고2 이사벨A 이태경 불규칙동사 테스트 84점", { students: ["이태경"], recordType: "vocab", assessmentName: "불규칙동사 테스트", score: 84 });
+    parseUnifiedInput.mockResolvedValueOnce([intent({ intentClass: "correction", route: "correction", ...fields })]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const res = await runUnifiedNlInput(text, { staffName: "서도영", staffId: "staff-seo" });
+    expect(res.outcomes[0].route).toBe("correction");
+    expect(active()).toHaveLength(0);
+    expect(tables.tasks).toHaveLength(0);
+  });
+
+  it.each([
+    ["84점 아니고 94점이야"],
+    ["84 말고 94점"],
+  ])("정정(수정): %s → 84→94", async (text) => {
+    await seedRecord("고2 이사벨A 이태경 불규칙동사 테스트 84점", { students: ["이태경"], recordType: "vocab", assessmentName: "불규칙동사 테스트", score: 84 });
+    parseUnifiedInput.mockResolvedValueOnce([intent({ intentClass: "correction", route: "correction", correctionTarget: "student_record", operation: "modify", oldScore: 84, newScore: 94 })]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    await runUnifiedNlInput(text, { staffName: "서도영", staffId: "staff-seo" });
+    expect(active()[0].score).toBe(94);
+    expect(tables.tasks).toHaveLength(0);
+  });
+
+  it("민수가 아니라 민지야 / 과제 25쪽 아니고 27쪽까지 → correction", async () => {
+    await say("고2 이사벨A 과제 워크북 22~25쪽", { intentClass: "record", route: "class_progress", className: "고2 이사벨A", homework: "워크북 22~25쪽" });
+    await say("과제 25쪽 아니고 27쪽까지", { intentClass: "correction", route: "correction", correctionTarget: "class_progress", operation: "modify", field: "homework", fromText: "25쪽", toText: "27쪽" });
+    expect(tables.class_progress[0].homework_content).toBe("워크북 22~27쪽");
+    const r = await say("민수가 아니라 민지야", { intentClass: "correction", route: "correction", operation: "modify", students: ["민수"], newStudentName: "민지" });
+    expect(r.outcomes[0].route).toBe("correction");
+    expect(tables.tasks).toHaveLength(0);
+  });
+
+  it.each([
+    ["오늘 입력한 내용 보여줘", "history_query"],
+    ["오늘 내가 뭐 입력했지", "history_query"],
+    ["오늘 일정 보여줘", "schedule_view"],
+    ["오늘 할 일 뭐 있어", "schedule_view"],
+  ])("조회: %s → %s, DB 요청은 GET만", async (text, route) => {
+    await seedRecord("고2 이사벨A 이태경 불규칙동사 테스트 84점", { students: ["이태경"], recordType: "vocab", assessmentName: "불규칙동사 테스트", score: 84 });
+    // fake DB는 처음 GET한 테이블 이름에 빈 배열을 만든다 — 행 내용만 비교한다.
+    const rowsOnly = () => JSON.stringify(Object.fromEntries(Object.entries(tables).filter(([, v]) => v.length > 0)));
+    const snapshot = rowsOnly();
+    const methods: string[] = [];
+    const base = globalThis.fetch as any;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: any) => {
+      methods.push((init?.method ?? "GET").toUpperCase());
+      return base(url, init);
+    }));
+    parseUnifiedInput.mockResolvedValueOnce([intent({ intentClass: "query", route: route as UnifiedIntent["route"] })]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const res = await runUnifiedNlInput(text, { staffName: "서도영", staffId: "staff-seo" });
+    expect(res.outcomes[0]).toMatchObject({ route, status: "완료" });
+    if (route === "schedule_view") {
+      expect(res.outcomes[0].message).toContain("일정");
+      expect(res.outcomes[0].message).toContain("/director/tasks");
+      expect(res.outcomes[0].message).not.toContain("입력한 내용");
+    } else {
+      expect(res.outcomes[0].message).toContain("입력한 내용");
+    }
+    expect(methods.every((m) => m === "GET")).toBe(true);
+    expect(rowsOnly()).toBe(snapshot);
+  });
+
+  it("이태경 신입생 상담 잡아줘 → 신입생상담 일정(명시어 있음)", async () => {
+    parseUnifiedInput.mockResolvedValueOnce([
+      intent({ intentClass: "special", route: "schedule", scheduleType: "신입생상담", students: ["이태경"], instruction: "신입생 상담" }),
+    ]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    const res = await runUnifiedNlInput("이태경 신입생 상담 잡아줘", { staffName: "서도영", staffId: "staff-seo" });
+    expect(res.outcomes[0]).toMatchObject({ route: "schedule" });
+  });
+});

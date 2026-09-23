@@ -376,9 +376,16 @@ export type UnifiedIntentRoute =
   | "student_record"
   | "correction"
   | "history_query"
+  | "schedule_view"
   | "clarify";
 
+// 최상위 의도 경계. 모델이 세부 route보다 먼저 이것을 정하고, route는 반드시 이 경계 안에서
+// 고른다(lib/nl-input.ts enforceIntentBoundaries가 어긋난 조합을 저장 없이 되묻기로 바꾼다).
+// 의미 우선순위: correction > query > record > action (special은 명시어가 있을 때만).
+export type IntentClass = "correction" | "query" | "record" | "action" | "special" | "unclear";
+
 export type UnifiedIntent = {
+  intentClass?: IntentClass;
   route: UnifiedIntentRoute;
   taskType?: string;
   inboxType?: "결석예정" | "긴급상담요청" | "신규생문의" | "기타";
@@ -445,11 +452,17 @@ const UNIFIED_INTENTS_TOOL = (taskTypeLabels: string[]): Anthropic.Tool => ({
         items: {
           type: "object",
           properties: {
+            intentClass: {
+              type: "string",
+              enum: ["correction", "query", "record", "action", "special", "unclear"],
+              description:
+                "route보다 먼저 정하는 최상위 의도. correction=이미 입력한 것을 고치거나 취소, query=보여달라/확인만(아무것도 만들지 않음), record=이미 일어난 수업·학습 결과/상태 기록, action=직원에게 앞으로 할 일을 시키는 명시적 행동 요청(…해줘/시켜/맡겨/잡아줘) 또는 명시된 지속관리 방침, special=신입생·신규·입학 상담/등록 문의나 결석예정·긴급상담 같은 행정 전달(명시어가 있을 때만), unclear=판단 불가.",
+            },
             route: {
               type: "string",
-              enum: ["task", "admin_inbox", "schedule", "counseling", "student_action", "attendance_check", "class_progress", "student_record", "correction", "history_query", "clarify"],
+              enum: ["task", "admin_inbox", "schedule", "counseling", "student_action", "attendance_check", "class_progress", "student_record", "correction", "history_query", "schedule_view", "clarify"],
               description:
-                "task=업무 생성(아래 taskType 13종 중 하나), admin_inbox=행정실 기록(결석예정/긴급상담요청/신규생문의/기타), schedule=예정된 일정(보강/재시/신입생상담/레벨체크), counseling=이미 진행한 상담 기록, student_action=학생 조치사항 메모, attendance_check=이미 입력된 출결/결석 여부를 조회만 하는 확인 요청(새로 기록하지 않음), class_progress=반 전체의 오늘 수업 진도/과제(숙제) 기록, student_record=학생 한 명의 학습 결과/상태 기록(시험·단어시험 점수, 과제 완료/미완료, 암기, 재시험, 태도, 보강 필요, 추가 확인, 메모), correction=이미 입력한 기록을 고치거나 취소하는 요청(아까/방금/그거/잘못 입력/아니고/아니야/취소/고쳐/바꿔/삭제/수정), history_query=이미 입력한 내용을 보여달라는 조회 요청(보여줘/뭐 입력했지/목록/기록 확인 — 새로 기록하지 않음), clarify=위 어디에도 명확히 해당하지 않을 때.",
+                "task=업무 생성(아래 taskType 13종 중 하나), admin_inbox=행정실 기록(결석예정/긴급상담요청/신규생문의/기타), schedule=예정된 일정(보강/재시/신입생상담/레벨체크), counseling=이미 진행한 상담 기록, student_action=학생 조치사항 메모, attendance_check=이미 입력된 출결/결석 여부를 조회만 하는 확인 요청(새로 기록하지 않음), class_progress=반 전체의 오늘 수업 진도/과제(숙제) 기록, student_record=학생 한 명의 학습 결과/상태 기록(시험·단어시험 점수, 과제 완료/미완료, 암기, 재시험, 태도, 보강 필요, 추가 확인, 메모), correction=이미 입력한 기록을 고치거나 취소하는 요청(아까/방금/그거/잘못 입력/아니고/아니야/취소/고쳐/바꿔/삭제/수정), history_query=이미 입력한 내용을 보여달라는 조회 요청(보여줘/뭐 입력했지/목록/기록 확인 — 새로 기록하지 않음), schedule_view=오늘(또는 특정 날짜) 일정·할 일·업무·보강/재시 일정을 보여달라는 조회(새로 만들지 않음), clarify=위 어디에도 명확히 해당하지 않을 때.",
             },
             taskType: { type: "string", enum: taskTypeLabels, description: "route가 task일 때만. 업무 유형 한글 라벨." },
             inboxType: { type: "string", enum: ["결석예정", "긴급상담요청", "신규생문의", "기타"], description: "route가 admin_inbox일 때만." },
@@ -531,7 +544,7 @@ const UNIFIED_INTENTS_TOOL = (taskTypeLabels: string[]): Anthropic.Tool => ({
               description: "student_record: 직원에게 행동을 지시하는 표현('확인해줘/확인시켜/재시험 시켜/다음 시간 체크해줘/맡겨')이 있으면 true — 이때 taskType에 알맞은 업무 유형도 넣는다. 단순 상태 기록('미완료', '다음 시간 재확인' 메모)은 false.",
             },
           },
-          required: ["route", "students", "instruction"],
+          required: ["intentClass", "route", "students", "instruction"],
         },
       },
     },
@@ -553,14 +566,22 @@ intent 분리 예시:
   2) route:"task", taskType:"출력", students:["김정우","신융","허준혁"], instruction:"출력", quantity:3
   3) route:"attendance_check", students:["김정우"], instruction:"결석 입력 여부 확인"
 
+최상위 의도 판단(각 intent마다 route보다 먼저 intentClass를 정한다). 한 문장이 여러 의미에 걸치면 아래 순서가 앞선 쪽이 이긴다:
+1) correction(수정·취소): 이미 입력한 기록/내용을 가리키면서(방금·아까·입력한 것·그거·N번·기존 값 "X 아니고 Y") 고치거나 없애라는 뜻. 취소/삭제/지워/잘못 입력/아니고/정정/수정/고쳐/바꿔 같은 말이 "이미 입력한 것"을 향하면 새 기록·업무·조치사항을 만들지 말고 route:"correction". 새로 할 일을 취소하는 게 아니라 기록을 되돌리는 것이다.
+2) query(조회): 보여줘/뭐 입력했지/목록/확인만 → 아무것도 만들지 않는다. 내가 입력한 기록·이력이면 route:"history_query", 오늘/특정 날짜의 일정·할 일·업무·보강/재시 일정이면 route:"schedule_view", 특정 학생 출결이 입력됐는지면 route:"attendance_check". "오늘 입력한 내용 보여줘"(history_query)와 "오늘 일정 보여줘"(schedule_view)는 다르다.
+3) record(이미 일어난 사실): 수업 진도/과제(route:"class_progress"), 학생의 시험·단어·과제·암기·재시험 결과/상태·태도·메모(route:"student_record"), 이미 진행한 상담 내용(route:"counseling"). "테스트/과제/재시험/암기" 같은 명사만 있고 행동을 시키는 말이 없으면 기록이다 — 업무나 일정으로 만들지 않는다. 예: "OO 불규칙동사 테스트" → student_record(recordType 알맞게, 점수 없으면 score 생략), "OO 단어시험 84점" → student_record, "OO 84점 재시험" → student_record(retestRequired:true).
+4) action(앞으로 할 일): 직원에게 시키는 명시적 행동 요청(…해줘/시켜/맡겨/잡아줘/확인해줘/체크해줘/전화해줘/출력해줘/다시 테스트해줘)만 route:"task" 또는 route:"schedule"(보강/재시/레벨체크처럼 날짜·시간이 있는 일정). 기록 + 행동이 함께 있으면 학생 기록(actionRequested:true, taskType)으로 한 번에 나타낸다. 앞으로 지속 관리할 방침을 명시한 경우(예: "당분간 단어시험 매일 체크", "성적하락 — 매주 상담 필요")만 route:"student_action".
+5) special(명시어가 있을 때만): 신입생·신규·입학·첫/처음 상담·등록 문의·신규생 문의라는 말이 문장에 있을 때만 scheduleType:"신입생상담" 또는 inboxType:"신규생문의". 결석예정·긴급상담요청 같은 행정 전달은 route:"admin_inbox". 학생이 명단에 없다는 사실만으로 신입생·신규 상담을 추측하지 않는다.
+6) unclear: 위 어디에도 확신이 없으면 저장될 route를 억지로 고르지 말고 route:"clarify" + message에 가능한 해석을 구체적으로 묻는다(예: "이태경의 불규칙동사 학습 결과를 기록할까요, 테스트를 진행하라는 업무인가요?"). 잘못 저장하는 것보다 묻는 것이 낫다.
+
 분류 규칙:
 - route:"task"의 taskType은 반드시 아래 13개 중 하나: ${taskTypeLabels.join(", ")}
-- route:"schedule"은 아직 안 한, 앞으로 할 일정(보강/재시/신입생상담/레벨체크)일 때만.
+- route:"schedule"은 아직 안 한, 앞으로 할 일정(보강/재시/레벨체크, 그리고 명시어가 있을 때만 신입생상담)을 새로 잡을 때만. 일정을 보여달라는 문장은 schedule_view.
 - route:"counseling"은 상담을 이미 진행하고 그 내용을 기록할 때만(예정이면 schedule).
-- route:"student_action"은 학생의 지속적인 학습 조치/후속관리 메모.
-- route:"admin_inbox"는 결석예정/긴급상담요청/신규생문의/기타 전달사항.
+- route:"student_action"은 위 4)의 "지속 관리 방침"을 사용자가 명시했을 때만. 시험·과제 결과(→student_record), 기록 취소·수정(→correction), 판단이 애매한 문장(→clarify)을 student_action으로 보내지 않는다 — student_action은 fallback이 아니다.
+- route:"admin_inbox"는 결석예정/긴급상담요청/(명시어가 있는)신규생문의/기타 행정 전달사항.
 - route:"attendance_check"는 "확인해줘/입력됐는지 봐줘"처럼 이미 있어야 할 기록을 조회만 하는 요청 — 새로 기록을 만들라는 뜻이 아니다. 절대 task나 admin_inbox로 분류하지 않는다.
-- 학생 이름은 재원생 명단과 최대한 정확히 일치시킨다. 명단에 없어도 clarify를 쓰지 말고 문장 그대로 students에 넣는다(신입생일 수 있음 — 이후 처리는 시스템이 담당).
+- 학생 이름은 재원생 명단과 최대한 정확히 일치시킨다. 명단에 없는 이름도 문장 그대로 students에 넣는다(시스템이 학생 확인을 따로 묻는다). 이름을 못 찾았다고 의도(route/intentClass)를 바꾸지 않는다.
 - 문장 전체가 어디에도 해당하지 않을 때만 그 부분을 route:"clarify"로 남긴다(문장 전체를 통째로 포기하지 말고, 해석 가능한 다른 부분은 정상 분류한다).
 - route:"class_progress"는 반 이름 + 그 반의 오늘 수업 진도/과제(숙제)를 기록하는 문장일 때(학생 개인이 아니라 반 전체 기록). className은 반 목록에서 가장 가까운 이름을 그대로 쓰고(학년 표기 '고2/중2' 등은 반 이름에 있을 때만 포함), progress에 진도, homework에 과제를 나눠 넣는다. students는 빈 배열. 예: "고2 이사벨A 오늘 3과 본문 1~4번 했고 숙제는 워크북 22~25쪽" → route:"class_progress", className:"이사벨A"(반 목록의 실제 이름), progress:"3과 본문 1~4번", homework:"워크북 22~25쪽". 이것을 task로 분류하지 않는다. "1교시/2교시"가 있으면 period에 넣는다(같은 반이라도 교시가 다르면 별개 수업 — 한 문장에 여러 교시가 있으면 교시별로 intent를 나눈다).
 - route:"student_record"는 학생 한 명당 intent 하나다(여러 학생이 나오면 학생마다 따로, 한 학생도 빠뜨리지 말 것). students에는 그 학생 이름 하나만. 여러 줄 입력에서 첫 줄의 반/교시("고2 이사벨A 1교시")는 아래 모든 줄(진도·과제·학생 기록)에 className/period로 똑같이 넣는다. 예: "김민수 단어시험 84점 재시험" → recordType:"vocab", score:84, passed:false, retestRequired:true. "박지훈 워크북 과제 미완료" → recordType:"homework", assessmentName:"워크북", completed:false, actionRequested:false. "박지훈 과제 미완료, 다음 시간 확인해줘" → 같은 기록 + actionRequested:true, taskType:"숙제확인". 학생 기록을 task로 따로 중복 생성하지 않는다.
@@ -581,6 +602,11 @@ ${ref.classes.join(", ")}
 직원 명단:
 ${ref.staff.join(", ")}`;
   return [{ type: "text", text, cache_control: { type: "ephemeral" } }];
+}
+
+// 테스트/진단용: 실제 호출에 쓰는 system prompt 텍스트.
+export function unifiedSystemPromptText(ref: NlReference, taskTypeLabels: string[]): string {
+  return buildUnifiedSystemBlocks(ref, taskTypeLabels)[0].text;
 }
 
 export async function parseUnifiedInput(text: string, ref: NlReference, taskTypeLabels: string[]): Promise<UnifiedIntent[]> {
