@@ -12,7 +12,45 @@ type CreatedTask = { id: string; typeLabel: string; studentName: string; ownerNa
 // 서버(lib/nl-input.ts PendingAction)가 준 그대로 보관했다가 다음 답변과 함께
 // 돌려보낸다 — 화면은 question/missing[].candidates만 읽는다.
 type Pending = { question: string; missing: { candidates?: Candidate[] }[]; [key: string]: unknown };
-type Outcome = { route: string; label: string; status: "완료" | "확인필요" | "실패"; message: string; pending?: Pending };
+type FileHit = {
+  id: string;
+  filename: string;
+  uploadedAt: string | null;
+  uploader: string;
+  scope: "이 지점" | "공용";
+  fromOtherBranch: boolean;
+  messageSnippet: string;
+  driveUrl: string;
+  relatedTask: { id: string; label: string } | null;
+};
+type Outcome = { route: string; label: string; status: "완료" | "확인필요" | "실패"; message: string; pending?: Pending; files?: FileHit[] };
+
+const KST_DATE = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+
+// 파일 검색 결과(읽기 전용) — Drive 원본은 새 탭에서 연다(EXAM AI 서버를 거치지 않음).
+function FileResults({ files }: { files: FileHit[] }) {
+  if (files.length === 0) return null;
+  return (
+    <ul style={{ listStyle: "none", padding: 0, margin: "6px 0 0" }}>
+      {files.map((f) => (
+        <li key={f.id} style={{ padding: "6px 0", borderTop: "1px solid rgba(0,0,0,0.08)" }}>
+          <strong style={{ wordBreak: "break-all" }}>{f.filename}</strong>{" "}
+          <span className="badge">{f.scope}{f.fromOtherBranch ? "·타 지점" : ""}</span>
+          <div style={{ fontSize: 12, opacity: 0.8 }}>
+            {f.uploadedAt ? KST_DATE.format(new Date(f.uploadedAt)) : "-"} · {f.uploader}
+            {f.relatedTask ? ` · 업무: ${f.relatedTask.label}` : ""}
+          </div>
+          {f.messageSnippet && <div style={{ fontSize: 12, opacity: 0.8 }}>“{f.messageSnippet}”</div>}
+          {f.driveUrl && (
+            <a href={f.driveUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13 }}>
+              Google Drive에서 열기 ↗
+            </a>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
 // 직전 입력에서 확정된 반/날짜/교시 — 다음 입력에 이어 쓰도록 서버에 함께 보낸다.
 type ClassContext = { classId: string; className: string; date: string; period: string };
 
@@ -340,6 +378,7 @@ export default function AiUnifiedInput({
               {outcomes.map((outcome, index) => (
                 <li key={index} style={{ whiteSpace: "pre-line" }}>
                   {outcome.message}
+                  {outcome.files && <FileResults files={outcome.files} />}
                 </li>
               ))}
             </ul>
@@ -445,6 +484,7 @@ export default function AiUnifiedInput({
               {outcomes.map((o, i) => (
                 <li key={i} style={{ whiteSpace: "pre-line" }}>
                   {o.status === "완료" ? "✅" : o.status === "확인필요" ? "❓" : "⚠️"} {o.message}
+                  {o.files && <FileResults files={o.files} />}
                 </li>
               ))}
             </ul>

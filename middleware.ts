@@ -21,7 +21,9 @@ import { checkSessionActive } from "./lib/sessionGuard";
 // 건너뛴다 — 세션 쿠키 없이 호출되고, 라우트 자체가 MIGRATION_ADMIN_SECRET
 // 헤더로 스스로 인증한다(불일치 시 404). 일회성 마이그레이션 러너와 달리
 // 이 경로는 dual-write 운영 도구로 계속 남는다.
-const PUBLIC_API_EXACT_PATHS = ["/api/login", "/api/slack/events", "/api/admin/reconciliation"];
+// "/api/files/archive"는 n8n 전용(파일 인덱스 등록) — 쿠키 대신 FILE_ARCHIVE_SECRET HMAC 서명으로
+// 라우트가 스스로 인증한다(서명 없으면 401).
+const PUBLIC_API_EXACT_PATHS = ["/api/login", "/api/slack/events", "/api/admin/reconciliation", "/api/files/archive"];
 const PUBLIC_API_PREFIX_PATHS = ["/api/cron/"];
 
 export async function middleware(req: NextRequest) {

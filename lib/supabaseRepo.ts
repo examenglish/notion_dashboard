@@ -339,7 +339,7 @@ export async function pgPatchById(entityKey: EntityKey, id: string, patch: Recor
  */
 // Notion 미러가 없는 PostgreSQL 전용 테이블 — notion_id 컬럼 자체가 없으므로(예: 006
 // student_learning_records) INSERT에 notion_id를 넣으면 PostgREST가 PGRST204(400)로 거부한다.
-export const PG_ONLY_ENTITIES: ReadonlySet<EntityKey> = new Set<EntityKey>(["STUDENT_LEARNING_RECORD"]);
+export const PG_ONLY_ENTITIES: ReadonlySet<EntityKey> = new Set<EntityKey>(["STUDENT_LEARNING_RECORD", "FILE_ARCHIVE"]);
 
 export function pgInsertPayload(entityKey: EntityKey, branchId: string, row: Record<string, unknown>): Record<string, unknown> {
   return PG_ONLY_ENTITIES.has(entityKey) ? { branch_id: branchId, ...row } : { branch_id: branchId, notion_id: null, ...row };
@@ -425,6 +425,27 @@ export async function pgQueryRaw(entityKey: EntityKey, filterExpr: string): Prom
   });
   if (!r.ok) throw new Error(`Postgres read ${entityKey} failed (${r.status})`);
   return (await r.json()) as Record<string, unknown>[];
+}
+
+/**
+ * 현재 지점 행 + visibility='shared' 행(다른 지점 것 포함)만 읽는다 — 공용 자료 검색용
+ * (file_archives). 다른 지점의 branch 전용 행은 절대 포함하지 않는다.
+ */
+export async function pgQueryBranchOrShared(entityKey: EntityKey, filterExpr: string): Promise<Record<string, unknown>[]> {
+  const { env, branchId } = await requireEnvAndBranch();
+  const r = await fetch(
+    `${env.url}/rest/v1/${TABLE[entityKey]}?or=(branch_id.eq.${branchId},visibility.eq.shared)${filterExpr ? `&${filterExpr}` : ""}&select=*`,
+    { headers: authHeaders(env.key) }
+  );
+  if (!r.ok) throw new Error(`Postgres read ${entityKey} failed (${r.status})`);
+  const rows = (await r.json()) as Record<string, unknown>[];
+  // 방어적 재확인(쿼리 조건과 동일): 다른 지점의 branch 전용 행은 버린다.
+  return rows.filter((row) => row.branch_id === branchId || row.visibility === "shared");
+}
+
+/** 현재 배포의 지점 id(branches.id). */
+export async function currentBranchId(): Promise<string> {
+  return (await requireEnvAndBranch()).branchId;
 }
 
 /** 컬럼 하나를 정확히 일치(대소문자 구분)로 찾는다 — 동명이인 dedup 체크용(findStudentByName 등). */

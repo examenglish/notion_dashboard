@@ -1,0 +1,706 @@
+{
+  "name": "EXAM AI — Slack file archive (Slack → Google Drive → EXAM AI index)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "exam-ai-file-archive",
+        "responseMode": "onReceived",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "name": "EXAM AI archive job",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "exam-ai-file-archive"
+    },
+    {
+      "parameters": {
+        "jsCode": "// EXAM AI가 FILE_ARCHIVE_SECRET으로 서명한 작업만 처리한다(서명: v1=HMAC-SHA256(`${ts}.${rawBody}`)).\n// 필요: NODE_FUNCTION_ALLOW_BUILTIN=crypto, FILE_ARCHIVE_SECRET(n8n 환경변수), N8N_BLOCK_ENV_ACCESS_IN_NODE=false\nconst crypto = require('crypto');\nconst secret = $env.FILE_ARCHIVE_SECRET;\nif (!secret) throw new Error('FILE_ARCHIVE_SECRET not configured');\nconst out = [];\nfor (const item of $input.all()) {\n  const headers = item.json.headers || {};\n  const ts = String(headers['x-exam-ai-timestamp'] || '');\n  const sig = String(headers['x-exam-ai-signature'] || '');\n  const raw = item.binary && item.binary.data ? Buffer.from(item.binary.data.data, 'base64').toString('utf8') : JSON.stringify(item.json.body);\n  const expected = 'v1=' + crypto.createHmac('sha256', secret).update(`${ts}.${raw}`).digest('hex');\n  if (!/^\\d+$/.test(ts) || Math.abs(Date.now() / 1000 - Number(ts)) > 300) throw new Error('stale or missing timestamp');\n  if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) throw new Error('bad signature');\n  const job = JSON.parse(raw);\n  if (job.version !== 1 || !Array.isArray(job.files)) throw new Error('unsupported job');\n  const rootByBranch = { sajik: $env.DRIVE_ARCHIVE_FOLDER_SAJIK, geumjeong: $env.DRIVE_ARCHIVE_FOLDER_GEUMJEONG };\n  const rootFolderId = rootByBranch[job.branchCode];\n  if (!rootFolderId) throw new Error(`no Drive archive folder for branch ${job.branchCode}`);\n  for (const f of job.files) {\n    const search = `?teamId=${encodeURIComponent(job.teamId)}&fileId=${encodeURIComponent(f.id)}`;\n    const lookupTs = String(Math.floor(Date.now() / 1000));\n    const month = (f.createdAt || new Date().toISOString()).slice(0, 7); // YYYY-MM\n    out.push({ json: {\n      branchCode: job.branchCode, callbackUrl: job.callbackUrl, teamId: job.teamId, channelId: job.channelId,\n      messageTs: job.messageTs, threadTs: job.threadTs, userId: job.userId, messageText: job.messageText,\n      fileId: f.id, fileName: f.name, mimeType: f.mimeType, fileSize: f.size, uploadedAt: f.createdAt,\n      rootFolderId, monthFolderName: month,\n      lookupUrl: job.callbackUrl + search, lookupTs,\n      lookupSig: 'v1=' + crypto.createHmac('sha256', secret).update(`${lookupTs}.${search}`).digest('hex'),\n    } });\n  }\n}\nreturn out;"
+      },
+      "name": "Verify signature & split files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.lookupUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-exam-ai-timestamp",
+              "value": "={{ $json.lookupTs }}"
+            },
+            {
+              "name": "x-exam-ai-signature",
+              "value": "={{ $json.lookupSig }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Already archived in EXAM AI?",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.archived }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Skip if archived",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "name": "Done (already archived)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        880,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/drive/v3/files",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "=appProperties has { key='slackFileId' and value='{{ $('Verify signature & split files').item.json.fileId }}' } and trashed=false"
+            },
+            {
+              "name": "fields",
+              "value": "files(id,webViewLink,parents)"
+            },
+            {
+              "name": "supportsAllDrives",
+              "value": "true"
+            },
+            {
+              "name": "includeItemsFromAllDrives",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Find in Drive by Slack file id",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        400
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "EXAM AI Google Drive"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ ($json.files || []).length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Drive file exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const ctx = $('Verify signature & split files').item.json;\nconst f = $json.files[0];\nreturn { json: { ...ctx, driveFileId: f.id, driveUrl: f.webViewLink, driveFolderId: (f.parents || [])[0] || '' } };"
+      },
+      "name": "Use existing Drive file",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/drive/v3/files",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "=name = '{{ $('Verify signature & split files').item.json.monthFolderName }}' and '{{ $('Verify signature & split files').item.json.rootFolderId }}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+            },
+            {
+              "name": "fields",
+              "value": "files(id)"
+            },
+            {
+              "name": "supportsAllDrives",
+              "value": "true"
+            },
+            {
+              "name": "includeItemsFromAllDrives",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Find month folder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        520
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "EXAM AI Google Drive"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ ($json.files || []).length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Month folder exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ name: $('Verify signature & split files').item.json.monthFolderName, mimeType: 'application/vnd.google-apps.folder', parents: [$('Verify signature & split files').item.json.rootFolderId] }) }}",
+        "options": {}
+      },
+      "name": "Create month folder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        640
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "EXAM AI Google Drive"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const ctx = $('Verify signature & split files').item.json;\nconst folderId = $json.id || (($json.files || [])[0] || {}).id;\nif (!folderId) throw new Error('month folder not resolved');\nreturn { json: { ...ctx, driveFolderId: folderId } };"
+      },
+      "name": "Pick folder id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://slack.com/api/files.info",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "file",
+              "value": "={{ $json.fileId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Slack file info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        520
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "EXAM AI Slack Bot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Slack file info').item.json.file.url_private_download }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "name": "Download from Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        520
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "EXAM AI Slack Bot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ name: $('Pick folder id').item.json.fileName, parents: [$('Pick folder id').item.json.driveFolderId], appProperties: { slackFileId: $('Pick folder id').item.json.fileId, slackTeamId: $('Pick folder id').item.json.teamId, branchCode: $('Pick folder id').item.json.branchCode } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "name": "Start Drive upload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        520
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "EXAM AI Google Drive"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $('Start Drive upload').item.json.headers.location }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "name": "Upload bytes to Drive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        520
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "EXAM AI Google Drive"
+        }
+      },
+      "retryOnFail": false
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const ctx = $('Pick folder id').item.json;\nreturn { json: { ...ctx, driveFileId: $json.id, driveUrl: `https://drive.google.com/file/d/${$json.id}/view` } };"
+      },
+      "name": "Use uploaded Drive file",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// EXAM AI 등록 요청 서명(v1=HMAC-SHA256(`${ts}.${body}`)) — 서명한 문자열 그대로 보낸다.\nconst crypto = require('crypto');\nconst secret = $env.FILE_ARCHIVE_SECRET;\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  const body = JSON.stringify({\n    branchCode: j.branchCode, teamId: j.teamId, channelId: j.channelId, messageTs: j.messageTs, threadTs: j.threadTs,\n    fileId: j.fileId, userId: j.userId, messageText: j.messageText, originalFilename: j.fileName, mimeType: j.mimeType,\n    fileSize: j.fileSize, uploadedAt: j.uploadedAt, driveFileId: j.driveFileId, driveUrl: j.driveUrl, driveFolderId: j.driveFolderId,\n  });\n  const ts = String(Math.floor(Date.now() / 1000));\n  out.push({ json: { callbackUrl: j.callbackUrl, body, ts, sig: 'v1=' + crypto.createHmac('sha256', secret).update(`${ts}.${body}`).digest('hex') } });\n}\nreturn out;"
+      },
+      "name": "Sign EXAM AI registration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.callbackUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-exam-ai-timestamp",
+              "value": "={{ $json.ts }}"
+            },
+            {
+              "name": "x-exam-ai-signature",
+              "value": "={{ $json.sig }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {}
+      },
+      "name": "Register in EXAM AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3520,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "EXAM AI archive job": {
+      "main": [
+        [
+          {
+            "node": "Verify signature & split files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature & split files": {
+      "main": [
+        [
+          {
+            "node": "Already archived in EXAM AI?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already archived in EXAM AI?": {
+      "main": [
+        [
+          {
+            "node": "Skip if archived",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip if archived": {
+      "main": [
+        [
+          {
+            "node": "Done (already archived)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Find in Drive by Slack file id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find in Drive by Slack file id": {
+      "main": [
+        [
+          {
+            "node": "Drive file exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive file exists?": {
+      "main": [
+        [
+          {
+            "node": "Use existing Drive file",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Find month folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use existing Drive file": {
+      "main": [
+        [
+          {
+            "node": "Sign EXAM AI registration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find month folder": {
+      "main": [
+        [
+          {
+            "node": "Month folder exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Month folder exists?": {
+      "main": [
+        [
+          {
+            "node": "Pick folder id",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create month folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create month folder": {
+      "main": [
+        [
+          {
+            "node": "Pick folder id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick folder id": {
+      "main": [
+        [
+          {
+            "node": "Slack file info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack file info": {
+      "main": [
+        [
+          {
+            "node": "Start Drive upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download from Slack": {
+      "main": [
+        [
+          {
+            "node": "Upload bytes to Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Drive upload": {
+      "main": [
+        [
+          {
+            "node": "Download from Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload bytes to Drive": {
+      "main": [
+        [
+          {
+            "node": "Use uploaded Drive file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use uploaded Drive file": {
+      "main": [
+        [
+          {
+            "node": "Sign EXAM AI registration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign EXAM AI registration": {
+      "main": [
+        [
+          {
+            "node": "Register in EXAM AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none"
+  },
+  "active": false,
+  "pinData": {}
+}

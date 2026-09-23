@@ -45,6 +45,7 @@ import {
   listMyTasks,
 } from "@/lib/notion";
 import { createHash, createHmac, timingSafeEqual } from "crypto";
+import { searchFileArchives, type FileHit } from "@/lib/fileArchive";
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
 import {
@@ -539,6 +540,8 @@ export type UnifiedOutcome = {
   pending?: PendingAction;
   // 이 결과가 확정한 반/날짜/교시 — 화면이 다음 입력의 반 문맥으로 재사용한다.
   context?: ClassContext;
+  // 파일 검색 결과(읽기 전용, file_search)
+  files?: FileHit[];
 };
 
 // 직전 입력의 반 문맥(화면이 보관했다가 다음 요청에 함께 보낸다). 같은 날짜일 때만
@@ -1141,7 +1144,7 @@ async function createTaskOutcomes(
 // ---------------------------------------------------------------------------
 export const ROUTES_BY_INTENT_CLASS: Record<IntentClass, UnifiedIntent["route"][]> = {
   correction: ["correction"],
-  query: ["history_query", "schedule_view", "attendance_check"],
+  query: ["history_query", "schedule_view", "attendance_check", "file_search"],
   record: ["class_progress", "student_record", "counseling"],
   action: ["task", "schedule", "student_action"],
   special: ["schedule", "admin_inbox"],
@@ -1178,11 +1181,16 @@ const SIG_COUNSEL = /상담/;
 const SIG_ABSENCE = /(결석|빠[지진짐질져]|못\s*(와|옴|온|나와|가|간)|불참|안\s*(와|옴|나와|온))/;
 const SIG_URGENT = /(긴급|급하|급히|즉시|바로|당장)/;
 const SIG_ADMIN_MISC = /(전달|행정|안내|공지|원장|사무실|알려\s*드|말씀)/;
+// 파일·자료 찾기(읽기 전용). 찾은 뒤 출력/전달/수정 등을 시키는 문장은 제외(그건 업무).
+const SIG_FILE_NOUN = /(파일|자료|pdf|hwp|한글\s*문서|워드|엑셀|ppt|문서|첨부|사진|이미지)/i;
+const SIG_FIND = /(찾아|찾기|검색|보여|열어|어디\s*있)/;
+const SIG_FILE_FOLLOWUP_ACTION = /(출력|인쇄|전달|배부|나눠|만들|제작|수정|편집|보내|맡겨|시켜|복사)/;
 
 export function writeGuardSignals(text: string) {
   const t = text ?? "";
   return {
     correction: (SIG_REF.test(t) && (SIG_CORR.test(t) || SIG_DENY.test(t))) || SIG_CONTRAST.test(t),
+    fileSearch: SIG_FILE_NOUN.test(t) && SIG_FIND.test(t) && !SIG_FILE_FOLLOWUP_ACTION.test(t),
     query: SIG_QUERY.test(t) && !SIG_ACTION.test(t),
     action: SIG_ACTION.test(t),
     policy: SIG_POLICY.test(t),
@@ -1224,6 +1232,23 @@ function toCorrection(i: UnifiedIntent, text: string): UnifiedIntent {
   };
 }
 
+// 파일 검색 신호 → 읽기 전용 file_search(AI가 업무/기록으로 잘못 분류해도 write 0건).
+const FILE_QUERY_STOPWORDS = /^(파일|자료|문서|첨부|찾아줘|찾아|찾기|검색|보여줘|보여|열어줘|올린|올라온|올린거|거|좀|slack|슬랙|에|의|오늘|어제|지난주|이번주|작년|최근|pdf|hwp)$/i;
+export function fileKeywordsFromText(text: string): string[] {
+  return text
+    .split(/[\s,.!?]+/)
+    .map((w) => w.replace(/(에서|에게|에|의|을|를|이|가|은|는|쌤이|쌤|님이|님)$/, ""))
+    .filter((w) => w.length >= 2 && !FILE_QUERY_STOPWORDS.test(w) && !SIG_FIND.test(w));
+}
+function toFileSearch(i: UnifiedIntent, text: string): UnifiedIntent {
+  return {
+    ...i,
+    intentClass: "query",
+    route: "file_search",
+    fileKeywords: i.route === "file_search" && i.fileKeywords?.length ? i.fileKeywords : fileKeywordsFromText(text),
+  };
+}
+
 // 조회 신호가 있으면 쓰기 route를 읽기 전용 조회로 바꾼다(write 0건).
 function toQuery(i: UnifiedIntent, text: string): UnifiedIntent {
   const scheduleLike = /(일정|할\s*일|업무|보강|재시)/.test(text) && !/(입력|넣)/.test(text);
@@ -1247,9 +1272,13 @@ export function enforceIntentBoundaries(
       const classEdit = i.route === "class_progress" && (i.editMode === "replace" || i.editMode === "delete");
       // 1) 정정: 기존 기록을 가리키며 고치/취소 → 새 데이터 금지(반 진도 명시적 수정/삭제는 기존 행 변경이라 허용)
       if (sig.correction && !classEdit) return toCorrection(i, text);
-      // 2) 조회: 보여줘/목록/뭐 있어(행동 요청 없음) → 읽기 전용으로
+      // 2) 파일 찾기 → 읽기 전용 파일 검색
+      if (sig.fileSearch) return toFileSearch(i, text);
+      // 3) 조회: 보여줘/목록/뭐 있어(행동 요청 없음) → 읽기 전용으로
       if (sig.query) return toQuery(i, text);
     }
+    // 파일 찾기 문장을 다른 조회로 잘못 분류해도 파일 검색으로(모두 읽기 전용)
+    if (sig.fileSearch && (i.route === "history_query" || i.route === "schedule_view" || i.route === "clarify")) return toFileSearch(i, text);
     // 반 진도 교체/삭제는 원문에 정정 표현이 있을 때만(없으면 추가로 낮춘다 — 기존 내용 보존)
     if (i.route === "class_progress" && (i.editMode === "replace" || i.editMode === "delete") && !SIG_CORR.test(text) && !SIG_CONTRAST.test(text)) {
       i = { ...i, editMode: "append" };
@@ -2730,6 +2759,39 @@ async function processIntents(
             break;
           }
           outcomes.push(...(await executeDraft(draft, roster, studentNames, today)).outcomes);
+          break;
+        }
+        case "file_search": {
+          // 읽기 전용 — 현재 지점 + 공용 자료만 검색, 어떤 저장 함수도 부르지 않는다.
+          const keywords = (intent.fileKeywords ?? []).filter(Boolean);
+          const filter = {
+            keywords: keywords.length ? keywords : fileKeywordsFromText(text),
+            uploader: intent.fileUploader?.trim() || "",
+            from: intent.historyFrom || undefined,
+            to: intent.historyTo || intent.historyFrom || undefined,
+            kind: intent.fileKind || "",
+          };
+          try {
+            const hits = await searchFileArchives(filter);
+            const conds = [
+              filter.keywords.length ? `"${filter.keywords.join(" ")}"` : "",
+              filter.uploader ? `올린 사람 ${filter.uploader}` : "",
+              filter.from ? `${filter.from}${filter.to && filter.to !== filter.from ? `~${filter.to}` : ""}` : "",
+              filter.kind ? filter.kind.toUpperCase() : "",
+            ].filter(Boolean);
+            outcomes.push({
+              route: "file_search",
+              label: "파일 검색",
+              status: "완료",
+              message: hits.length
+                ? `파일 ${hits.length}건을 찾았습니다${conds.length ? ` (${conds.join(", ")})` : ""}.`
+                : `조건에 맞는 파일을 찾지 못했습니다${conds.length ? ` (${conds.join(", ")})` : ""}. 검색어를 줄이거나 기간을 바꿔 보세요.`,
+              files: hits,
+            });
+          } catch (err) {
+            console.error("[exam-ai] file search failed", err instanceof Error ? err.message : String(err));
+            outcomes.push({ route: "file_search", label: "파일 검색", status: "확인필요", message: "파일 보관함을 아직 사용할 수 없습니다(관리자 설정이 필요합니다)." });
+          }
           break;
         }
         case "schedule_view": {

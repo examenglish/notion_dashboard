@@ -377,6 +377,7 @@ export type UnifiedIntentRoute =
   | "correction"
   | "history_query"
   | "schedule_view"
+  | "file_search"
   | "clarify";
 
 // 최상위 의도 경계. 모델이 세부 route보다 먼저 이것을 정하고, route는 반드시 이 경계 안에서
@@ -438,6 +439,9 @@ export type UnifiedIntent = {
   field?: "progress" | "homework" | "";
   itemNumber?: number;
   afterPrevious?: boolean;
+  fileKeywords?: string[];
+  fileUploader?: string;
+  fileKind?: "pdf" | "hwp" | "doc" | "sheet" | "ppt" | "image" | "";
   historyFrom?: string;
   historyTo?: string;
   historyRecent?: boolean;
@@ -467,9 +471,9 @@ const UNIFIED_INTENTS_TOOL = (taskTypeLabels: string[]): Anthropic.Tool => ({
             },
             route: {
               type: "string",
-              enum: ["task", "admin_inbox", "schedule", "counseling", "student_action", "attendance_check", "class_progress", "student_record", "correction", "history_query", "schedule_view", "clarify"],
+              enum: ["task", "admin_inbox", "schedule", "counseling", "student_action", "attendance_check", "class_progress", "student_record", "correction", "history_query", "schedule_view", "file_search", "clarify"],
               description:
-                "task=업무 생성(아래 taskType 13종 중 하나), admin_inbox=행정실 기록(결석예정/긴급상담요청/신규생문의/기타), schedule=예정된 일정(보강/재시/신입생상담/레벨체크), counseling=이미 진행한 상담 기록, student_action=학생 조치사항 메모, attendance_check=이미 입력된 출결/결석 여부를 조회만 하는 확인 요청(새로 기록하지 않음), class_progress=반 전체의 오늘 수업 진도/과제(숙제) 기록, student_record=학생 한 명의 학습 결과/상태 기록(시험·단어시험 점수, 과제 완료/미완료, 암기, 재시험, 태도, 보강 필요, 추가 확인, 메모), correction=이미 입력한 기록을 고치거나 취소하는 요청(아까/방금/그거/잘못 입력/아니고/아니야/취소/고쳐/바꿔/삭제/수정), history_query=이미 입력한 내용을 보여달라는 조회 요청(보여줘/뭐 입력했지/목록/기록 확인 — 새로 기록하지 않음), schedule_view=오늘(또는 특정 날짜) 일정·할 일·업무·보강/재시 일정을 보여달라는 조회(새로 만들지 않음), clarify=위 어디에도 명확히 해당하지 않을 때.",
+                "task=업무 생성(아래 taskType 13종 중 하나), admin_inbox=행정실 기록(결석예정/긴급상담요청/신규생문의/기타), schedule=예정된 일정(보강/재시/신입생상담/레벨체크), counseling=이미 진행한 상담 기록, student_action=학생 조치사항 메모, attendance_check=이미 입력된 출결/결석 여부를 조회만 하는 확인 요청(새로 기록하지 않음), class_progress=반 전체의 오늘 수업 진도/과제(숙제) 기록, student_record=학생 한 명의 학습 결과/상태 기록(시험·단어시험 점수, 과제 완료/미완료, 암기, 재시험, 태도, 보강 필요, 추가 확인, 메모), correction=이미 입력한 기록을 고치거나 취소하는 요청(아까/방금/그거/잘못 입력/아니고/아니야/취소/고쳐/바꿔/삭제/수정), history_query=이미 입력한 내용을 보여달라는 조회 요청(보여줘/뭐 입력했지/목록/기록 확인 — 새로 기록하지 않음), schedule_view=오늘(또는 특정 날짜) 일정·할 일·업무·보강/재시 일정을 보여달라는 조회(새로 만들지 않음), file_search=Slack/Drive에 보관된 파일·자료를 찾아달라는 조회(새로 만들지 않음), clarify=위 어디에도 명확히 해당하지 않을 때.",
             },
             taskType: { type: "string", enum: taskTypeLabels, description: "route가 task일 때만. 업무 유형 한글 라벨." },
             inboxType: { type: "string", enum: ["결석예정", "긴급상담요청", "신규생문의", "기타"], description: "route가 admin_inbox일 때만." },
@@ -545,7 +549,14 @@ const UNIFIED_INTENTS_TOOL = (taskTypeLabels: string[]): Anthropic.Tool => ({
               type: "number",
               description: "correction: 직전에 보여준 입력 목록의 번호로 가리킬 때('2번 94점으로'의 2, '첫 번째 거'는 1, '마지막 거'는 -1). 없으면 생략.",
             },
-            historyFrom: { type: "string", description: "history_query: 조회 시작 날짜 YYYY-MM-DD(오늘/어제 등을 날짜로). 없으면 오늘." },
+            fileKeywords: {
+              type: "array",
+              items: { type: "string" },
+              description: "file_search: 파일을 찾을 핵심어(학교/학년/시험/자료명 등, 예: ['거성중2','어순배열']). '파일/자료/찾아줘' 같은 말은 빼고 넣는다.",
+            },
+            fileUploader: { type: "string", description: "file_search: 올린 사람 이름('민지쌤이 올린'의 민지). 없으면 빈 문자열." },
+            fileKind: { type: "string", enum: ["pdf", "hwp", "doc", "sheet", "ppt", "image", ""], description: "file_search: 파일 형식이 언급되면(PDF/한글/워드/엑셀/PPT/사진). 없으면 빈 문자열." },
+            historyFrom: { type: "string", description: "history_query/file_search: 조회 시작 날짜 YYYY-MM-DD(오늘/어제 등을 날짜로). 없으면 오늘." },
             historyTo: { type: "string", description: "history_query: 조회 끝 날짜 YYYY-MM-DD(포함). 없으면 historyFrom과 같게." },
             historyRecent: { type: "boolean", description: "history_query: '방금/최근/아까 입력한 거'처럼 날짜보다 최근 몇 건을 원하면 true." },
             onlyMine: { type: "boolean", description: "history_query: '전체/모든 직원/다른 선생님 것까지'라고 하면 false, 그 외(내가/제가 입력한, 입력한 내용)는 true." },
@@ -600,6 +611,7 @@ intent 분리 예시:
 - route:"student_record"는 학생 한 명당 intent 하나다(여러 학생이 나오면 학생마다 따로, 한 학생도 빠뜨리지 말 것). students에는 그 학생 이름 하나만. 여러 줄 입력에서 첫 줄의 반/교시("고2 이사벨A 1교시")는 아래 모든 줄(진도·과제·학생 기록)에 className/period로 똑같이 넣는다. 예: "김민수 단어시험 84점 재시험" → recordType:"vocab", score:84, passed:false, retestRequired:true. "박지훈 워크북 과제 미완료" → recordType:"homework", assessmentName:"워크북", completed:false, actionRequested:false. "박지훈 과제 미완료, 다음 시간 확인해줘" → 같은 기록 + actionRequested:true, taskType:"숙제확인". 학생 기록을 task로 따로 중복 생성하지 않는다.
 - route:"correction"은 이미 입력한 기록을 고치거나 취소하는 문장이다(새 기록을 만들지 않는다). 언급된 학생/반/교시/시험 종류는 students/className/period/recordType/assessmentName에 그대로(대상 찾기용), 바뀔 값은 new* 필드에 넣는다. 예: "84점 아니고 94점이야" → correctionTarget:"student_record", operation:"modify", oldScore:84, newScore:94. "김민수 재시험 아니야" → students:["김민수"], operation:"modify", newRetestRequired:false. "박지훈 과제 미완료 취소" → students:["박지훈"], recordType:"homework", operation:"cancel". "아까 과제 25쪽까지 아니고 27쪽까지" → correctionTarget:"class_progress", field:"homework", fromText:"25쪽", toText:"27쪽", operation:"modify". "관계대명사 한 거 삭제해" → correctionTarget:"class_progress", field:"progress", fromText:"관계대명사", operation:"cancel". "방금 입력한 거 취소해" → correctionTarget:"recent", operation:"cancel". "아까 거 잘못 입력했어" → correctionTarget:"recent", operation:"unknown". "민수가 아니라 민지야" → students:["민수"], newStudentName:"민지", operation:"modify". "1교시 아니고 2교시야" → newPeriod:"2교시", correctionTarget:"recent", operation:"modify".
 - route:"history_query"는 조회만 한다. 언급된 학생은 students, 반은 className, 종류는 recordType. 예: "오늘 입력한 내용 보여줘" → route:"history_query", historyFrom:오늘. "어제 입력한 내용" → historyFrom:어제. "방금 입력한 거 보여줘" → historyRecent:true. "김민수 오늘 기록 보여줘" → students:["김민수"]. "오늘 재시험 기록 보여줘" → retestOnly:true. "오늘 과제 미완료 입력한 거" → recordType:"homework", incompleteOnly:true. 조회 문장을 student_record/class_progress/task로 분류해 새 기록을 만들면 절대 안 된다.
+- 파일·자료를 찾는 문장("거성중2 어순배열 파일 찾아줘", "지난주 민지쌤이 올린 PDF 찾아줘", "여명중2 중간고사 자료 보여줘", "어제 Slack에 올라온 파일 찾아줘")은 intentClass:"query", route:"file_search"다. fileKeywords/fileUploader/fileKind와 기간(historyFrom/historyTo, '지난주'·'어제'를 날짜로)을 채운다. 자료를 찾아서 출력·전달·수정하라는 행동 요청("자료 찾아서 출력해줘")은 file_search가 아니라 task다.
 - 목록 번호로 고치는 문장("2번 94점으로", "3번 취소", "첫 번째 거 잘못됐어", "마지막 거 삭제", "2번 재시험 아니야")은 route:"correction" + itemNumber. "3번 과제 27쪽까지로 바꿔" → itemNumber:3, correctionTarget:"class_progress", field:"homework", toText:"27쪽", operation:"modify".
 - 이미 입력된 행정실 기록(결석예정 등)을 지우거나 고치는 문장("박재하 결석예정 삭제해줘", "박재하 결석예정 취소", "박재하 결석예정 아니야", "박재하 결석 날짜 수정해줘")은 새 행정 전달(admin_inbox)이나 업무가 아니라 route:"correction", correctionTarget:"admin_record", inboxType:"결석예정", students:["박재하"]이다. 삭제/취소/아니야 → operation:"cancel", 날짜 수정 → operation:"modify" + newStartDate/newEndDate. 반면 "박재하 결석 관련해서 학부모에게 전화해줘"는 기존 기록 변경이 아니라 task(학부모연락)다.
 - route:"clarify"를 쓸 때 message에는 "무엇을 해야 할지 명확하지 않습니다" 같은 일반 문구 대신, 문장에서 이해한 부분과 부족한 정보를 구체적으로 묻는 한국어 질문을 쓴다.

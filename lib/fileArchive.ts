@@ -1,0 +1,382 @@
+// EXAM AI 파일 인덱스(file_archives, 007 migration) — Slack 파일 자동보관 + 자연어 파일검색.
+//
+// 역할 분리:
+//  - Slack: 직원이 파일을 올리는 곳(장기 저장소 아님)
+//  - n8n: Slack 파일 다운로드 → Google Drive 업로드 → 이 모듈의 archive API 호출(운반만)
+//  - Google Drive: 원본 binary 장기 보관(EXAM AI는 Drive 자격증명을 갖지 않음)
+//  - EXAM AI: 메타데이터 정본 + 지점/공용 범위 + 자연어 검색
+//
+// 보안: EXAM AI ↔ n8n 호출은 FILE_ARCHIVE_SECRET HMAC-SHA256 서명(`v1=hex`, 타임스탬프 5분창).
+// 지점은 n8n이 보낸 값을 믿지 않고, 이 배포의 지점 코드 + 채널→지점 매핑(SLACK_FILE_ARCHIVE_CHANNELS)
+// + 허용 Slack 팀으로 서버가 다시 검증한다. Slack 토큰·Drive 자격증명은 저장/전달/응답하지 않는다.
+import { createHmac, timingSafeEqual } from "crypto";
+import {
+  branchCode,
+  currentBranchId,
+  pgGetByNotionId,
+  pgInsertRow,
+  pgQueryBranchOrShared,
+  pgQueryRaw,
+} from "./supabaseRepo";
+
+const SIGNATURE_WINDOW_SEC = 300;
+
+// ---------------------------------------------------------------------------
+// 설정(환경변수) — 값은 코드에 두지 않는다.
+// ---------------------------------------------------------------------------
+function archiveSecret(): string | null {
+  return process.env.FILE_ARCHIVE_SECRET || null;
+}
+
+/** "C0123=sajik,C0456=geumjeong" → Map(channel → branch code) */
+export function archiveChannelMap(): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const part of (process.env.SLACK_FILE_ARCHIVE_CHANNELS ?? "").split(",")) {
+    const [channel, code] = part.split("=").map((v) => v?.trim());
+    if (channel && code) map.set(channel, code);
+  }
+  return map;
+}
+
+function allowedTeamId(): string | null {
+  return process.env.SLACK_FILE_ARCHIVE_TEAM_ID || process.env.SLACK_TEAM_ID || null;
+}
+
+/** "sajik=https://a,geumjeong=https://b" → n8n이 등록 API를 부를 지점별 주소 */
+function branchBaseUrls(): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const part of (process.env.FILE_ARCHIVE_BRANCH_URLS ?? "").split(",")) {
+    const i = part.indexOf("=");
+    if (i > 0) map.set(part.slice(0, i).trim(), part.slice(i + 1).trim().replace(/\/$/, ""));
+  }
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// 서명
+// ---------------------------------------------------------------------------
+export function signArchive(secret: string, timestamp: string, payload: string): string {
+  return `v1=${createHmac("sha256", secret).update(`${timestamp}.${payload}`).digest("hex")}`;
+}
+
+export type ArchiveAuth = { ok: true } | { ok: false; status: number; reason: string };
+
+export function verifyArchiveSignature(payload: string, timestamp: string | null, signature: string | null, nowSec = Math.floor(Date.now() / 1000)): ArchiveAuth {
+  const secret = archiveSecret();
+  if (!secret) return { ok: false, status: 503, reason: "not_configured" };
+  if (!timestamp || !signature || !/^\d+$/.test(timestamp)) return { ok: false, status: 401, reason: "missing_signature" };
+  if (Math.abs(nowSec - Number(timestamp)) > SIGNATURE_WINDOW_SEC) return { ok: false, status: 401, reason: "stale_timestamp" };
+  const expected = Buffer.from(signArchive(secret, timestamp, payload));
+  const got = Buffer.from(signature);
+  if (expected.length !== got.length || !timingSafeEqual(expected, got)) return { ok: false, status: 401, reason: "bad_signature" };
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// 등록(n8n → EXAM AI) — 멱등
+// ---------------------------------------------------------------------------
+export type ArchiveInput = {
+  branchCode: string;
+  teamId: string;
+  channelId: string;
+  messageTs?: string;
+  threadTs?: string;
+  fileId: string;
+  userId?: string;
+  uploaderName?: string;
+  messageText?: string;
+  originalFilename: string;
+  mimeType?: string;
+  fileSize?: number;
+  uploadedAt?: string;
+  driveFileId: string;
+  driveUrl: string;
+  driveFolderId?: string;
+  relatedTaskId?: string;
+};
+
+const DRIVE_URL = /^https:\/\/(drive|docs)\.google\.com\//;
+const SECRET_IN_URL = /(access_token|[?&]key=|[?&]token=|[?&]sig=)/i;
+
+export function validateArchiveInput(body: unknown): { ok: true; input: ArchiveInput } | { ok: false; reason: string } {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const str = (k: string) => (typeof b[k] === "string" ? (b[k] as string).trim() : "");
+  const input: ArchiveInput = {
+    branchCode: str("branchCode"),
+    teamId: str("teamId"),
+    channelId: str("channelId"),
+    messageTs: str("messageTs") || undefined,
+    threadTs: str("threadTs") || undefined,
+    fileId: str("fileId"),
+    userId: str("userId") || undefined,
+    uploaderName: str("uploaderName").slice(0, 100) || undefined,
+    messageText: str("messageText").slice(0, 4000) || undefined,
+    originalFilename: str("originalFilename").slice(0, 500),
+    mimeType: str("mimeType").slice(0, 200) || undefined,
+    fileSize: typeof b.fileSize === "number" && Number.isFinite(b.fileSize) && b.fileSize >= 0 ? Math.floor(b.fileSize) : undefined,
+    uploadedAt: str("uploadedAt") && !Number.isNaN(Date.parse(str("uploadedAt"))) ? new Date(str("uploadedAt")).toISOString() : undefined,
+    driveFileId: str("driveFileId"),
+    driveUrl: str("driveUrl"),
+    driveFolderId: str("driveFolderId") || undefined,
+    relatedTaskId: str("relatedTaskId") || undefined,
+  };
+  if (!input.branchCode || !input.teamId || !input.channelId) return { ok: false, reason: "missing_slack_context" };
+  if (!/^F[A-Z0-9]{6,}$/.test(input.fileId)) return { ok: false, reason: "invalid_slack_file_id" };
+  if (!input.originalFilename) return { ok: false, reason: "missing_filename" };
+  if (!/^[A-Za-z0-9_-]{10,}$/.test(input.driveFileId)) return { ok: false, reason: "invalid_drive_file_id" };
+  if (!DRIVE_URL.test(input.driveUrl) || SECRET_IN_URL.test(input.driveUrl)) return { ok: false, reason: "invalid_drive_url" };
+  return { ok: true, input };
+}
+
+/** 이 배포(지점)에서 받아도 되는 Slack 파일인지 — n8n이 보낸 지점을 그대로 믿지 않는다. */
+export function checkArchiveScope(input: Pick<ArchiveInput, "branchCode" | "teamId" | "channelId">): { ok: true } | { ok: false; reason: string } {
+  const myCode = branchCode();
+  if (!myCode || input.branchCode !== myCode) return { ok: false, reason: "branch_mismatch" };
+  const team = allowedTeamId();
+  if (!team || input.teamId !== team) return { ok: false, reason: "team_not_allowed" };
+  if (archiveChannelMap().get(input.channelId) !== myCode) return { ok: false, reason: "channel_not_mapped_to_branch" };
+  return { ok: true };
+}
+
+export type ArchiveRecord = {
+  id: string;
+  status: "created" | "existing";
+  driveFileId: string;
+  driveUrl: string;
+};
+
+function toRecord(row: Record<string, unknown>, status: ArchiveRecord["status"]): ArchiveRecord {
+  return { id: String(row.id), status, driveFileId: String(row.drive_file_id), driveUrl: String(row.drive_url) };
+}
+
+export async function findSlackArchive(teamId: string, fileId: string): Promise<Record<string, unknown> | null> {
+  const rows = await pgQueryRaw(
+    "FILE_ARCHIVE",
+    `source=eq.slack&slack_team_id=eq.${encodeURIComponent(teamId)}&slack_file_id=eq.${encodeURIComponent(fileId)}`
+  );
+  return rows[0] ?? null;
+}
+
+// Slack 사용자 → EXAM AI 직원(staff.source_payload.slackUserId가 명시적으로 연결된 경우만).
+async function staffBySlackUser(userId: string | undefined): Promise<{ id: string; name: string } | null> {
+  if (!userId) return null;
+  const rows = await pgQueryRaw("STAFF", "id=not.is.null");
+  const row = rows.find((r) => (r.source_payload as { slackUserId?: string } | null)?.slackUserId === userId);
+  return row ? { id: String(row.notion_id ?? row.id), name: String(row.name ?? "") } : null;
+}
+
+/** 멱등 등록: 같은 Slack 파일이 이미 있으면 기존 행을 돌려주고 새로 만들지 않는다. visibility는 항상 branch. */
+export async function registerSlackArchive(input: ArchiveInput): Promise<ArchiveRecord> {
+  const existing = await findSlackArchive(input.teamId, input.fileId);
+  if (existing) return toRecord(existing, "existing");
+
+  const staff = await staffBySlackUser(input.userId);
+  let relatedTaskId: string | null = null;
+  if (input.relatedTaskId) {
+    const task = await pgGetByNotionId("TODO", input.relatedTaskId).catch(() => null);
+    relatedTaskId = task ? String(task.id) : null; // 이 지점에 있는 업무만 연결
+  }
+  try {
+    const row = await pgInsertRow("FILE_ARCHIVE", {
+      visibility: "branch",
+      source: "slack",
+      slack_team_id: input.teamId,
+      slack_channel_id: input.channelId,
+      slack_message_ts: input.messageTs ?? null,
+      slack_thread_ts: input.threadTs ?? null,
+      slack_file_id: input.fileId,
+      slack_user_id: input.userId ?? null,
+      uploader_name: staff?.name || input.uploaderName || null,
+      uploader_staff_id: staff?.id ?? null,
+      message_text: input.messageText ?? null,
+      original_filename: input.originalFilename,
+      mime_type: input.mimeType ?? null,
+      file_size: input.fileSize ?? null,
+      drive_file_id: input.driveFileId,
+      drive_url: input.driveUrl,
+      drive_folder_id: input.driveFolderId ?? null,
+      related_task_id: relatedTaskId,
+      classification: {},
+      uploaded_at: input.uploadedAt ?? null,
+      source_payload: { registeredBy: "n8n" },
+    });
+    return { id: row.id, status: "created", driveFileId: input.driveFileId, driveUrl: input.driveUrl };
+  } catch (err) {
+    // 동시 재시도로 유니크 인덱스에 걸린 경우 — 먼저 들어간 행을 돌려준다.
+    const again = await findSlackArchive(input.teamId, input.fileId).catch(() => null);
+    if (again) return toRecord(again, "existing");
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Slack 파일 이벤트 → n8n 전달(EXAM AI가 Slack 서명을 검증한 뒤)
+// ---------------------------------------------------------------------------
+export type SlackFileEvent = {
+  type?: string;
+  subtype?: string;
+  channel?: string;
+  user?: string;
+  text?: string;
+  ts?: string;
+  thread_ts?: string;
+  bot_id?: string;
+  files?: { id?: string; name?: string; title?: string; mimetype?: string; size?: number; created?: number; mode?: string }[];
+};
+
+export type ArchiveJob = {
+  version: 1;
+  eventId: string;
+  branchCode: string;
+  callbackUrl: string;
+  teamId: string;
+  channelId: string;
+  messageTs: string;
+  threadTs: string;
+  userId: string;
+  messageText: string;
+  files: { id: string; name: string; mimeType: string; size: number; createdAt: string }[];
+};
+
+/** 보관 대상 파일 메시지면 n8n에 보낼 작업을 만든다(아니면 null). Slack 다운로드 URL/토큰은 넣지 않는다. */
+export function buildArchiveJob(envelope: { team_id?: string; event_id?: string }, event: SlackFileEvent, requestOrigin: string): ArchiveJob | null {
+  if (event.type !== "message" || event.bot_id || event.subtype === "bot_message") return null;
+  if (event.subtype && event.subtype !== "file_share") return null;
+  const files = (event.files ?? []).filter((f) => f.id && f.mode !== "tombstone" && f.mode !== "external");
+  if (files.length === 0) return null;
+  const code = archiveChannelMap().get(event.channel ?? "");
+  if (!code) return null;
+  if (!envelope.team_id || envelope.team_id !== allowedTeamId()) return null;
+  const base = code === branchCode() ? requestOrigin : branchBaseUrls().get(code);
+  if (!base) return null;
+  return {
+    version: 1,
+    eventId: envelope.event_id ?? "",
+    branchCode: code,
+    callbackUrl: `${base}/api/files/archive`,
+    teamId: envelope.team_id,
+    channelId: event.channel ?? "",
+    messageTs: event.ts ?? "",
+    threadTs: event.thread_ts ?? "",
+    userId: event.user ?? "",
+    messageText: (event.text ?? "").slice(0, 4000),
+    files: files.map((f) => ({
+      id: f.id as string,
+      name: (f.name || f.title || f.id) as string,
+      mimeType: f.mimetype ?? "",
+      size: typeof f.size === "number" ? f.size : 0,
+      createdAt: f.created ? new Date(f.created * 1000).toISOString() : new Date(Number(String(event.ts ?? "0").split(".")[0]) * 1000).toISOString(),
+    })),
+  };
+}
+
+/** n8n webhook으로 서명해서 보낸다. 실패하면 false — 호출부가 Slack에 5xx를 돌려 재시도하게 한다. */
+export async function forwardArchiveJob(job: ArchiveJob, timeoutMs = 2500): Promise<boolean> {
+  const url = process.env.N8N_FILE_ARCHIVE_WEBHOOK_URL;
+  const secret = archiveSecret();
+  if (!url || !secret) return false;
+  const body = JSON.stringify(job);
+  const ts = String(Math.floor(Date.now() / 1000));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-exam-ai-timestamp": ts, "x-exam-ai-signature": signArchive(secret, ts, body) },
+      body,
+      signal: controller.signal,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 자연어 파일 검색(읽기 전용) — 현재 지점 + shared만.
+// ---------------------------------------------------------------------------
+export type FileSearchFilter = {
+  keywords?: string[];
+  uploader?: string;
+  from?: string; // YYYY-MM-DD (KST, 포함)
+  to?: string; // YYYY-MM-DD (KST, 포함)
+  kind?: string; // pdf | hwp | doc | sheet | ppt | image
+};
+
+export type FileHit = {
+  id: string;
+  filename: string;
+  uploadedAt: string | null;
+  uploader: string;
+  scope: "이 지점" | "공용";
+  fromOtherBranch: boolean;
+  messageSnippet: string;
+  mimeType: string;
+  driveUrl: string;
+  relatedTask: { id: string; label: string } | null;
+};
+
+const KIND_PATTERNS: Record<string, RegExp> = {
+  pdf: /pdf/i,
+  hwp: /(hwp|hangul|haansoft)/i,
+  doc: /(word|msword|document|docx?)/i,
+  sheet: /(sheet|excel|xlsx?|csv)/i,
+  ppt: /(presentation|powerpoint|pptx?)/i,
+  image: /^image\//i,
+};
+const EXT_PATTERNS: Record<string, RegExp> = {
+  pdf: /\.pdf$/i,
+  hwp: /\.hwpx?$/i,
+  doc: /\.docx?$/i,
+  sheet: /\.(xlsx?|csv)$/i,
+  ppt: /\.pptx?$/i,
+  image: /\.(png|jpe?g|gif|webp|heic)$/i,
+};
+const kstStart = (d: string) => new Date(`${d}T00:00:00+09:00`).toISOString();
+const norm = (v: string) => v.replace(/\s+/g, "").toLowerCase();
+// 검색어에서 의미 없는 말("파일", "자료", 조사 등)은 빼고 비교한다.
+const STOPWORDS = new Set(["파일", "자료", "문서", "첨부", "찾아줘", "찾아", "보여줘", "검색", "올린", "올라온", "최종본"]);
+
+export async function searchFileArchives(filter: FileSearchFilter, limit = 20): Promise<FileHit[]> {
+  const myBranch = await currentBranchId();
+  const parts: string[] = [];
+  if (filter.from) parts.push(`uploaded_at=gte.${encodeURIComponent(kstStart(filter.from))}`);
+  if (filter.to) parts.push(`uploaded_at=lt.${encodeURIComponent(new Date(new Date(kstStart(filter.to)).getTime() + 86400000).toISOString())}`);
+  parts.push("order=uploaded_at.desc", "limit=1000");
+  const rows = await pgQueryBranchOrShared("FILE_ARCHIVE", parts.join("&"));
+
+  const keywords = (filter.keywords ?? []).map((k) => k.trim()).filter((k) => k && !STOPWORDS.has(k));
+  const uploader = (filter.uploader ?? "").trim().replace(/(쌤|선생님|조교님|조교|님)$/, "");
+  const kind = filter.kind && KIND_PATTERNS[filter.kind] ? filter.kind : "";
+  const matched = rows.filter((r) => {
+    const hay = norm(
+      [r.original_filename, r.message_text, r.uploader_name, JSON.stringify(r.classification ?? {})].map((v) => String(v ?? "")).join(" ")
+    );
+    if (!keywords.every((k) => hay.includes(norm(k)))) return false;
+    if (uploader && !norm(String(r.uploader_name ?? "")).includes(norm(uploader))) return false;
+    if (kind && !(KIND_PATTERNS[kind].test(String(r.mime_type ?? "")) || EXT_PATTERNS[kind].test(String(r.original_filename ?? "")))) return false;
+    return true;
+  });
+  matched.sort((a, b) => String(b.uploaded_at ?? b.created_at ?? "").localeCompare(String(a.uploaded_at ?? a.created_at ?? "")));
+  const top = matched.slice(0, limit);
+
+  const taskIds = Array.from(new Set(top.map((r) => r.related_task_id).filter(Boolean) as string[]));
+  const tasks = taskIds.length ? await pgQueryRaw("TODO", `id=in.(${taskIds.map(encodeURIComponent).join(",")})`).catch(() => []) : [];
+  const taskLabel = new Map(tasks.map((t) => [String(t.id), `${t.type ?? "업무"}${t.title ? ` · ${t.title}` : ""}${t.complete ? " (완료)" : ""}`]));
+
+  return top.map((r) => ({
+    id: String(r.id),
+    filename: String(r.original_filename ?? ""),
+    uploadedAt: (r.uploaded_at as string | null) ?? (r.created_at as string | null) ?? null,
+    uploader: String(r.uploader_name ?? "알 수 없음"),
+    scope: r.visibility === "shared" ? "공용" : "이 지점",
+    fromOtherBranch: r.branch_id !== myBranch,
+    messageSnippet: String(r.message_text ?? "").replace(/\s+/g, " ").slice(0, 80),
+    mimeType: String(r.mime_type ?? ""),
+    // 저장 시 검증한 Drive URL만(자격증명 없는 공유 링크) — 서버 프록시 없음
+    driveUrl: DRIVE_URL.test(String(r.drive_url ?? "")) ? String(r.drive_url) : "",
+    relatedTask: r.related_task_id ? { id: String(r.related_task_id), label: taskLabel.get(String(r.related_task_id)) ?? "관련 업무" } : null,
+  }));
+}
