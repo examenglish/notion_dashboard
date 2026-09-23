@@ -45,7 +45,7 @@ import {
   listMyTasks,
 } from "@/lib/notion";
 import { createHash, createHmac, timingSafeEqual } from "crypto";
-import { fileBranchFromText, fileDateRange, searchFileArchives, type FileHit } from "@/lib/fileArchive";
+import { fileBranchFromText, fileDateRange, fileRelativeWindow, searchFileArchives, type FileHit } from "@/lib/fileArchive";
 import { branchCode } from "@/lib/supabaseRepo";
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
@@ -1235,9 +1235,11 @@ function toCorrection(i: UnifiedIntent, text: string): UnifiedIntent {
 
 // 파일 검색 신호 → 읽기 전용 file_search(AI가 업무/기록으로 잘못 분류해도 write 0건).
 const FILE_QUERY_STOPWORDS =
-  /^(파일|자료|문서|첨부|찾아줘|찾아|찾기|검색|보여줘|보여|열어줘|올린|올라온|올린거|거|좀|slack|슬랙|drive|드라이브|구글|원본|관련|목록|에|의|오늘|어제|그저께|그제|지난주|이번주|저번주|지난달|이번달|저번달|지난번|저번|이번|지난|작년|최근|pdf|hwp|사직|금정)$/i;
-const cleanFileKeyword = (w: string) => w.trim().replace(/(에서|에게|에|의|을|를|이|가|은|는|쌤이|쌤|님이|님|꺼|거)$/, "");
-const isFileKeyword = (w: string) => w.length >= 2 && !FILE_QUERY_STOPWORDS.test(w) && !SIG_FIND.test(w);
+  /^(파일|자료|문서|첨부|찾아줘|찾아|찾기|검색|보여줘|보여|열어줘|올린|올라온|올린거|거|좀|slack|슬랙|drive|드라이브|구글|원본|관련|목록|에|의|오늘|어제|그저께|그제|지난주|이번주|저번주|지난달|이번달|저번달|지난번|저번|이번|지난|작년|최근|이내|내|안|안에|동안|사이|pdf|hwp|사직|금정)$/i;
+// "24시간", "3일", "2주" 같은 기간 조각은 검색어가 아니다(fileRelativeWindow가 기간으로 처리).
+const FILE_PERIOD_WORD = /^\d{1,3}(시간|일|주|개월|달)(이내|내|안|안에|동안)?$/;
+const cleanFileKeyword = (w: string) => w.normalize("NFC").trim().replace(/(에서|에게|에|의|을|를|이|가|은|는|쌤이|쌤|님이|님|꺼|거)$/, "");
+const isFileKeyword = (w: string) => w.length >= 2 && !FILE_QUERY_STOPWORDS.test(w) && !FILE_PERIOD_WORD.test(w) && !SIG_FIND.test(w);
 export function fileKeywordsFromText(text: string): string[] {
   return text.split(/[\s,.!?]+/).map(cleanFileKeyword).filter(isFileKeyword);
 }
@@ -2775,13 +2777,15 @@ async function processIntents(
           const aiKeywords = cleanFileKeywords([...(intent.fileKeywords ?? []), ...(intent.students ?? [])]);
           const keywords = aiKeywords.length ? aiKeywords : fileKeywordsFromText(text);
           const uploaderWord = intent.fileUploader?.trim() || "";
-          const range = fileDateRange(text, today) ?? (FILE_DATE_HINT.test(text) && intent.historyFrom ? { from: intent.historyFrom, to: intent.historyTo || intent.historyFrom } : null);
+          const recent = fileRelativeWindow(text);
+          const range = recent ? null : fileDateRange(text, today) ?? (FILE_DATE_HINT.test(text) && intent.historyFrom ? { from: intent.historyFrom, to: intent.historyTo || intent.historyFrom } : null);
           const pdfLike = /pdf/i.test(text) ? "pdf" : "";
           const filter = {
             keywords: keywords.filter((k) => !uploaderWord || !uploaderWord.includes(k.replace(/(쌤|선생님|조교님|조교|님)$/, ""))),
             uploader: uploaderWord,
             from: range?.from,
             to: range?.to,
+            since: recent?.since,
             kind: intent.fileKind || pdfLike,
             branch: fileBranchFromText(text),
           };
@@ -2791,6 +2795,7 @@ async function processIntents(
             const conds = [
               filter.keywords.length ? `"${filter.keywords.join(" ")}"` : "",
               filter.uploader ? `올린 사람 ${filter.uploader}` : "",
+              recent ? recent.label : "",
               filter.from ? `${filter.from}${filter.to && filter.to !== filter.from ? `~${filter.to}` : ""}` : "",
               filter.kind ? filter.kind.toUpperCase() : "",
               filter.branch ? (filter.branch === "sajik" ? "사직" : "금정") : "",

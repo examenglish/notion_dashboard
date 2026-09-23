@@ -329,6 +329,7 @@ export type FileSearchFilter = {
   uploader?: string;
   from?: string; // YYYY-MM-DD (KST, 포함)
   to?: string; // YYYY-MM-DD (KST, 포함)
+  since?: string; // ISO 시각 — "24시간 이내"처럼 지금부터 거슬러 올라가는 기간
   kind?: string; // pdf | hwp | doc | sheet | ppt | image
   branch?: string; // sajik | geumjeong — 이 배포 지점이 아니면 그 지점의 공용(shared) 자료만 남는다
 };
@@ -364,7 +365,8 @@ const EXT_PATTERNS: Record<string, RegExp> = {
   image: /\.(png|jpe?g|gif|webp|heic)$/i,
 };
 const kstStart = (d: string) => new Date(`${d}T00:00:00+09:00`).toISOString();
-const norm = (v: string) => v.replace(/\s+/g, "").toLowerCase();
+// Mac에서 올린 파일명은 한글이 자모 분리(NFD)로 저장되는 경우가 많다 — NFC로 맞춰야 "이사벨"이 일치한다.
+const norm = (v: string) => v.normalize("NFC").replace(/\s+/g, "").toLowerCase();
 // 검색어에서 의미 없는 말("파일", "자료", 조사 등)은 빼고 비교한다.
 const STOPWORDS = new Set(["파일", "자료", "문서", "첨부", "찾아줘", "찾아", "보여줘", "검색", "올린", "올라온", "최종본"]);
 const BRANCH_LABEL: Record<string, string> = { sajik: "사직", geumjeong: "금정" };
@@ -398,9 +400,20 @@ export function fileDateRange(text: string, today: string): { from: string; to: 
   return null;
 }
 
+/** "24시간 이내", "최근 3일", "2주 안에"처럼 지금부터 거슬러 올라가는 기간 → 시작 시각(ISO)과 표시 라벨. 없으면 null. */
+export function fileRelativeWindow(text: string, now: Date = new Date()): { since: string; label: string } | null {
+  const t = text.replace(/\s+/g, "");
+  const m = t.match(/(\d{1,3})(시간|일|주|개월|달)(?:이내|내|안|동안|사이)/) ?? t.match(/(?:최근|지난)(\d{1,3})(시간|일|주|개월|달)/);
+  const n = m ? Number(m[1]) : 0;
+  if (!m || !n) return null;
+  const hours = m[2] === "시간" ? n : m[2] === "일" ? n * 24 : m[2] === "주" ? n * 168 : n * 720;
+  return { since: new Date(now.getTime() - hours * 3600000).toISOString(), label: `최근 ${n}${m[2] === "달" ? "개월" : m[2]}` };
+}
+
 export async function searchFileArchives(filter: FileSearchFilter, limit = 50): Promise<FileHit[]> {
   const myBranch = await currentBranchId();
   const parts: string[] = [];
+  if (filter.since) parts.push(`uploaded_at=gte.${encodeURIComponent(filter.since)}`);
   if (filter.from) parts.push(`uploaded_at=gte.${encodeURIComponent(kstStart(filter.from))}`);
   if (filter.to) parts.push(`uploaded_at=lt.${encodeURIComponent(new Date(new Date(kstStart(filter.to)).getTime() + 86400000).toISOString())}`);
   parts.push("order=uploaded_at.desc", "limit=1000");

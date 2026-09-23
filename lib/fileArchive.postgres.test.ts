@@ -414,6 +414,31 @@ describe("자연어 파일 검색(읽기 전용, 현재 지점 + 공용)", () =>
     afterEach(() => vi.useRealTimers());
     const ids = (r: Awaited<ReturnType<typeof ask>>) => r.outcomes[0].files!.map((f) => f.id);
 
+    it("Mac(NFD) 한글 파일명도 일부 단어로 찾는다 — 이사벨고 추가프린트/이사벨 추가/추가프린트/이사벨고2/이사벨고 PDF", async () => {
+      tables.file_archives.push({
+        id: "fa-nfd", branch_id: "b-sajik", visibility: "branch", source: "slack", original_filename: "2026년 2학기 이사벨고2 추가프린트.pdf".normalize("NFD"),
+        mime_type: "application/pdf", uploader_name: "박민지", message_text: "", drive_url: "https://drive.google.com/file/d/NFD/view", drive_file_id: "NFD",
+        uploaded_at: new Date(Date.now() - 3 * 86400000).toISOString(), classification: {},
+      });
+      for (const [text, fileKeywords] of [
+        ["이사벨고 추가프린트 찾아줘", ["이사벨고", "추가프린트"]],
+        ["이사벨 추가 찾아줘", ["이사벨", "추가"]],
+        ["추가프린트 찾아줘", ["추가프린트"]],
+        ["이사벨고2 찾아줘", ["이사벨고2"]],
+        ["이사벨고 PDF 찾아줘", ["이사벨고"]],
+      ] as const) {
+        const r = await ask(text, [{ intentClass: "query", route: "file_search", fileKeywords: [...fileKeywords] }]);
+        expect(ids(r)[0]).toBe("fa-nfd");
+      }
+    });
+
+    it("'24시간 이내' 같은 기간은 검색어가 아니라 기간 필터", async () => {
+      const r = await ask("12시간 이내 올라온 파일 찾아줘", [{ intentClass: "query", route: "file_search", fileKeywords: ["12시간 이내"] }]);
+      expect(ids(r)).toEqual(["fa-student"]);
+      expect(r.outcomes[0].message).toContain("최근 12시간");
+      expect(r.outcomes[0].message).not.toContain("\"12시간");
+    });
+
     it("상대 날짜: 오늘/어제/이번 주/지난주/이번 달/지난달(주는 월요일 시작), 표현 없으면 null", async () => {
       const { fileDateRange } = await import("@/lib/fileArchive");
       const t = "2026-09-24";
