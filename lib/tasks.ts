@@ -144,6 +144,10 @@ export type TaskWorkflow = {
   startedBy?: string;
   completedAt?: string;
   completedBy?: string;
+  // 근거 학생 기록이 취소/정정돼 업무를 취소로 닫은 경우(complete=true, outcome "취소").
+  cancelledAt?: string;
+  cancelledBy?: string;
+  cancelReason?: string;
 };
 
 export type TaskStatus = "업무풀" | "대기" | "진행중" | "완료";

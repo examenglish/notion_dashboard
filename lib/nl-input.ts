@@ -15,8 +15,21 @@ import {
   type ProgressEditMode,
   type LineChange,
   type LearningRecordType,
+  listRecentLearningRecords,
+  updateLearningRecord,
+  cancelLearningRecord,
+  getLinkedTask,
+  cancelTaskForRecord,
+  retargetTaskStudent,
+  findClassProgressRow,
+  listRecentClassProgressByUser,
+  correctClassProgressRow,
+  mergeProgressText,
+  getActiveLearningRecord,
+  getClassProgressRowById,
+  listExamAiHistoryRows,
 } from "@/lib/notion";
-import { createHash } from "crypto";
+import { createHash, createHmac, timingSafeEqual } from "crypto";
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
 import { TASK_TYPE_LABELS, TASK_TYPE_LABEL_LIST, taskTypeFromLabel, type NewTaskInput } from "@/lib/tasks";
@@ -519,7 +532,21 @@ export type ClassContext = { classId: string; className: string; date: string; p
 //  - 여러 개가 부족하면 한 번에 묻고, 일부만 답하면 받은 건 유지하고 남은 것만 다시 묻는다.
 //  - 답변은 전체 명령으로 재해석하지 않는다(부족 항목 1개면 LLM 없이 그대로 사용).
 // ---------------------------------------------------------------------------
-export type PendingField = "class" | "student" | "owner" | "taskType" | "content" | "period";
+export type PendingField =
+  | "class"
+  | "student"
+  | "owner"
+  | "taskType"
+  | "content"
+  | "period"
+  // 정정(correction) 전용
+  | "target"
+  | "operation"
+  | "change"
+  | "pass"
+  | "task"
+  | "newStudent"
+  | "field";
 export type MissingInfo = { key: string; field: PendingField; question: string; candidates?: { id: string; label: string }[]; ref?: string };
 type Choice = { id: string; label: string };
 
@@ -578,7 +605,43 @@ export type TaskDraft = {
   ownerToPool?: boolean;
   createdBy?: string;
 };
-export type AnyDraft = ClassProgressDraft | TaskDraft | StudentRecordDraft;
+// 이미 입력한 기록의 자연어 정정(수정/취소). 대상은 DB에서 찾고(최근 24시간), 하나로
+// 확정되고 바꿀 내용이 분명할 때만 실행한다. 선택된 대상 id는 "slr:<학생기록 id>" 또는
+// "cp:<class_progress id>" — 실행 직전에 DB에서 다시 읽어 확인한다.
+export type CorrectionDraft = {
+  kind: "correction";
+  target: "student_record" | "class_progress" | "recent";
+  operation: "modify" | "cancel" | "unknown";
+  studentNames: string[];
+  className: string;
+  classId: string | null;
+  period: string;
+  date: string;
+  recordType: string;
+  assessmentName: string;
+  oldScore: number | null;
+  selectedId: string | null;
+  selectedLabel: string;
+  newScore: number | null;
+  newMaxScore: number | null;
+  newPassed: boolean | null;
+  newRetestRequired: boolean | null;
+  newCompleted: boolean | null;
+  newStudentName: string;
+  newStudentId: string | null;
+  newPeriod: string;
+  field: "progress" | "homework" | "";
+  fromText: string;
+  toText: string;
+  passDecision: "pass" | "fail" | "keep" | null;
+  taskDecision: "cancel" | "keep" | null;
+  // 대상 없음 등 실행 불가 사유(되묻지 않고 그대로 안내)
+  error: string;
+  enteredBy?: string;
+  rawText: string;
+};
+
+export type AnyDraft = ClassProgressDraft | TaskDraft | StudentRecordDraft | CorrectionDraft;
 export type PendingAction = { draft: AnyDraft; missing: MissingInfo[]; question: string; attempts: number };
 
 type Roster = Awaited<ReturnType<typeof getNlRoster>>;
@@ -636,6 +699,7 @@ async function checkDraft(draft: AnyDraft, roster: Roster): Promise<MissingInfo[
   }
 
   if (draft.kind === "student_record") return checkStudentRecordDraft(draft, roster);
+  if (draft.kind === "correction") return checkCorrectionDraft(draft, roster);
 
   if (!taskTypeFromLabel(draft.taskType)) {
     missing.push({ key: "taskType", field: "taskType", question: `어떤 작업인가요? (예: ${TASK_TYPE_LABEL_LIST.slice(0, 6).join(", ")} …)` });
@@ -803,7 +867,14 @@ function buildQuestion(draft: AnyDraft, missing: MissingInfo[]): string {
       ? `오늘 진도는 "${draft.progress}"(으)로 확인했습니다. `
       : "";
   if (missing.length === 1) return prefix + missing[0].question;
-  const what = draft.kind === "class_progress" ? "진도를 저장하려면" : draft.kind === "student_record" ? "학생 기록을 저장하려면" : "업무를 등록하려면";
+  const what =
+    draft.kind === "class_progress"
+      ? "진도를 저장하려면"
+      : draft.kind === "student_record"
+        ? "학생 기록을 저장하려면"
+        : draft.kind === "correction"
+          ? "기록을 정정하려면"
+          : "업무를 등록하려면";
   const marks = ["①", "②", "③", "④", "⑤"];
   return `${prefix}${what} ${missing.length}가지 정보가 더 필요합니다.\n${missing.map((m, i) => `${marks[i] ?? `${i + 1}.`} ${m.question}`).join("\n")}`;
 }
@@ -812,7 +883,14 @@ function pendingOutcome(draft: AnyDraft, missing: MissingInfo[], attempts: numbe
   const question = buildQuestion(draft, missing);
   return {
     route: draft.kind,
-    label: draft.kind === "class_progress" ? draft.className || "반 진도" : draft.kind === "student_record" ? draft.studentName || "학생 기록" : draft.taskType || "업무",
+    label:
+      draft.kind === "class_progress"
+        ? draft.className || "반 진도"
+        : draft.kind === "student_record"
+          ? draft.studentName || "학생 기록"
+          : draft.kind === "correction"
+            ? draft.selectedLabel || "기록 정정"
+            : draft.taskType || "업무",
     status: "확인필요",
     message: note ? `${note}\n${question}` : question,
     pending: { draft, missing, question, attempts },
@@ -829,6 +907,7 @@ function applyValue(draft: AnyDraft, m: MissingInfo, value: string, roster: Rost
     return hits.length === 1 ? hits[0] : null;
   };
   if (!v && !choiceId) return false;
+  if (draft.kind === "correction") return applyCorrectionValue(draft, m, v, roster, choiceId, pick);
   switch (m.field) {
     case "class": {
       if (draft.kind !== "class_progress" && draft.kind !== "student_record") return false;
@@ -914,6 +993,8 @@ function applyValue(draft: AnyDraft, m: MissingInfo, value: string, roster: Rost
       draft.ownerName = owner.name;
       return true;
     }
+    default:
+      return false;
   }
 }
 
@@ -987,6 +1068,727 @@ async function createTaskOutcomes(
     taskInputs.forEach((t) => outcomes.push({ route: "task", label: t.label, status: "실패", message }));
   }
   return { outcomes, slackTasks, createdIds };
+}
+
+// ---------------------------------------------------------------------------
+// 입력 이력 조회(history_query) — 읽기 전용. 결과 번호 ↔ 실제 기록 연결은 서버가
+// HMAC(SESSION_SECRET)으로 서명한 토큰에 담아 화면에 준다. 토큰에는 조회한 직원 id가
+// 들어가 있어, 다른 로그인 사용자의 토큰이거나 위·변조됐으면 무시한다(목록이 섞이지 않음).
+// ---------------------------------------------------------------------------
+export type HistoryRef = { ref: string; label: string };
+const HISTORY_TTL_MS = 12 * 60 * 60 * 1000;
+
+function historySecret(): string | null {
+  return process.env.SESSION_SECRET || null;
+}
+
+export function signHistoryToken(staffId: string, refs: HistoryRef[]): string | undefined {
+  const secret = historySecret();
+  if (!secret || !staffId) return undefined;
+  const body = Buffer.from(JSON.stringify({ s: staffId, t: Date.now(), r: refs })).toString("base64url");
+  const mac = createHmac("sha256", secret).update(`history.${body}`).digest("base64url");
+  return `${body}.${mac}`;
+}
+
+export function verifyHistoryToken(token: string | null | undefined, staffId: string | undefined): HistoryRef[] | null {
+  const secret = historySecret();
+  if (!secret || !token || !staffId) return null;
+  const [body, mac] = token.split(".");
+  if (!body || !mac) return null;
+  const expected = createHmac("sha256", secret).update(`history.${body}`).digest("base64url");
+  const a = Buffer.from(mac);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  try {
+    const data = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as { s: string; t: number; r: HistoryRef[] };
+    if (data.s !== staffId || Date.now() - data.t > HISTORY_TTL_MS) return null;
+    return Array.isArray(data.r) ? data.r : null;
+  } catch {
+    return null;
+  }
+}
+
+const KST_HM = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const KST_MD = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", month: "2-digit", day: "2-digit" });
+const kstStartIso = (date: string) => new Date(`${date}T00:00:00+09:00`).toISOString();
+
+type HistoryItem = { ref: string; at: string; author: string; lines: string[]; label: string };
+
+// 조회 결과를 만든다. DB는 GET만(listExamAiHistoryRows). 기존에 저장된 기록도 그대로
+// 잡힌다: 학생 기록은 created_at+entered_by, 반 진도는 examAiLog(by/at) — 로그 도입 전
+// EXAM AI 행(로그 없음, 학생기록 미생성)은 작성자 불명으로 "전체" 조회에만 포함, 업무는
+// workflow.createdBy(EXAM AI 지시 업무에만 있음). 학생 기록의 후속 업무는 기록 줄에 표시.
+async function runHistoryQuery(
+  intent: UnifiedIntent,
+  roster: Roster,
+  opts: { staffName?: string; staffId?: string }
+): Promise<{ outcome: UnifiedOutcome; token?: string }> {
+  const today = todayKST();
+  const recent = intent.historyRecent === true;
+  const from = recent ? null : intent.historyFrom || today;
+  const to = recent ? null : intent.historyTo || from!;
+  const fromIso = recent ? new Date(Date.now() - CORRECTION_WINDOW_MS).toISOString() : kstStartIso(from!);
+  const toIso = recent ? new Date(Date.now() + 60_000).toISOString() : new Date(new Date(kstStartIso(to!)).getTime() + 86400000).toISOString();
+  const onlyMine = intent.onlyMine !== false;
+  const me = opts.staffName ?? "";
+
+  const studentIds = new Set((intent.students ?? []).flatMap((n) => studentIdsByName(n ?? "", roster)));
+  const classId = intent.className ? resolveClassCandidates(intent.className, roster.classes)[0]?.id ?? "__none__" : null;
+  const recordType = Object.keys(RECORD_TYPE_LABEL).includes(intent.recordType ?? "") ? (intent.recordType as LearningRecordType) : null;
+  const recordOnly = !!recordType || intent.retestOnly === true || intent.incompleteOnly === true;
+  const staffName = new Map(roster.staff.map((st) => [st.id, st.name]));
+
+  const { records, progress, tasks } = await listExamAiHistoryRows(fromIso, toIso);
+  const items: HistoryItem[] = [];
+
+  for (const r of records) {
+    if (onlyMine && r.entered_by !== me) continue;
+    const sid = (r.student_notion_ids as string[] | null)?.[0] ?? "";
+    if (studentIds.size && !studentIds.has(sid)) continue;
+    if (classId && !((r.class_notion_ids as string[] | null) ?? []).includes(classId)) continue;
+    if (recordType && r.record_type !== recordType) continue;
+    if (intent.retestOnly && !(r.retest_required === true || r.record_type === "retest")) continue;
+    if (intent.incompleteOnly && r.completed !== false) continue;
+    const label = learningRecordLabel(r, roster);
+    const cls = roster.classes.find((c) => c.id === (r.class_notion_ids as string[] | null)?.[0]);
+    const [name, ...rest] = label.split(" · ");
+    items.push({
+      ref: `slr:${r.id}`,
+      at: String(r.created_at ?? ""),
+      author: String(r.entered_by ?? ""),
+      label,
+      lines: [`${name}${cls ? ` · ${stripClassSuffix(cls.name)}` : ""}`, `${rest.join(" · ")}${r.task_id ? " · 후속 업무 연결" : ""}`],
+    });
+  }
+
+  if (!recordOnly && studentIds.size === 0) {
+    for (const row of progress) {
+      if (classId && !((row.class_notion_ids as string[] | null) ?? []).includes(classId)) continue;
+      const log = ((row.source_payload as { examAiLog?: { at?: string; by?: string }[] } | null)?.examAiLog ?? []).filter(
+        (e) => (e.at ?? "") >= fromIso && (e.at ?? "") < toIso
+      );
+      const mine = log.filter((e) => e.by === me);
+      let at = "";
+      let author = "";
+      if (onlyMine) {
+        if (mine.length === 0) continue;
+        at = mine[0].at ?? "";
+        author = me;
+      } else if (log.length > 0) {
+        at = log[0].at ?? "";
+        author = Array.from(new Set(log.map((e) => e.by ?? ""))).filter(Boolean).join(", ");
+      } else if (row.student_records_created === false && String(row.created_at ?? "") >= fromIso && String(row.created_at ?? "") < toIso) {
+        at = String(row.created_at ?? "");
+        author = "작성자 기록 없음";
+      } else continue;
+      const label = classProgressLabel(row, roster);
+      const one = (v: unknown) => String(v ?? "").split("\n").filter(Boolean).join(" / ") || "-";
+      items.push({
+        ref: `cp:${row.id}`,
+        at,
+        author,
+        label,
+        lines: [label.split(" · ")[0], `진도: ${one(row.progress_content)}`, `과제: ${one(row.homework_content)}`],
+      });
+    }
+  }
+
+  if (!recordOnly || intent.retestOnly) {
+    for (const t of tasks) {
+      const wf = ((t.source_payload as { workflow?: { createdBy?: string; sourceRecordId?: string; startedAt?: string } } | null)?.workflow ?? {});
+      if (!wf.createdBy || wf.sourceRecordId) continue;
+      if (onlyMine && wf.createdBy !== me) continue;
+      const sid = (t.student_notion_ids as string[] | null)?.[0] ?? "";
+      if (studentIds.size && !studentIds.has(sid)) continue;
+      if (classId && !((t.class_notion_ids as string[] | null) ?? []).includes(classId)) continue;
+      if (intent.retestOnly && !["재시험", "단어재시"].includes(String(t.type))) continue;
+      const owner = (t.staff_notion_ids as string[] | null)?.[0];
+      const status = t.complete ? `완료${t.outcome ? `(${t.outcome})` : ""}` : !owner ? "업무풀" : wf.startedAt ? "진행중" : "대기";
+      const student = roster.students.find((x) => x.id === sid)?.name;
+      const label = `업무 · ${t.type}${student ? ` · ${student}` : ""}`;
+      items.push({
+        ref: `task:${t.id}`,
+        at: String(t.created_at ?? ""),
+        author: wf.createdBy,
+        label,
+        lines: [label, `${(t.memo as string) || ""}${t.memo ? " · " : ""}담당 ${owner ? staffName.get(owner) ?? "-" : "업무풀"} · ${status}`],
+      });
+    }
+  }
+
+  items.sort((a, b) => a.at.localeCompare(b.at));
+  const shown = recent ? items.slice(-10) : items.slice(0, 50);
+  const title = recent ? "최근 입력한 내용" : from === to ? `${from === today ? "오늘" : from} 입력한 내용` : `${from} ~ ${to} 입력한 내용`;
+  const scope = onlyMine ? `(${me || "나"} 입력)` : "(전체 직원)";
+  if (shown.length === 0) {
+    return { outcome: { route: "history_query", label: title, status: "완료", message: `${title} ${scope}이 없습니다.` } };
+  }
+  const multiDay = !recent && from !== to;
+  const body = shown.map((it, i) => {
+    const time = it.at ? `${multiDay || recent ? `${KST_MD.format(new Date(it.at))} ` : ""}${KST_HM.format(new Date(it.at))}` : "--:--";
+    const by = !onlyMine && it.author ? ` (작성: ${it.author})` : "";
+    return [`${i + 1}. ${time} · ${it.lines[0]}${by}`, ...it.lines.slice(1).map((l) => `   ${l}`)].join("\n");
+  });
+  const more = items.length > shown.length ? ` (최근 ${shown.length}건만 표시)` : "";
+  const message = [`${title} ${scope}`, ...body, `총 ${items.length}건${more} — "2번 94점으로", "3번 취소"처럼 번호로 고칠 수 있어요.`].join("\n");
+  return {
+    outcome: { route: "history_query", label: title, status: "완료", message },
+    token: signHistoryToken(opts.staffId ?? "", shown.map((it) => ({ ref: it.ref, label: it.label }))),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 자연어 정정(correction)
+// ---------------------------------------------------------------------------
+const CORRECTION_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+type CorrectionCandidate = { id: string; label: string; at: string; row: Record<string, unknown> };
+
+function learningRecordLabel(row: Record<string, unknown>, roster: Roster): string {
+  const studentId = (row.student_notion_ids as string[] | null)?.[0] ?? "";
+  const name = roster.students.find((x) => x.id === studentId)?.name ?? "학생";
+  const type = RECORD_TYPE_LABEL[(row.record_type as LearningRecordType) ?? "memo"] ?? "기록";
+  const parts = [name, (row.assessment_name as string) || type];
+  if (row.score !== null && row.score !== undefined) parts.push(row.max_score ? `${row.score}/${row.max_score}` : `${row.score}점`);
+  if (row.passed === true) parts.push("통과");
+  if (row.passed === false) parts.push("미통과");
+  if (row.retest_required === true) parts.push("재시험 필요");
+  if (row.completed === true) parts.push("완료");
+  if (row.completed === false) parts.push("미완료");
+  if (row.note) parts.push(String(row.note));
+  if (row.period) parts.push(String(row.period));
+  return parts.join(" · ");
+}
+
+function classProgressLabel(row: Record<string, unknown>, roster: Roster): string {
+  const classId = (row.class_notion_ids as string[] | null)?.[0] ?? "";
+  const cls = roster.classes.find((c) => c.id === classId);
+  const head = `${cls ? stripClassSuffix(cls.name) : "반"}${row.period ? ` ${row.period}` : ""}`;
+  const one = (v: unknown) => (String(v ?? "").split("\n").filter(Boolean).join(" / ") || "-");
+  return `${head} · 진도: ${one(row.progress_content)} · 과제: ${one(row.homework_content)}`;
+}
+
+function studentIdsByName(name: string, roster: Roster): string[] {
+  const n = name.trim();
+  if (!n) return [];
+  const exact = roster.students.filter((x) => x.name === n);
+  return (exact.length > 0 ? exact : roster.students.filter((x) => x.name.includes(n) || n.includes(x.name))).map((x) => x.id);
+}
+
+async function studentRecordCandidates(d: CorrectionDraft, roster: Roster, sinceIso: string): Promise<CorrectionCandidate[]> {
+  let rows = await listRecentLearningRecords(sinceIso);
+  const named = d.studentNames.length > 0;
+  if (named) {
+    const ids = new Set(d.studentNames.flatMap((n) => studentIdsByName(n, roster)));
+    rows = rows.filter((r) => ids.has((r.student_notion_ids as string[] | null)?.[0] ?? ""));
+  } else {
+    // 학생을 말하지 않았으면 이 사용자가 입력한 기록만 대상으로 한다.
+    rows = rows.filter((r) => r.entered_by === d.enteredBy);
+  }
+  const validType = Object.keys(RECORD_TYPE_LABEL).includes(d.recordType);
+  if (validType) rows = rows.filter((r) => r.record_type === d.recordType);
+  if (d.assessmentName) {
+    const a = norm(d.assessmentName);
+    rows = rows.filter((r) => norm(String(r.assessment_name ?? "")).includes(a) || a.includes(norm(RECORD_TYPE_LABEL[r.record_type as LearningRecordType] ?? "")));
+  }
+  if (d.oldScore !== null) rows = rows.filter((r) => Number(r.score) === d.oldScore);
+  if (d.classId) rows = rows.filter((r) => ((r.class_notion_ids as string[] | null) ?? []).includes(d.classId!));
+  if (d.period) rows = rows.filter((r) => r.period === d.period);
+  // 아무 단서 없이 "방금 거"면 가장 최근 입력(같은 원문) 묶음만.
+  if (!named && !validType && !d.assessmentName && d.oldScore === null && rows.length > 1) {
+    const latestRaw = rows[0].raw_text;
+    rows = rows.filter((r) => r.raw_text === latestRaw);
+  }
+  return rows.map((r) => ({ id: `slr:${r.id}`, label: learningRecordLabel(r, roster), at: String(r.created_at ?? ""), row: r }));
+}
+
+async function classProgressCandidates(d: CorrectionDraft, roster: Roster, sinceIso: string): Promise<CorrectionCandidate[]> {
+  let rows: { row: Record<string, unknown>; lastAt: string }[] = [];
+  if (d.classId) {
+    const periods = d.period ? [d.period] : [...(await listClassProgressPeriods(d.classId, d.date)), ""];
+    for (const p of periods) {
+      const row = await findClassProgressRow(d.classId, d.date, p || null);
+      if (row) rows.push({ row, lastAt: String(row.updated_at ?? "") });
+    }
+  } else {
+    rows = await listRecentClassProgressByUser(d.enteredBy ?? "", sinceIso);
+  }
+  if (d.fromText) {
+    const f = norm(d.fromText);
+    const withText = rows.filter(({ row }) => {
+      const fields = d.field ? [row[d.field === "progress" ? "progress_content" : "homework_content"]] : [row.progress_content, row.homework_content];
+      return fields.some((v) => norm(String(v ?? "")).includes(f));
+    });
+    rows = withText;
+  } else if (!d.classId && rows.length > 1) {
+    rows = rows.slice(0, 1); // 반을 말하지 않았으면 이 사용자가 가장 최근에 건드린 수업 기록
+  }
+  return rows.map(({ row, lastAt }) => ({ id: `cp:${row.id}`, label: classProgressLabel(row, roster), at: lastAt, row }));
+}
+
+async function loadSelected(d: CorrectionDraft): Promise<Record<string, unknown> | null> {
+  if (!d.selectedId) return null;
+  const sep = d.selectedId.indexOf(":");
+  const kind = d.selectedId.slice(0, sep);
+  const id = d.selectedId.slice(sep + 1);
+  if (kind === "slr") return getActiveLearningRecord(id);
+  if (kind === "cp") return getClassProgressRowById(id);
+  return null;
+}
+
+function hasStudentChange(d: CorrectionDraft): boolean {
+  return (
+    d.newScore !== null ||
+    d.newMaxScore !== null ||
+    d.newPassed !== null ||
+    d.newRetestRequired !== null ||
+    d.newCompleted !== null ||
+    !!d.newStudentName ||
+    !!d.newPeriod
+  );
+}
+
+// 정정 대상 확정 → 동작(수정/취소) 확정 → 바꿀 내용 → 부수효과(통과여부·연결업무) 순으로
+// 부족한 것만 묻는다. 대상이 없으면 되묻지 않고 error로 안내(새 기록을 만들지 않는다).
+async function checkCorrectionDraft(d: CorrectionDraft, roster: Roster): Promise<MissingInfo[]> {
+  d.error = "";
+  const sinceIso = new Date(Date.now() - CORRECTION_WINDOW_MS).toISOString();
+  const verb = d.operation === "cancel" ? "취소할까요" : d.operation === "modify" ? "수정할까요" : "고칠까요";
+
+  if (!d.selectedId) {
+    if (d.className && !d.classId) {
+      const found = resolveClassCandidates(d.className, roster.classes);
+      if (found.length === 1) d.classId = found[0].id;
+    }
+    let cands: CorrectionCandidate[] = [];
+    const wantsClass = d.target === "class_progress" || (!!d.fromText && d.target !== "student_record");
+    if (d.target === "student_record" || (d.target === "recent" && !wantsClass)) cands = await studentRecordCandidates(d, roster, sinceIso);
+    if (wantsClass || (d.target === "recent" && cands.length === 0) || (d.target === "recent" && !d.studentNames.length)) {
+      const cp = await classProgressCandidates(d, roster, sinceIso);
+      if (d.target === "recent" && cands.length > 0 && cp.length > 0) {
+        // "방금 거": 학생 기록 묶음과 반 진도 중 더 최근에 입력한 쪽
+        cands = (cp[0].at > cands[0].at ? cp : cands);
+      } else if (cp.length > 0 && (wantsClass || cands.length === 0)) cands = cp;
+    }
+    if (cands.length === 0) {
+      d.error = `수정할 기록을 찾지 못했습니다${d.studentNames.length ? `(${d.studentNames.join(", ")})` : ""}. 최근 24시간 안에 입력한 기록만 고칠 수 있어요 — 학생 이름이나 반을 함께 알려주세요.`;
+      return [];
+    }
+    if (cands.length > 1) {
+      return [
+        {
+          key: "target",
+          field: "target",
+          question: `해당하는 기록이 ${cands.length}개 있습니다. 어느 기록을 ${verb}?`,
+          candidates: cands.slice(0, 10).map((c) => ({ id: c.id, label: c.label })),
+        },
+      ];
+    }
+    d.selectedId = cands[0].id;
+    d.selectedLabel = cands[0].label;
+  }
+
+  const row = await loadSelected(d);
+  if (!row) {
+    d.error = "수정할 기록을 찾지 못했습니다(이미 취소됐거나 삭제됐을 수 있습니다).";
+    return [];
+  }
+  const isRecord = d.selectedId!.startsWith("slr:");
+  d.selectedLabel = isRecord ? learningRecordLabel(row, roster) : classProgressLabel(row, roster);
+  const missing: MissingInfo[] = [];
+
+  if (d.operation === "unknown") {
+    return [
+      {
+        key: "operation",
+        field: "operation",
+        question: `방금 입력한 "${d.selectedLabel}" 기록을 수정할까요, 삭제할까요?`,
+        candidates: [
+          { id: "modify", label: "수정" },
+          { id: "cancel", label: "삭제(취소)" },
+        ],
+      },
+    ];
+  }
+
+  if (isRecord) {
+    const task = await getLinkedTask(row.task_id as string | null);
+    if (d.operation === "modify") {
+      if (!hasStudentChange(d)) {
+        missing.push({ key: "change", field: "change", question: `"${d.selectedLabel}"을(를) 무엇으로 수정할까요? (예: 94점, 재시험 아님, 과제 완료, 2교시)` });
+        return missing;
+      }
+      if (d.newStudentName && !d.newStudentId) {
+        const active = roster.students.filter((x) => x.status === "재원" || !x.status);
+        const ids = studentIdsByName(d.newStudentName, { ...roster, students: active });
+        const classNameById = new Map(roster.classes.map((c) => [c.id, stripClassSuffix(c.name)]));
+        if (ids.length === 1) d.newStudentId = ids[0];
+        else
+          missing.push({
+            key: "newStudent",
+            field: "newStudent",
+            question:
+              ids.length > 1
+                ? `${d.newStudentName} 학생이 여러 명입니다. 어느 학생으로 바꿀까요?`
+                : `명단에서 "${d.newStudentName}" 학생을 찾지 못했습니다. 어느 학생으로 바꿀까요?`,
+            candidates:
+              ids.length > 1 ? active.filter((x) => ids.includes(x.id)).map((x) => ({ id: x.id, label: candidateLabel(x, classNameById) })) : undefined,
+          });
+      }
+      // 점수만 바뀌고 기존 기록에 통과/재시험 판정이 있으면 — 합격 기준을 추측하지 않고 묻는다.
+      const scoreChanged = d.newScore !== null && Number(row.score) !== d.newScore;
+      const hadVerdict = row.passed !== null && row.passed !== undefined ? true : row.retest_required !== null && row.retest_required !== undefined;
+      if (scoreChanged && hadVerdict && d.newPassed === null && d.newRetestRequired === null && !d.passDecision) {
+        missing.push({
+          key: "pass",
+          field: "pass",
+          question: `${row.score ?? "-"}점 → ${d.newScore}점으로 수정하면 통과/재시험 여부도 바뀌나요?`,
+          candidates: [
+            { id: "pass", label: "통과(재시험 없음)" },
+            { id: "fail", label: "미통과·재시험 필요" },
+            { id: "keep", label: "그대로 유지" },
+          ],
+        });
+      }
+      // 정정으로 후속 업무가 필요 없어지면(재시험 아님/완료/통과) 열린 연결 업무를 어떻게 할지 묻는다.
+      const resolvesNeed = d.newRetestRequired === false || d.newCompleted === true || d.newPassed === true || d.passDecision === "pass";
+      if (task && !task.done && resolvesNeed && !d.taskDecision) {
+        missing.push({
+          key: "task",
+          field: "task",
+          question: `연결된 업무(${task.typeLabel}${task.started ? " · 진행 중" : " · 대기"})도 취소할까요?`,
+          candidates: [
+            { id: "cancel", label: "업무도 취소" },
+            { id: "keep", label: "업무는 유지" },
+          ],
+        });
+      }
+    } else if (d.operation === "cancel") {
+      // 아직 시작 안 한 연결 업무는 기록과 함께 자동 취소, 진행 중이면 확인, 완료된 업무는 그대로.
+      if (task && !task.done && task.started && !d.taskDecision) {
+        missing.push({
+          key: "task",
+          field: "task",
+          question: `연결된 업무(${task.typeLabel})가 이미 진행 중입니다. 업무도 취소할까요?`,
+          candidates: [
+            { id: "cancel", label: "업무도 취소" },
+            { id: "keep", label: "업무는 유지" },
+          ],
+        });
+      }
+    }
+    return missing;
+  }
+
+  // class_progress
+  // "과제 27쪽까지로 바꿔"처럼 바꿀 값만 말한 경우: 같은 단위(쪽/번/과…)의 숫자가 그 칸에
+  // 딱 하나 있으면 그것을 바꿀 대상으로 본다. 여러 개/없음이면 되묻는다.
+  if (d.operation === "modify" && d.toText && !d.fromText && d.field) {
+    d.toText = d.toText.replace(/\s*(까지|부터)?\s*(으로|로)?$/, "").replace(/까지$/, "");
+    const unit = d.toText.match(/\d+\s*(쪽|번|과|p|페이지|문제|개)/)?.[1];
+    const text = String(row[d.field === "progress" ? "progress_content" : "homework_content"] ?? "");
+    const hits = unit ? text.match(new RegExp(`\\d+\\s*${unit}`, "g")) ?? [] : [];
+    if (hits.length === 1) d.fromText = hits[0];
+  }
+  if (d.operation === "modify" && !d.newPeriod && !(d.fromText && d.toText)) {
+    missing.push({
+      key: "change",
+      field: "change",
+      question: d.fromText ? `"${d.fromText}"을(를) 무엇으로 바꿀까요?` : `"${d.selectedLabel}"을(를) 어떻게 수정할까요? (예: '25쪽 → 27쪽')`,
+    });
+    return missing;
+  }
+  if (d.fromText && !d.field) {
+    const f = norm(d.fromText);
+    const inP = norm(String(row.progress_content ?? "")).includes(f);
+    const inH = norm(String(row.homework_content ?? "")).includes(f);
+    if (inP && inH) {
+      missing.push({
+        key: "field",
+        field: "field",
+        question: `"${d.fromText}"이(가) 진도와 과제에 모두 있습니다. 어느 쪽을 ${verb}?`,
+        candidates: [
+          { id: "progress", label: "진도" },
+          { id: "homework", label: "과제" },
+        ],
+      });
+    } else if (inP) d.field = "progress";
+    else if (inH) d.field = "homework";
+    else {
+      d.error = `"${classProgressLabel(row, roster)}"에서 "${d.fromText}"을(를) 찾지 못했습니다.`;
+      return [];
+    }
+  }
+  return missing;
+}
+
+function applyCorrectionValue(
+  d: CorrectionDraft,
+  m: MissingInfo,
+  v: string,
+  roster: Roster,
+  choiceId: string | undefined,
+  pick: (cands: Choice[] | undefined) => Choice | null
+): boolean {
+  switch (m.field) {
+    case "target": {
+      const chosen = pick(m.candidates);
+      if (!chosen) {
+        // "단어시험", "2번", "첫 번째"처럼 답한 경우
+        const idx = v.match(/^(\d+)/) ? Number(v.match(/^(\d+)/)![1]) - 1 : -1;
+        const byIndex = idx >= 0 ? m.candidates?.[idx] : undefined;
+        const hits = (m.candidates ?? []).filter((c) => norm(c.label).includes(norm(v)));
+        const c = byIndex ?? (hits.length === 1 ? hits[0] : undefined);
+        if (!c) return false;
+        d.selectedId = c.id;
+        d.selectedLabel = c.label;
+        return true;
+      }
+      d.selectedId = chosen.id;
+      d.selectedLabel = chosen.label;
+      return true;
+    }
+    case "operation": {
+      const x = choiceId ?? (/(삭제|취소|지워|없던)/.test(v) ? "cancel" : /(수정|고쳐|바꿔|변경)/.test(v) ? "modify" : "");
+      if (x !== "modify" && x !== "cancel") return false;
+      d.operation = x;
+      return true;
+    }
+    case "change": {
+      let applied = false;
+      if (d.selectedId?.startsWith("cp:")) {
+        const arrow = v.match(/^(.+?)\s*(?:→|->|아니고|대신)\s*(.+?)(?:으로|로)?(?:\s*(?:수정|바꿔|변경).*)?$/);
+        if (arrow) {
+          d.fromText = arrow[1].trim();
+          d.toText = arrow[2].trim();
+          return true;
+        }
+        if (d.fromText) {
+          d.toText = v.replace(/(으로|로)?\s*(수정|바꿔|변경).*$/, "").trim();
+          return !!d.toText;
+        }
+        const p = normalizePeriod(v, true);
+        if (p) {
+          d.newPeriod = p;
+          return true;
+        }
+        return false;
+      }
+      const period = v.match(/(\d+)\s*교시/);
+      if (period) {
+        d.newPeriod = `${Number(period[1])}교시`;
+        applied = true;
+      }
+      const num = v.replace(/\d+\s*교시/, "").match(/(\d+(?:\.\d+)?)\s*(?:\/\s*(\d+))?\s*점?/);
+      if (num) {
+        d.newScore = Number(num[1]);
+        if (num[2]) d.newMaxScore = Number(num[2]);
+        applied = true;
+      }
+      if (/재시험\s*(아니|아님|필요\s*없|없)/.test(v)) {
+        d.newRetestRequired = false;
+        applied = true;
+      } else if (/재시험/.test(v)) {
+        d.newRetestRequired = true;
+        applied = true;
+      }
+      if (/미통과|불합격/.test(v)) {
+        d.newPassed = false;
+        applied = true;
+      } else if (/통과|합격/.test(v)) {
+        d.newPassed = true;
+        applied = true;
+      }
+      if (/미완료|안\s*(했|함)/.test(v)) {
+        d.newCompleted = false;
+        applied = true;
+      } else if (/완료|했/.test(v)) {
+        d.newCompleted = true;
+        applied = true;
+      }
+      return applied;
+    }
+    case "pass": {
+      const x = choiceId ?? (/그대로|유지/.test(v) ? "keep" : /미통과|불합격|재시험/.test(v) ? "fail" : /통과|합격/.test(v) ? "pass" : "");
+      if (x !== "pass" && x !== "fail" && x !== "keep") return false;
+      d.passDecision = x;
+      return true;
+    }
+    case "task": {
+      const x = choiceId ?? (/취소|삭제|없애/.test(v) ? "cancel" : /유지|그대로|남겨/.test(v) ? "keep" : "");
+      if (x !== "cancel" && x !== "keep") return false;
+      d.taskDecision = x;
+      return true;
+    }
+    case "newStudent": {
+      const chosen = pick(m.candidates);
+      if (chosen) {
+        d.newStudentId = chosen.id;
+        return true;
+      }
+      if (!m.candidates && v) {
+        d.newStudentName = v;
+        d.newStudentId = null;
+        return true;
+      }
+      return false;
+    }
+    case "field": {
+      const x = choiceId ?? (/과제|숙제/.test(v) ? "homework" : /진도/.test(v) ? "progress" : "");
+      if (x !== "progress" && x !== "homework") return false;
+      d.field = x;
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+async function executeCorrection(d: CorrectionDraft, roster: Roster): Promise<UnifiedOutcome> {
+  if (d.error) return { route: "correction", label: "기록 정정", status: "확인필요", message: d.error };
+  const audit = { by: d.enteredBy ?? "", raw: d.rawText };
+  const row = await loadSelected(d);
+  if (!row) return { route: "correction", label: "기록 정정", status: "확인필요", message: "수정할 기록을 찾지 못했습니다(이미 취소됐거나 삭제됐을 수 있습니다)." };
+
+  if (d.selectedId!.startsWith("slr:")) {
+    const recordId = row.id as string;
+    const studentId = (row.student_notion_ids as string[] | null)?.[0] ?? "";
+    const name = roster.students.find((x) => x.id === studentId)?.name ?? "학생";
+    const what = (row.assessment_name as string) || RECORD_TYPE_LABEL[row.record_type as LearningRecordType] || "기록";
+    const task = await getLinkedTask(row.task_id as string | null);
+    const taskLines: string[] = [];
+    const closeTask = async (reason: string) => {
+      if (!task || task.done) return;
+      if (d.taskDecision === "keep") {
+        taskLines.push(`연결된 업무(${task.typeLabel})는 그대로 유지합니다.`);
+        return;
+      }
+      await cancelTaskForRecord(task.id, { ...audit, reason });
+      taskLines.push(`연결된 업무(${task.typeLabel})도 취소했습니다.`);
+    };
+
+    if (d.operation === "cancel") {
+      await cancelLearningRecord(recordId, audit);
+      if (task && task.done) taskLines.push(`연결된 업무(${task.typeLabel})는 이미 완료돼 그대로 둡니다.`);
+      else await closeTask("근거 학생 기록 취소");
+      return {
+        route: "correction",
+        label: name,
+        status: "완료",
+        message: [`${name} · ${learningRecordLabel(row, roster).split(" · ").slice(1).join(" · ")} 기록을 취소했습니다.`, ...taskLines].join("\n"),
+      };
+    }
+
+    const patch: Record<string, unknown> = {};
+    const changes: string[] = [];
+    if (d.newScore !== null && Number(row.score) !== d.newScore) {
+      patch.score = d.newScore;
+      changes.push(`${row.score ?? "-"}점 → ${d.newScore}점`);
+    }
+    if (d.newMaxScore !== null) patch.max_score = d.newMaxScore;
+    let passed = d.newPassed;
+    let retest = d.newRetestRequired;
+    if (d.passDecision === "pass") {
+      passed = true;
+      retest = false;
+    } else if (d.passDecision === "fail") {
+      passed = false;
+      retest = true;
+    }
+    const yn = (b: unknown, t: string, f: string) => (b === true ? t : b === false ? f : "-");
+    if (passed !== null && passed !== row.passed) {
+      patch.passed = passed;
+      changes.push(`${yn(row.passed, "통과", "미통과")} → ${yn(passed, "통과", "미통과")}`);
+    }
+    if (retest !== null && retest !== row.retest_required) {
+      patch.retest_required = retest;
+      changes.push(`재시험 ${yn(row.retest_required, "필요", "아님")} → ${yn(retest, "필요", "아님")}`);
+    }
+    if (d.newCompleted !== null && d.newCompleted !== row.completed) {
+      patch.completed = d.newCompleted;
+      changes.push(`${yn(row.completed, "완료", "미완료")} → ${yn(d.newCompleted, "완료", "미완료")}`);
+    }
+    if (d.newPeriod && d.newPeriod !== row.period) {
+      patch.period = d.newPeriod;
+      const classId = (row.class_notion_ids as string[] | null)?.[0];
+      patch.class_progress_id = classId ? ((await findClassProgressRow(classId, String(row.record_date), d.newPeriod))?.id ?? null) : null;
+      changes.push(`${row.period || "교시 없음"} → ${d.newPeriod}`);
+    }
+    let newName = "";
+    if (d.newStudentId && d.newStudentId !== studentId) {
+      const { pgResolveRelationId } = await import("@/lib/supabaseRepo");
+      patch.student_id = await pgResolveRelationId("STUDENT", d.newStudentId);
+      patch.student_notion_ids = [d.newStudentId];
+      newName = roster.students.find((x) => x.id === d.newStudentId)?.name ?? "";
+      changes.push(`학생 ${name} → ${newName}`);
+    }
+    if (Object.keys(patch).length === 0) {
+      return { route: "correction", label: name, status: "완료", message: `${name} · ${what}: 이미 같은 내용이라 바꿀 것이 없습니다.` };
+    }
+    await updateLearningRecord(recordId, patch as never, audit);
+    if (task && !task.done) {
+      if (newName) {
+        await retargetTaskStudent(task.id, d.newStudentId!, newName, task.typeLabel);
+        taskLines.push(`연결된 업무(${task.typeLabel})의 학생도 ${newName}(으)로 바꿨습니다.`);
+      } else if (d.taskDecision) await closeTask("근거 학생 기록 정정");
+    }
+    return {
+      route: "correction",
+      label: name,
+      status: "완료",
+      message: [`${name} · ${what}`, `${changes.join(", ")}(으)로 수정했습니다.`, ...taskLines].join("\n"),
+    };
+  }
+
+  // class_progress
+  const header = classProgressLabel(row, roster).split(" · ")[0];
+  if (d.newPeriod && d.operation === "modify" && !d.fromText) {
+    const classId = (row.class_notion_ids as string[] | null)?.[0] ?? "";
+    const clash = classId ? await findClassProgressRow(classId, String(row.record_date), d.newPeriod) : null;
+    if (clash) return { route: "correction", label: header, status: "확인필요", message: `${header}: 이미 ${d.newPeriod} 기록이 있어 교시를 옮기지 않았습니다. 그 기록을 직접 수정해 주세요.` };
+    await correctClassProgressRow(row.id as string, { period: d.newPeriod }, { ...audit, operation: "modify" });
+    return { route: "correction", label: header, status: "완료", message: `${header}\n${row.period || "교시 없음"} → ${d.newPeriod}(으)로 수정했습니다.` };
+  }
+  if (d.fromText && d.field) {
+    const col = d.field === "progress" ? "progress_content" : "homework_content";
+    const fieldLabel = d.field === "progress" ? "진도" : "과제";
+    const before = String(row[col] ?? "");
+    if (d.operation === "cancel") {
+      const merged = mergeProgressText(before, d.fromText, "delete");
+      if (merged.change !== "deleted") return { route: "correction", label: header, status: "확인필요", message: `${header}: ${fieldLabel}에서 "${d.fromText}"을(를) 찾지 못했습니다.` };
+      await correctClassProgressRow(row.id as string, { [d.field]: merged.value }, { ...audit, operation: "delete" });
+      const removed = before.split("\n").filter((l) => !merged.value.split("\n").includes(l)).join(" / ");
+      return { route: "correction", label: header, status: "완료", message: `${header}\n${fieldLabel} "${removed}"을(를) 삭제했습니다.` };
+    }
+    const lines = before.split("\n");
+    const idx = lines.findIndex((l) => norm(l).includes(norm(d.fromText)));
+    if (idx < 0) return { route: "correction", label: header, status: "확인필요", message: `${header}: ${fieldLabel}에서 "${d.fromText}"을(를) 찾지 못했습니다.` };
+    const oldLine = lines[idx];
+    const newLine = oldLine.includes(d.fromText) ? oldLine.replace(d.fromText, d.toText) : d.toText;
+    lines[idx] = newLine;
+    await correctClassProgressRow(row.id as string, { [d.field]: lines.join("\n") }, { ...audit, operation: "modify" });
+    return { route: "correction", label: header, status: "완료", message: `${header}\n${fieldLabel} ${oldLine} → ${newLine}(으)로 수정했습니다.` };
+  }
+  if (d.operation === "cancel") {
+    // "방금 입력한 거 취소" — 이 사용자의 마지막 변경을 되돌린다(이후 다른 변경이 없을 때만).
+    const log = ((row.source_payload as { examAiLog?: { by?: string; progress?: { before?: string; after?: string }; homework?: { before?: string; after?: string } }[] } | null)?.examAiLog ?? []);
+    const last = log[log.length - 1];
+    if (!last || last.by !== d.enteredBy) {
+      return { route: "correction", label: header, status: "확인필요", message: `${header}: 마지막 변경이 다른 사람의 입력이라 자동으로 되돌리지 않았습니다. 지울 내용을 알려주세요.` };
+    }
+    const curP = String(row.progress_content ?? "");
+    const curH = String(row.homework_content ?? "");
+    if ((last.progress?.after ?? curP) !== curP || (last.homework?.after ?? curH) !== curH) {
+      return { route: "correction", label: header, status: "확인필요", message: `${header}: 이후 다른 변경이 있어 자동으로 되돌리지 않았습니다. 지울 내용을 알려주세요.` };
+    }
+    await correctClassProgressRow(
+      row.id as string,
+      { progress: last.progress?.before ?? curP, homework: last.homework?.before ?? curH },
+      { ...audit, operation: "delete" }
+    );
+    return { route: "correction", label: header, status: "완료", message: `${header}\n방금 입력한 진도/과제를 취소했습니다(이전 상태로 되돌림).` };
+  }
+  return { route: "correction", label: header, status: "확인필요", message: `${header}: 무엇을 어떻게 바꿀지 알려주세요(예: '25쪽 → 27쪽').` };
 }
 
 const RECORD_TYPE_LABEL: Record<LearningRecordType, string> = {
@@ -1140,6 +1942,7 @@ async function executeDraft(
     const r = await saveStudentRecordOutcome(draft, roster, studentNames, today);
     return { outcomes: r.outcomes, slackTasks: r.slackTasks };
   }
+  if (draft.kind === "correction") return { outcomes: [await executeCorrection(draft, roster)], slackTasks: [] };
   const t = taskInputFromDraft(draft, today);
   if (!t) return { outcomes: [{ route: "task", label: draft.taskType, status: "실패", message: "업무 유형을 확인할 수 없습니다." }], slackTasks: [] };
   return createTaskOutcomes([t], roster, studentNames);
@@ -1298,12 +2101,14 @@ function resolveNamesForIntent(
 
 export async function runUnifiedNlInput(
   text: string,
-  opts: { staffName?: string; context?: ClassContext | null } = {}
+  opts: { staffName?: string; staffId?: string; context?: ClassContext | null; historyToken?: string | null } = {}
 ): Promise<{
   ok: boolean;
   outcomes: UnifiedOutcome[];
   tasks: { typeLabel: string; studentName: string; ownerName: string | null; pool: boolean }[];
   context?: ClassContext;
+  // 이번 요청에서 입력 이력을 조회했으면 번호↔기록 서명 토큰(다음 입력의 "2번 …"용)
+  history?: string;
 }> {
   mark("unified:start");
   const today = todayKST();
@@ -1344,6 +2149,7 @@ export async function runUnifiedNlInput(
   const taskInputs: { input: NewTaskInput; label: string }[] = [];
   const recordSlackTasks: SlackTask[] = [];
   const recordTaskKeys = new Set<string>();
+  let historyToken: string | undefined;
 
   for (const intent of intents) {
     const label = intent.instruction || intent.taskType || intent.route;
@@ -1353,7 +2159,14 @@ export async function runUnifiedNlInput(
 
       switch (intent.route) {
         case "clarify": {
-          outcomes.push({ route: "clarify", label, status: "확인필요", message: intent.message || "무엇을 해야 할지 명확하지 않습니다." });
+          outcomes.push({
+            route: "clarify",
+            label,
+            status: "확인필요",
+            message:
+              intent.message ||
+              "요청을 정확히 이해하지 못했어요. 조금만 더 알려주세요 — 예: '고2 이사벨A 1교시 본문 3과'(진도), '김민수 단어 84점'(학생 기록), '민지에게 출력 맡겨'(업무), '방금 입력한 거 취소'(정정), '오늘 입력한 내용 보여줘'(조회).",
+          });
           break;
         }
         case "attendance_check": {
@@ -1520,6 +2333,71 @@ export async function runUnifiedNlInput(
           outcomes.push(...(await executeDraft(draft, roster, studentNames, today)).outcomes);
           break;
         }
+        case "history_query": {
+          // 조회는 읽기 전용 — 이 분기에서는 어떤 저장 함수도 부르지 않는다.
+          const r = await runHistoryQuery(intent, roster, { staffName: opts.staffName, staffId: opts.staffId });
+          outcomes.push(r.outcome);
+          if (r.token) historyToken = r.token;
+          break;
+        }
+        case "correction": {
+          const date = intent.date || today;
+          const ctx = usableContext(opts.context, date, roster);
+          const draft: CorrectionDraft = {
+            kind: "correction",
+            target: intent.correctionTarget === "student_record" || intent.correctionTarget === "class_progress" ? intent.correctionTarget : "recent",
+            operation: intent.operation === "modify" || intent.operation === "cancel" ? intent.operation : "unknown",
+            studentNames: (intent.newStudentName ? (intent.students ?? []).slice(0, 1) : intent.students ?? []).map((n) => n?.trim()).filter((n): n is string => !!n),
+            className: intent.className?.trim() || "",
+            classId: intent.className?.trim() ? null : ctx?.classId ?? null,
+            period: normalizePeriod(intent.period),
+            date,
+            recordType: intent.recordType ?? "",
+            assessmentName: intent.assessmentName?.trim() || "",
+            oldScore: typeof intent.oldScore === "number" ? intent.oldScore : null,
+            selectedId: null,
+            selectedLabel: "",
+            newScore: typeof intent.newScore === "number" ? intent.newScore : null,
+            newMaxScore: typeof intent.newMaxScore === "number" && intent.newMaxScore > 0 ? intent.newMaxScore : null,
+            newPassed: typeof intent.newPassed === "boolean" ? intent.newPassed : null,
+            newRetestRequired: typeof intent.newRetestRequired === "boolean" ? intent.newRetestRequired : null,
+            newCompleted: typeof intent.newCompleted === "boolean" ? intent.newCompleted : null,
+            newStudentName: intent.newStudentName?.trim() || "",
+            newStudentId: null,
+            newPeriod: normalizePeriod(intent.newPeriod),
+            field: intent.field === "progress" || intent.field === "homework" ? intent.field : "",
+            fromText: intent.fromText?.trim() || "",
+            toText: intent.toText?.trim() || "",
+            passDecision: null,
+            taskDecision: null,
+            error: "",
+            enteredBy: opts.staffName,
+            rawText: text,
+          };
+          // "2번 …/마지막 거 …": 직전 조회 목록(이 로그인 사용자의 서명 토큰)에서 대상을 바로 고른다.
+          if (typeof intent.itemNumber === "number" && intent.itemNumber !== 0) {
+            const refs = verifyHistoryToken(opts.historyToken, opts.staffId);
+            const idx = intent.itemNumber < 0 ? (refs?.length ?? 0) + intent.itemNumber : intent.itemNumber - 1;
+            const ref = refs?.[idx];
+            if (!refs) {
+              draft.error = "번호로 고치려면 먼저 '오늘 입력한 내용 보여줘'로 목록을 불러와 주세요.";
+            } else if (!ref) {
+              draft.error = `목록에 ${intent.itemNumber}번이 없습니다(총 ${refs.length}건).`;
+            } else if (ref.ref.startsWith("task:")) {
+              draft.error = `${intent.itemNumber}번은 업무(${ref.label})입니다. 업무 수정·취소는 '내 업무' 화면에서 해주세요.`;
+            } else {
+              draft.selectedId = ref.ref;
+              draft.selectedLabel = ref.label;
+            }
+          }
+          const missing = draft.error ? [] : await checkDraft(draft, roster);
+          if (missing.length > 0) {
+            outcomes.push(pendingOutcome(draft, missing, 0));
+            break;
+          }
+          outcomes.push(await executeCorrection(draft, roster));
+          break;
+        }
         case "student_record": {
           const names = (intent.students ?? []).map((n) => n?.trim()).filter((n): n is string => !!n);
           if (names.length === 0) {
@@ -1601,5 +2479,5 @@ export async function runUnifiedNlInput(
 
   const ok = outcomes.length > 0 && outcomes.every((o) => o.status !== "실패");
   const lastContext = [...outcomes].reverse().find((o) => o.context)?.context;
-  return { ok, outcomes, tasks: slackTasks, context: lastContext };
+  return { ok, outcomes, tasks: slackTasks, context: lastContext, history: historyToken };
 }

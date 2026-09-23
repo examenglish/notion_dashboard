@@ -2892,6 +2892,7 @@ export async function saveClassProgressFromText(input: {
           at: nowIso,
           by: input.enteredBy ?? "",
           mode,
+          operation: mode === "append" ? "add" : mode === "replace" ? "modify" : "delete",
           raw: input.rawText ?? "",
           progress: { before: beforeProgress, after: p.value, change: p.change },
           homework: { before: beforeHomework, after: h.value, change: h.change },
@@ -2922,7 +2923,9 @@ export async function saveClassProgressFromText(input: {
     student_records_created: false,
     source_payload: {
       origin: "exam_ai",
-      examAiLog: [{ at: nowIso, by: input.enteredBy ?? "", mode: "create", raw: input.rawText ?? "", progress: { after: progress }, homework: { after: homework } }],
+      examAiLog: [
+        { at: nowIso, by: input.enteredBy ?? "", mode: "create", operation: "add", raw: input.rawText ?? "", progress: { before: "", after: progress }, homework: { before: "", after: homework } },
+      ],
     },
   });
   return {
@@ -3046,7 +3049,218 @@ export async function listStudentLearningRecords(filter: {
   if (filter.to) parts.push(`record_date=lte.${filter.to}`);
   if (filter.recordType) parts.push(`record_type=eq.${filter.recordType}`);
   const rows = await pgQueryRaw("STUDENT_LEARNING_RECORD", parts.join("&") || "id=not.is.null");
-  return rows.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+  return rows.filter(isActiveLearningRecord).sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+}
+
+// ---------------------------------------------------------------------------
+// EXAM AI 자연어 정정(수정/취소) — 새 컬럼 없이 기존 source_payload로 감사 추적.
+//  - 학생 기록 취소는 물리 삭제가 아니라 soft cancel: source_payload.cancelled =
+//    {at, by, raw, inputHash} + input_hash=null(같은 문장을 다시 입력하면 정상 기록되게).
+//    조회/중복판정/정정 후보에서 전부 제외한다.
+//  - 수정은 source_payload.edits[]에 {at, by, raw, op, before, after}를 쌓고,
+//    원래 작성자(entered_by)는 바꾸지 않는다. 수행자(by)는 항상 로그인 세션 사용자.
+// ---------------------------------------------------------------------------
+export function isActiveLearningRecord(row: Record<string, unknown>): boolean {
+  return !(row.source_payload as { cancelled?: unknown } | null)?.cancelled;
+}
+
+export type EditAudit = { by: string; raw: string };
+
+// 최근(sinceIso 이후 생성) 활성 학생 기록 — 정정 후보 탐색용.
+export async function listRecentLearningRecords(sinceIso: string): Promise<Record<string, unknown>[]> {
+  if (getDbProvider() !== "postgres") return [];
+  const rows = await pgQueryRaw("STUDENT_LEARNING_RECORD", `created_at=gte.${encodeURIComponent(sinceIso)}`);
+  return rows.filter(isActiveLearningRecord).sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+}
+
+async function getLearningRecordRow(id: string): Promise<Record<string, unknown>> {
+  const rows = await pgQueryRaw("STUDENT_LEARNING_RECORD", `id=eq.${encodeURIComponent(id)}`);
+  const row = rows[0];
+  if (!row || !isActiveLearningRecord(row)) throw new Error("수정할 기록을 찾지 못했습니다(이미 취소됐을 수 있습니다).");
+  return row;
+}
+
+const LEARNING_EDITABLE = ["score", "max_score", "passed", "retest_required", "completed", "student_id", "student_notion_ids", "period", "class_progress_id"] as const;
+
+export async function updateLearningRecord(
+  id: string,
+  patch: Partial<Record<(typeof LEARNING_EDITABLE)[number], unknown>>,
+  audit: EditAudit
+): Promise<{ before: Record<string, unknown>; after: Record<string, unknown> }> {
+  const row = await getLearningRecordRow(id);
+  const before: Record<string, unknown> = {};
+  const after: Record<string, unknown> = {};
+  for (const k of Object.keys(patch) as (typeof LEARNING_EDITABLE)[number][]) {
+    if (!LEARNING_EDITABLE.includes(k)) continue;
+    before[k] = row[k] ?? null;
+    after[k] = patch[k] ?? null;
+  }
+  const payload = ((row.source_payload as Record<string, unknown> | null) ?? {}) as Record<string, unknown>;
+  const edits = Array.isArray(payload.edits) ? (payload.edits as unknown[]) : [];
+  await pgPatchById("STUDENT_LEARNING_RECORD", id, {
+    ...after,
+    updated_at: new Date().toISOString(),
+    source_payload: { ...payload, edits: [...edits, { at: new Date().toISOString(), by: audit.by, raw: audit.raw, op: "modify", before, after }] },
+  });
+  return { before, after };
+}
+
+export async function cancelLearningRecord(id: string, audit: EditAudit): Promise<Record<string, unknown>> {
+  const row = await getLearningRecordRow(id);
+  const payload = ((row.source_payload as Record<string, unknown> | null) ?? {}) as Record<string, unknown>;
+  const edits = Array.isArray(payload.edits) ? (payload.edits as unknown[]) : [];
+  const at = new Date().toISOString();
+  await pgPatchById("STUDENT_LEARNING_RECORD", id, {
+    input_hash: null,
+    updated_at: at,
+    source_payload: {
+      ...payload,
+      cancelled: { at, by: audit.by, raw: audit.raw, inputHash: row.input_hash ?? null },
+      edits: [...edits, { at, by: audit.by, raw: audit.raw, op: "cancel" }],
+    },
+  });
+  return row;
+}
+
+// 활성(취소 안 된) 학생 기록 한 건 — 정정 대상 재확인용. 없거나 취소됐으면 null.
+export async function getActiveLearningRecord(id: string): Promise<Record<string, unknown> | null> {
+  if (getDbProvider() !== "postgres") return null;
+  const rows = await pgQueryRaw("STUDENT_LEARNING_RECORD", `id=eq.${encodeURIComponent(id)}`);
+  const row = rows[0];
+  return row && isActiveLearningRecord(row) ? row : null;
+}
+
+export async function getClassProgressRowById(id: string): Promise<Record<string, unknown> | null> {
+  if (getDbProvider() !== "postgres") return null;
+  const rows = await pgQueryRaw("CLASS_PROGRESS", `id=eq.${encodeURIComponent(id)}`);
+  return rows.filter(pgNotArchived)[0] ?? null;
+}
+
+// EXAM AI 입력 이력 조회(읽기 전용 — GET만). 기간 [fromIso, toIso) 안에 생긴/바뀐
+// 학생 기록·반 진도·업무 원본 행을 돌려주고, 누가/언제 입력했는지 판단과 표시는
+// 호출부(lib/nl-input.ts)가 기존 메타데이터(entered_by, examAiLog, workflow.createdBy)로 한다.
+export async function listExamAiHistoryRows(fromIso: string, toIso: string): Promise<{
+  records: Record<string, unknown>[];
+  progress: Record<string, unknown>[];
+  tasks: Record<string, unknown>[];
+}> {
+  if (getDbProvider() !== "postgres") return { records: [], progress: [], tasks: [] };
+  const range = (col: string) => `${col}=gte.${encodeURIComponent(fromIso)}&${col}=lt.${encodeURIComponent(toIso)}`;
+  const [records, progress, tasks] = await Promise.all([
+    pgQueryRaw("STUDENT_LEARNING_RECORD", range("created_at")),
+    pgQueryRaw("CLASS_PROGRESS", `updated_at=gte.${encodeURIComponent(fromIso)}`),
+    pgQueryRaw("TODO", range("created_at")),
+  ]);
+  return {
+    records: records.filter(isActiveLearningRecord),
+    progress: progress.filter(pgNotArchived),
+    tasks: tasks.filter(pgNotArchived).filter((t) => TASK_TYPE_LABEL_LIST.includes(t.type as string)),
+  };
+}
+
+// 학생 기록에 연결된 업무(task_id = tasks.id). 상태 판단용 최소 정보.
+export async function getLinkedTask(taskPgId: string | null | undefined): Promise<{
+  id: string;
+  typeLabel: string;
+  done: boolean;
+  started: boolean;
+  outcome: string;
+} | null> {
+  if (!taskPgId || getDbProvider() !== "postgres") return null;
+  const row = await pgGetByNotionId("TODO", taskPgId);
+  if (!row || !pgNotArchived(row)) return null;
+  const wf = ((row.source_payload as Record<string, unknown> | null)?.workflow ?? {}) as TaskWorkflow;
+  return { id: row.id as string, typeLabel: (row.type as string) ?? "", done: !!row.complete, started: !!wf.startedAt, outcome: (row.outcome as string) ?? "" };
+}
+
+// 근거가 된 학생 기록이 취소/정정돼 더 이상 필요 없는 업무를 "취소"로 닫는다. 업무 시스템에
+// 별도 취소 상태가 없으므로 complete=true + outcome "취소"(검토함 대상 아님, NORMAL) +
+// workflow에 취소 이력을 남긴다.
+export async function cancelTaskForRecord(taskPgId: string, audit: EditAudit & { reason: string }): Promise<void> {
+  const row = await pgGetByNotionId("TODO", taskPgId);
+  if (!row) throw new Error("연결된 업무를 찾지 못했습니다.");
+  const payload = ((row.source_payload as Record<string, unknown> | null) ?? {}) as Record<string, unknown>;
+  const wf = (payload.workflow as TaskWorkflow | undefined) ?? {};
+  const at = new Date().toISOString();
+  await pgPatchById("TODO", row.id as string, {
+    complete: true,
+    outcome: "취소",
+    source_payload: { ...payload, workflow: { ...wf, completedAt: at, cancelledAt: at, cancelledBy: audit.by, cancelReason: `${audit.reason} — ${audit.raw}` } },
+  });
+  if (row.notion_id) {
+    const notionId = row.notion_id as string;
+    fireAndForget("notion:cancelTaskForRecord", () =>
+      notion.pages.update({ page_id: notionId, properties: { 완료여부: { checkbox: true }, 결과값: { rich_text: [{ text: { content: "취소" } }] } } as any })
+    );
+  }
+}
+
+// 학생 정정("민수가 아니라 민지") 시 아직 끝나지 않은 연결 업무의 학생도 맞춘다.
+export async function retargetTaskStudent(taskPgId: string, studentId: string, studentName: string, typeLabel: string): Promise<void> {
+  await pgPatchById("TODO", taskPgId, { student_notion_ids: [studentId], title: `${typeLabel} - ${studentName}` });
+}
+
+// class_progress 정정 후보: 반·날짜·교시 행 하나, 또는 이 사용자가 최근(sinceIso 이후)
+// EXAM AI로 건드린 행들(최근 순).
+export async function findClassProgressRow(classId: string, date: string, period: string | null): Promise<Record<string, unknown> | null> {
+  const classPgId = await pgResolveRelationId("CLASS", classId);
+  if (!classPgId) return null;
+  const rows = await pgQueryRaw(
+    "CLASS_PROGRESS",
+    `class_id=eq.${classPgId}&record_date=eq.${date}&${period ? `period=eq.${encodeURIComponent(period)}` : "period=is.null"}`
+  );
+  return rows.filter(pgNotArchived)[0] ?? null;
+}
+
+export async function listRecentClassProgressByUser(staffName: string, sinceIso: string): Promise<{ row: Record<string, unknown>; lastAt: string }[]> {
+  if (getDbProvider() !== "postgres" || !staffName) return [];
+  const rows = await pgQueryRaw("CLASS_PROGRESS", `updated_at=gte.${encodeURIComponent(sinceIso)}`);
+  const out: { row: Record<string, unknown>; lastAt: string }[] = [];
+  for (const row of rows.filter(pgNotArchived)) {
+    const log = ((row.source_payload as { examAiLog?: { at?: string; by?: string }[] } | null)?.examAiLog ?? []).filter((e) => e.by === staffName && (e.at ?? "") >= sinceIso);
+    if (log.length > 0) out.push({ row, lastAt: log[log.length - 1].at ?? "" });
+  }
+  return out.sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+}
+
+// class_progress 정정 적용(진도/과제 텍스트를 통째로 새 값으로, 또는 교시 이동) + 감사 로그.
+export async function correctClassProgressRow(
+  rowId: string,
+  next: { progress?: string; homework?: string; period?: string | null },
+  audit: EditAudit & { operation: "modify" | "delete" }
+): Promise<void> {
+  const rows = await pgQueryRaw("CLASS_PROGRESS", `id=eq.${encodeURIComponent(rowId)}`);
+  const row = rows[0];
+  if (!row) throw new Error("수정할 수업 기록을 찾지 못했습니다.");
+  const beforeProgress = (row.progress_content as string) ?? "";
+  const beforeHomework = (row.homework_content as string) ?? "";
+  const patch: Record<string, unknown> = {};
+  if (next.progress !== undefined) patch.progress_content = next.progress;
+  if (next.homework !== undefined) patch.homework_content = next.homework;
+  if (next.period !== undefined) patch.period = next.period;
+  const payload = ((row.source_payload as Record<string, unknown> | null) ?? {}) as Record<string, unknown>;
+  const log = Array.isArray(payload.examAiLog) ? (payload.examAiLog as unknown[]) : [];
+  patch.source_payload = {
+    ...payload,
+    examAiLog: [
+      ...log,
+      {
+        at: new Date().toISOString(),
+        by: audit.by,
+        mode: audit.operation === "delete" ? "delete" : "replace",
+        operation: audit.operation,
+        raw: audit.raw,
+        progress: { before: beforeProgress, after: next.progress ?? beforeProgress },
+        homework: { before: beforeHomework, after: next.homework ?? beforeHomework },
+        ...(next.period !== undefined ? { period: { before: row.period ?? null, after: next.period } } : {}),
+      },
+    ].slice(-50),
+  };
+  await pgPatchById("CLASS_PROGRESS", rowId, patch);
+  if (next.progress !== undefined && next.progress !== beforeProgress) {
+    const dailyRows = await pgFindDailyRecordsForProgress(row);
+    await Promise.all(dailyRows.map((d) => pgPatchById("DAILY_RECORD", d.id as string, { progress_content: next.progress })));
+  }
 }
 
 // 그 반·그 날짜에 이미 저장된 교시 목록("1교시" 등) — EXAM AI 반 진도 입력이

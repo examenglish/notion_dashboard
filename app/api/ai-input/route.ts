@@ -140,7 +140,10 @@ export async function POST(req: NextRequest) {
       rawCtx && typeof rawCtx.classId === "string" && typeof rawCtx.date === "string"
         ? { classId: rawCtx.classId, className: String(rawCtx.className ?? ""), date: rawCtx.date, period: String(rawCtx.period ?? "") }
         : null;
-    const result = await runUnifiedNlInput(text, { staffName, context });
+    // 입력 이력 조회 결과 번호 토큰 — 서버 서명(HMAC) + 조회한 직원 id가 들어 있어, 현재
+    // 세션 직원과 다르거나 위·변조되면 runUnifiedNlInput이 무시한다.
+    const historyToken = typeof body?.history === "string" ? body.history : null;
+    const result = await runUnifiedNlInput(text, { staffName, staffId: staffId || undefined, context, historyToken });
     mark("route:after_unified");
     if (result.tasks.length > 0) notifyTaskAssignments(result.tasks);
     const summary =
@@ -148,7 +151,14 @@ export async function POST(req: NextRequest) {
         ? result.outcomes[0].message
         : result.outcomes.map((o) => `${o.status === "완료" ? "✅" : o.status === "확인필요" ? "❓" : "⚠️"} ${o.message}`).join("\n");
     mark("route:before_response");
-    return NextResponse.json({ ok: result.ok, mode: "multi", message: summary, outcomes: result.outcomes, context: result.context ?? null });
+    return NextResponse.json({
+      ok: result.ok,
+      mode: "multi",
+      message: summary,
+      outcomes: result.outcomes,
+      context: result.context ?? null,
+      history: result.history ?? null,
+    });
   } catch (err) {
     console.error("/api/ai-input failed", err);
     const message = err instanceof Error ? err.message : "처리 중 오류가 발생했습니다.";

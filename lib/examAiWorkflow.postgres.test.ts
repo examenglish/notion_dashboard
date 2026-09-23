@@ -39,7 +39,7 @@ type Row = Record<string, any>;
 function matchClause(clause: string, row: Row): boolean {
   const neg = clause.match(/^([a-z_]+)\.not\.(.*)$/);
   if (neg) return !matchClause(`${neg[1]}.${neg[2]}`, row);
-  const m = clause.match(/^([a-z_]+)\.(eq|cs|is|in|gte|lte)\.(.*)$/);
+  const m = clause.match(/^([a-z_]+)\.(eq|cs|is|in|gte|lte|lt)\.(.*)$/);
   if (!m) throw new Error(`fake-supabase: unsupported clause "${clause}"`);
   const [, col, op, rawVal] = m;
   const cell = row[col];
@@ -55,6 +55,7 @@ function matchClause(clause: string, row: Row): boolean {
   }
   if (op === "gte") return String(cell ?? "") >= decoded;
   if (op === "lte") return String(cell ?? "") <= decoded;
+  if (op === "lt") return String(cell ?? "") < decoded;
   if (op === "in") return rawVal.replace(/^\(/, "").replace(/\)$/, "").split(",").map(decodeURIComponent).includes(String(cell ?? ""));
   return false;
 }
@@ -160,6 +161,7 @@ beforeEach(() => {
   process.env.ACADEMY_BRANCH_ID = "sajik";
   process.env.ACADEMY_DB_PROVIDER = "postgres";
   process.env.ACADEMY_STUDENT_READ_PROVIDER = "postgres";
+  process.env.SESSION_SECRET = "test-session-secret";
   parseUnifiedInput.mockReset();
   parsePendingAnswer.mockReset();
   vi.resetModules();
@@ -737,5 +739,267 @@ describe("작성자 = 로그인 사용자", () => {
     tampered.draft.enteredBy = "가짜작성자";
     await continuePendingInput(tampered, "", { choiceId: "stu-minsu-1a", staffName: "박민지" });
     expect(tables.student_learning_records[0].entered_by).toBe("박민지");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 자연어 정정(수정/취소) + 입력 이력 조회
+// ---------------------------------------------------------------------------
+async function seedRecord(text: string, i: Partial<UnifiedIntent>, staffName = "서도영") {
+  parseUnifiedInput.mockResolvedValueOnce([intent({ route: "student_record", className: "고2 이사벨A", ...i })]);
+  const { runUnifiedNlInput } = await import("@/lib/nl-input");
+  return runUnifiedNlInput(text, { staffName, staffId: `staff-${staffName}` });
+}
+async function say(text: string, i: Partial<UnifiedIntent>, opts: Record<string, unknown> = {}) {
+  parseUnifiedInput.mockResolvedValueOnce([intent(i)]);
+  const { runUnifiedNlInput } = await import("@/lib/nl-input");
+  return runUnifiedNlInput(text, { staffName: "서도영", staffId: "staff-seo", ...opts });
+}
+const active = () => tables.student_learning_records.filter((r) => !r.source_payload?.cancelled);
+
+describe("자연어 정정 — class_progress", () => {
+  it("'아까 과제 25쪽까지 아니고 27쪽까지' → 해당 부분만 수정 + 감사 로그(작성자/전후/원문/operation)", async () => {
+    await say("고2 이사벨A 1교시 본문 3과, 과제 워크북 22~25쪽", { route: "class_progress", className: "고2 이사벨A", period: "1교시", progress: "본문 3과", homework: "워크북 22~25쪽" });
+    const res = await say("아까 이사벨A 과제 25쪽까지 아니고 27쪽까지야", {
+      route: "correction", correctionTarget: "class_progress", operation: "modify", className: "고2 이사벨A", field: "homework", fromText: "25쪽", toText: "27쪽",
+    });
+    expect(tables.class_progress[0].homework_content).toBe("워크북 22~27쪽");
+    expect(tables.class_progress[0].progress_content).toBe("본문 3과");
+    expect(res.outcomes[0].message).toBe("고2 이사벨A 1교시\n과제 워크북 22~25쪽 → 워크북 22~27쪽(으)로 수정했습니다.");
+    const last = tables.class_progress[0].source_payload.examAiLog.at(-1);
+    expect(last).toMatchObject({ by: "서도영", operation: "modify", raw: "아까 이사벨A 과제 25쪽까지 아니고 27쪽까지야", homework: { before: "워크북 22~25쪽", after: "워크북 22~27쪽" } });
+    expect(last.at).toBeTruthy();
+  });
+
+  it("'관계대명사 한 거 삭제해' → 그 줄만 삭제, '방금 입력한 거 취소'는 내 마지막 변경만 되돌림", async () => {
+    await say("고2 이사벨A 1교시 본문 3과", { route: "class_progress", className: "고2 이사벨A", period: "1교시", progress: "본문 3과" });
+    await say("고2 이사벨A 1교시 추가로 관계대명사", { route: "class_progress", className: "고2 이사벨A", period: "1교시", progress: "관계대명사" });
+    await say("관계대명사 한 거 삭제해", { route: "correction", correctionTarget: "class_progress", operation: "cancel", field: "progress", fromText: "관계대명사" });
+    expect(tables.class_progress[0].progress_content).toBe("본문 3과");
+    await say("고2 이사벨A 1교시 과제 워크북 22쪽", { route: "class_progress", className: "고2 이사벨A", period: "1교시", homework: "워크북 22쪽" });
+    const res = await say("방금 입력한 거 취소해", { route: "correction", correctionTarget: "recent", operation: "cancel" });
+    expect(res.outcomes[0].message).toContain("방금 입력한 진도/과제를 취소했습니다");
+    expect(tables.class_progress[0]).toMatchObject({ progress_content: "본문 3과", homework_content: "" });
+    expect(tables.class_progress[0].source_payload.examAiLog.at(-1)).toMatchObject({ operation: "delete", by: "서도영" });
+  });
+});
+
+describe("자연어 정정 — student_learning_records", () => {
+  it("'84점 아니고 94점이야' → 통과/재시험 여부를 추측하지 않고 묻고, 답하면 일관되게 갱신(수행자=로그인 사용자, 원작성자 보존)", async () => {
+    await seedRecord("고2 이사벨A 김민수 단어시험 84점 재시험", { students: ["김민수"], recordType: "vocab", assessmentName: "단어시험", score: 84, passed: false, retestRequired: true }, "박민지");
+    const first = await say("김민수 84점 아니고 94점이야", { route: "correction", correctionTarget: "student_record", operation: "modify", students: ["김민수"], oldScore: 84, newScore: 94 });
+    const pending = first.outcomes[0].pending!;
+    expect(pending.question).toBe("84점 → 94점으로 수정하면 통과/재시험 여부도 바뀌나요?");
+    expect(tables.student_learning_records[0].score).toBe(84);
+    const { continuePendingInput } = await import("@/lib/nl-input");
+    const done = await continuePendingInput(JSON.parse(JSON.stringify(pending)), "통과야", { staffName: "서도영" });
+    expect(done.outcomes[0].message).toBe("김민수 · 단어시험\n84점 → 94점, 미통과 → 통과, 재시험 필요 → 아님(으)로 수정했습니다.");
+    const r = tables.student_learning_records[0];
+    expect(r).toMatchObject({ score: 94, passed: true, retest_required: false, entered_by: "박민지" });
+    expect(r.source_payload.edits[0]).toMatchObject({ by: "서도영", op: "modify", before: { score: 84, passed: false, retest_required: true }, after: { score: 94 } });
+  });
+
+  it("'김민수 재시험 아니야' → retest_required만 정정", async () => {
+    await seedRecord("고2 이사벨A 김민수 단어 70점 재시험", { students: ["김민수"], recordType: "vocab", score: 70, retestRequired: true });
+    await say("김민수 재시험 아니야", { route: "correction", correctionTarget: "student_record", operation: "modify", students: ["김민수"], newRetestRequired: false });
+    expect(tables.student_learning_records[0]).toMatchObject({ score: 70, retest_required: false });
+  });
+
+  it("'박지훈 과제 미완료 취소' → soft cancel(조회·중복판정에서 제외), 같은 문장 재입력은 새로 기록됨", async () => {
+    const text = "고2 이사벨A 박지훈 워크북 과제 미완료";
+    await seedRecord(text, { students: ["박지훈"], recordType: "homework", assessmentName: "워크북", completed: false });
+    const res = await say("박지훈 과제 미완료 기록 취소해", { route: "correction", correctionTarget: "student_record", operation: "cancel", students: ["박지훈"], recordType: "homework" });
+    expect(res.outcomes[0].message).toBe("박지훈 · 워크북 · 미완료 기록을 취소했습니다.");
+    const r = tables.student_learning_records[0];
+    expect(r.input_hash).toBeNull();
+    expect(r.source_payload.cancelled).toMatchObject({ by: "서도영", raw: "박지훈 과제 미완료 기록 취소해" });
+    const notion = await import("@/lib/notion");
+    expect(await notion.listStudentLearningRecords({})).toHaveLength(0);
+    await seedRecord(text, { students: ["박지훈"], recordType: "homework", assessmentName: "워크북", completed: false });
+    expect(active()).toHaveLength(1);
+  });
+
+  it("후보가 여러 개면 실제 후보를 보여주고 DB는 바꾸지 않는다 → 2~3턴 대화로 수정 완료", async () => {
+    await seedRecord("고2 이사벨A 김민수 단어시험 84점", { students: ["김민수"], recordType: "vocab", assessmentName: "단어시험", score: 84 });
+    await seedRecord("고2 이사벨A 김민수 문법테스트 72점", { students: ["김민수"], recordType: "assessment", assessmentName: "문법테스트", score: 72 });
+    const before = JSON.stringify(tables.student_learning_records);
+    const q1 = await say("김민수 점수 잘못 넣었어", { route: "correction", correctionTarget: "student_record", operation: "modify", students: ["김민수"] });
+    const p1 = q1.outcomes[0].pending!;
+    expect(p1.question).toBe("해당하는 기록이 2개 있습니다. 어느 기록을 수정할까요?");
+    expect(p1.missing[0].candidates!.map((c) => c.label)).toEqual(["김민수 · 문법테스트 · 72점", "김민수 · 단어시험 · 84점"]);
+    expect(JSON.stringify(tables.student_learning_records)).toBe(before);
+
+    const { continuePendingInput } = await import("@/lib/nl-input");
+    const q2 = await continuePendingInput(JSON.parse(JSON.stringify(p1)), "단어시험", { staffName: "서도영" });
+    const p2 = q2.outcomes[0].pending!;
+    expect(p2.question).toContain("무엇으로 수정할까요");
+    const done = await continuePendingInput(JSON.parse(JSON.stringify(p2)), "94", { staffName: "서도영" });
+    expect(done.ok).toBe(true);
+    expect(tables.student_learning_records.find((r) => r.assessment_name === "단어시험")!.score).toBe(94);
+    expect(tables.student_learning_records.find((r) => r.assessment_name === "문법테스트")!.score).toBe(72);
+  });
+
+  it("기록이 없으면 새 기록을 만들지 않고 안내한다", async () => {
+    const res = await say("이서연 84점 아니고 94점이야", { route: "correction", correctionTarget: "student_record", operation: "modify", students: ["이서연"], oldScore: 84, newScore: 94 });
+    expect(res.outcomes[0].status).toBe("확인필요");
+    expect(res.outcomes[0].message).toContain("수정할 기록을 찾지 못했습니다");
+    expect(tables.student_learning_records).toHaveLength(0);
+    expect(tables.tasks).toHaveLength(0);
+  });
+
+  it("'방금 입력한 거 취소' / '아까 거 잘못 입력했어'(수정·삭제 되묻기)", async () => {
+    await seedRecord("고2 이사벨A 이서연 단어 96점 통과", { students: ["이서연"], recordType: "vocab", score: 96, passed: true });
+    const q = await say("아까 거 잘못 입력했어", { route: "correction", correctionTarget: "recent", operation: "unknown" });
+    expect(q.outcomes[0].pending!.question).toBe('방금 입력한 "이서연 · 단어시험 · 96점 · 통과" 기록을 수정할까요, 삭제할까요?');
+    expect(active()).toHaveLength(1);
+    await say("방금 입력한 거 취소해", { route: "correction", correctionTarget: "recent", operation: "cancel" });
+    expect(active()).toHaveLength(0);
+  });
+
+  it("'민수가 아니라 민지야' — 새 학생이 명단에서 안전하게 특정될 때만 바꾸고, 못 찾으면 되묻는다", async () => {
+    await seedRecord("고2 이사벨A 김민수 과제 미완료", { students: ["김민수"], recordType: "homework", completed: false });
+    const res = await say("아니, 민수가 아니라 민지야", { route: "correction", operation: "modify", students: ["민수"], newStudentName: "민지" });
+    expect(res.outcomes[0].pending!.question).toContain('명단에서 "민지" 학생을 찾지 못했습니다');
+    expect(tables.student_learning_records[0].student_notion_ids).toEqual(["stu-minsu-2b"]);
+    await say("아니, 김민수가 아니라 박지훈이야", { route: "correction", operation: "modify", students: ["김민수"], newStudentName: "박지훈" });
+    expect(tables.student_learning_records[0].student_notion_ids).toEqual(["stu-jihun"]);
+  });
+
+  it("연결 업무 모순 방지: 미착수 업무는 기록 취소와 함께 취소, 진행 중이면 확인, 정정으로 필요 없어지면 확인", async () => {
+    await seedRecord("고2 이사벨A 박지훈 과제 미완료 다음 시간 확인해줘", {
+      students: ["박지훈"], recordType: "homework", completed: false, actionRequested: true, taskType: "숙제확인",
+    });
+    const taskId = tables.tasks[0].id;
+    expect(tables.student_learning_records[0].task_id).toBe(taskId);
+    const res = await say("박지훈 과제 미완료 아니야. 취소해", { route: "correction", correctionTarget: "student_record", operation: "cancel", students: ["박지훈"] });
+    expect(res.outcomes[0].message).toContain("연결된 업무(숙제확인)도 취소했습니다.");
+    expect(tables.tasks[0]).toMatchObject({ complete: true, outcome: "취소" });
+    expect(tables.tasks[0].source_payload.workflow).toMatchObject({ cancelledBy: "서도영" });
+
+    // 진행 중 업무 → 확인 질문
+    await seedRecord("고2 이사벨A 김민수 암기 미완료 확인시켜", { students: ["김민수"], recordType: "memorization", completed: false, actionRequested: true, taskType: "암기확인" });
+    const t2 = tables.tasks.find((t) => t.type === "암기확인")!;
+    t2.source_payload.workflow.startedAt = new Date().toISOString();
+    const q = await say("김민수 암기 미완료 취소", { route: "correction", correctionTarget: "student_record", operation: "cancel", students: ["김민수"] });
+    expect(q.outcomes[0].pending!.question).toContain("이미 진행 중입니다. 업무도 취소할까요?");
+    const { continuePendingInput } = await import("@/lib/nl-input");
+    await continuePendingInput(JSON.parse(JSON.stringify(q.outcomes[0].pending)), "업무는 유지", { staffName: "서도영" });
+    expect(t2.complete).toBe(false);
+
+    // 정정으로 필요 없어짐(완료) → 연결 업무 처리 확인
+    await seedRecord("고2 이사벨A 이서연 과제 미완료 확인해줘", { students: ["이서연"], recordType: "homework", completed: false, actionRequested: true, taskType: "숙제확인" });
+    const q2 = await say("이서연 과제 했대", { route: "correction", correctionTarget: "student_record", operation: "modify", students: ["이서연"], newCompleted: true });
+    expect(q2.outcomes[0].pending!.question).toContain("도 취소할까요?");
+  });
+
+  it("정정 pending의 작성자 조작 무시 — 수정 수행자는 현재 로그인 사용자", async () => {
+    await seedRecord("고2 이사벨A 김민수 단어 84점", { students: ["김민수"], recordType: "vocab", score: 84 });
+    await seedRecord("고2 이사벨A 김민수 문법 72점", { students: ["김민수"], recordType: "assessment", assessmentName: "문법", score: 72 });
+    const q = await say("김민수 점수 94로 고쳐", { route: "correction", correctionTarget: "student_record", operation: "modify", students: ["김민수"], newScore: 94 });
+    const tampered = JSON.parse(JSON.stringify(q.outcomes[0].pending));
+    tampered.draft.enteredBy = "가짜";
+    const { continuePendingInput } = await import("@/lib/nl-input");
+    await continuePendingInput(tampered, "단어시험", { staffName: "박민지" });
+    const edited = tables.student_learning_records.find((r) => r.record_type === "vocab")!;
+    expect(edited.score).toBe(94);
+    expect(edited.source_payload.edits[0].by).toBe("박민지");
+  });
+});
+
+describe("입력 이력 조회(읽기 전용) + 번호로 이어서 정정", () => {
+  async function showHistory(i: Partial<UnifiedIntent> = {}, staffName = "서도영", staffId = "staff-seo") {
+    parseUnifiedInput.mockResolvedValueOnce([intent({ route: "history_query", ...i })]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    return runUnifiedNlInput("오늘 입력한 내용 보여줘", { staffName, staffId });
+  }
+
+  async function seedDay() {
+    await say("고2 이사벨A 1교시 본문 3과, 과제 워크북 22~25쪽", { route: "class_progress", className: "고2 이사벨A", period: "1교시", progress: "본문 3과", homework: "워크북 22~25쪽" });
+    await seedRecord("고2 이사벨A 김민수 단어시험 84점 재시험", { students: ["김민수"], recordType: "vocab", assessmentName: "단어시험", score: 84, passed: false, retestRequired: true });
+    await seedRecord("고2 이사벨A 박지훈 과제 미완료", { students: ["박지훈"], recordType: "homework", completed: false });
+    await say("민지에게 시험지 출력 맡겨", { route: "task", taskType: "출력", instruction: "시험지 출력", ownerName: "민지" });
+    await seedRecord("고2 이사벨A 이서연 단어 96점", { students: ["이서연"], recordType: "vocab", score: 96 }, "박민지");
+  }
+
+  it("오늘 내가 입력한 내용: 번호·시각·반/학생·내용·총 건수, 다른 사람 입력 제외, DB 변경·task 생성 없음(GET만)", async () => {
+    await seedDay();
+    const snapshot = JSON.stringify(tables);
+    const calls: string[] = [];
+    const base = globalThis.fetch as any;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: any) => {
+      calls.push((init?.method ?? "GET").toUpperCase());
+      return base(url, init);
+    }));
+    const res = await showHistory();
+    expect(calls.every((m) => m === "GET")).toBe(true);
+    expect(JSON.stringify(tables)).toBe(snapshot);
+    const msg = res.outcomes[0].message;
+    expect(msg.split("\n")[0]).toBe("오늘 입력한 내용 (서도영 입력)");
+    expect(msg).toMatch(/^1\. \d\d:\d\d · 고2 이사벨A 1교시\n   진도: 본문 3과\n   과제: 워크북 22~25쪽$/m);
+    expect(msg).toContain("2. ");
+    expect(msg).toContain("김민수 · 고2 이사벨A\n   단어시험 · 84점 · 미통과 · 재시험 필요");
+    expect(msg).toContain("박지훈 · 고2 이사벨A\n   과제 · 미완료");
+    expect(msg).toContain("업무 · 출력");
+    expect(msg).not.toContain("이서연");
+    expect(msg).toContain("총 4건");
+    expect(res.history).toBeTruthy();
+  });
+
+  it("이미 저장돼 있던 오늘 기록(로그 도입 전 반 진도 포함)과 어제 기록 조회, 학생/반 필터", async () => {
+    const { todayKST } = await import("@/lib/date");
+    const now = new Date().toISOString();
+    const yesterday = new Date(Date.now() - 86400000).toISOString();
+    // 로그 도입 전 EXAM AI 반 진도 행(examAiLog 없음, 학생기록 미생성)
+    tables.class_progress.push({ id: "cp-legacy", branch_id: B, class_id: "cls-2b", class_notion_ids: ["cls-2b"], record_date: todayKST(), period: null,
+      progress_content: "모의고사 29~32번", homework_content: "", student_records_created: false, source_payload: {}, created_at: now, updated_at: now });
+    tables.student_learning_records.push({ id: "old-1", branch_id: B, student_notion_ids: ["stu-jihun"], class_notion_ids: ["cls-isabel-a"], record_type: "memo",
+      note: "지각", entered_by: "서도영", raw_text: "박지훈 지각", created_at: now, record_date: todayKST(), source_payload: {} });
+    tables.student_learning_records.push({ id: "old-y", branch_id: B, student_notion_ids: ["stu-minsu-2b"], class_notion_ids: ["cls-isabel-a"], record_type: "vocab",
+      score: 70, entered_by: "서도영", raw_text: "김민수 70", created_at: yesterday, record_date: todayKST(), source_payload: {} });
+
+    const mine = await showHistory();
+    expect(mine.outcomes[0].message).toContain("박지훈 · 고2 이사벨A\n   메모 · 지각");
+    const all = await showHistory({ onlyMine: false });
+    expect(all.outcomes[0].message).toContain("고2B (작성: 작성자 기록 없음)\n   진도: 모의고사 29~32번");
+    const y = await showHistory({ historyFrom: new Date(Date.now() - 86400000 + 9 * 3600000).toISOString().slice(0, 10) });
+    expect(y.outcomes[0].message).toContain("김민수 · 고2 이사벨A\n   단어시험 · 70점");
+    expect(y.outcomes[0].message).toContain("총 1건");
+
+    await seedRecord("고2 이사벨A 김민수 단어 84점", { students: ["김민수"], recordType: "vocab", score: 84 });
+    const byStudent = await showHistory({ students: ["김민수"] });
+    expect(byStudent.outcomes[0].message).toContain("총 1건");
+    const byClass = await showHistory({ className: "고2B", onlyMine: false });
+    expect(byClass.outcomes[0].message).toContain("총 1건");
+  });
+
+  it("조회 후 '2번 94점으로' → 84→94, '마지막 거 취소' → 취소, 다시 조회하면 반영", async () => {
+    await seedDay();
+    const h = await showHistory();
+    const opts = { historyToken: h.history };
+    const q = await say("2번 94점으로 고쳐", { route: "correction", operation: "modify", itemNumber: 2, newScore: 94, newPassed: true, newRetestRequired: false }, opts);
+    expect(q.outcomes[0].message).toBe("김민수 · 단어시험\n84점 → 94점, 미통과 → 통과, 재시험 필요 → 아님(으)로 수정했습니다.");
+    const lastTask = await say("마지막 거 삭제", { route: "correction", operation: "cancel", itemNumber: -1 }, opts);
+    expect(lastTask.outcomes[0].message).toContain("업무 수정·취소는 '내 업무' 화면에서");
+    await say("3번 취소", { route: "correction", operation: "cancel", itemNumber: 3 }, opts);
+    expect(active().map((r) => r.student_notion_ids[0])).toEqual(["stu-minsu-2b", "stu-seoyeon"]);
+
+    await say("1번 과제 27쪽까지로 바꿔", { route: "correction", correctionTarget: "class_progress", operation: "modify", itemNumber: 1, field: "homework", toText: "27쪽까지" }, opts);
+    expect(tables.class_progress[0].homework_content).toBe("워크북 22~27쪽");
+
+    const again = await showHistory();
+    expect(again.outcomes[0].message).toContain("단어시험 · 94점 · 통과");
+    expect(again.outcomes[0].message).toContain("과제: 워크북 22~27쪽");
+    expect(again.outcomes[0].message).not.toContain("박지훈");
+  });
+
+  it("다른 로그인 사용자의 조회 번호는 쓸 수 없다(위조·교차 사용 방지)", async () => {
+    await seedDay();
+    const minji = await showHistory({}, "박민지", "staff-minji");
+    const res = await say("1번 취소", { route: "correction", operation: "cancel", itemNumber: 1 }, { historyToken: minji.history });
+    expect(res.outcomes[0].message).toContain("먼저 '오늘 입력한 내용 보여줘'로 목록을 불러와 주세요");
+    expect(active()).toHaveLength(3);
+    const forged = (minji.history as string).replace(/\.[^.]+$/, ".AAAA");
+    const res2 = await say("1번 취소", { route: "correction", operation: "cancel", itemNumber: 1 }, { historyToken: forged, staffId: "staff-minji", staffName: "박민지" });
+    expect(res2.outcomes[0].message).toContain("먼저");
   });
 });

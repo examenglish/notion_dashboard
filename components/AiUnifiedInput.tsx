@@ -34,6 +34,8 @@ type AiResponse = {
   warnings?: string[];
   outcomes?: Outcome[];
   context?: ClassContext | null;
+  // 입력 이력 조회 결과의 번호↔기록 서명 토큰(서버 발급, 다음 입력에 그대로 돌려보냄)
+  history?: string | null;
 };
 
 const ROLE_PLACEHOLDER: Record<string, string> = {
@@ -80,6 +82,7 @@ export default function AiUnifiedInput({
   // 정보가 부족해 되물은 요청들(대화형 보완). 맨 앞 것부터 답변을 받는다.
   const [pendingQueue, setPendingQueue] = useState<Pending[]>([]);
   const [classContext, setClassContext] = useState<ClassContext | null>(null);
+  const [historyToken, setHistoryToken] = useState<string | null>(null);
   const currentPending = pendingQueue[0] ?? null;
   const pendingChoices = currentPending?.missing.find((m) => m.candidates && m.candidates.length > 0)?.candidates ?? null;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -102,7 +105,12 @@ export default function AiUnifiedInput({
     const res = await fetch("/api/ai-input", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: currentText, ...opts, context: opts.pending ? undefined : classContext }),
+      body: JSON.stringify({
+        text: currentText,
+        ...opts,
+        context: opts.pending ? undefined : classContext,
+        history: opts.pending ? undefined : historyToken,
+      }),
     });
     return res.json();
   }
@@ -127,6 +135,7 @@ export default function AiUnifiedInput({
       const newPending = (data.outcomes ?? []).flatMap((o) => (o.pending ? [o.pending] : []));
       setPendingQueue((cur) => [...(answeredPending ? cur.slice(1) : []), ...newPending]);
       if (data.context) setClassContext(data.context);
+      if (data.history) setHistoryToken(data.history);
       setOutcomes((data.outcomes ?? []).filter((o) => !o.pending));
       setMessage(null);
       setText("");
