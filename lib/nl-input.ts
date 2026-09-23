@@ -1149,12 +1149,16 @@ async function executeDraft(
 export async function continuePendingInput(
   pending: PendingAction,
   answer: string,
-  opts: { choiceId?: string } = {}
+  opts: { choiceId?: string; staffName?: string } = {}
 ): Promise<{ ok: boolean; outcomes: UnifiedOutcome[]; tasks: SlackTask[]; context?: ClassContext }> {
   const today = todayKST();
   const roster = await getNlRoster();
   const studentNames = new Map(roster.students.map((st) => [st.id, st.name]));
   const draft = pending.draft;
+  // 작성자는 항상 이번 요청의 로그인 세션 기준 — pending은 클라이언트가 들고 있다가
+  // 돌려주는 값이라, 그 안의 작성자 이름을 신뢰하지 않고 덮어쓴다.
+  if (draft.kind === "task") draft.createdBy = opts.staffName;
+  else draft.enteredBy = opts.staffName;
   const missing = await checkDraft(draft, roster);
 
   let applied = 0;

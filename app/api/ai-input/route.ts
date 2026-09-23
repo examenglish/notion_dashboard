@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
     const choiceId = typeof body?.choiceId === "string" ? body.choiceId : undefined;
     if (!text && !choiceId) return NextResponse.json({ ok: false, message: "답변을 입력해 주세요." }, { status: 400 });
     try {
-      const result = await continuePendingInput(pending as PendingAction, text, { choiceId });
+      const result = await continuePendingInput(pending as PendingAction, text, { choiceId, staffName: readStaffName(req) || undefined });
       if (result.tasks.length > 0) notifyTaskAssignments(result.tasks);
       return NextResponse.json({
         ok: result.ok,

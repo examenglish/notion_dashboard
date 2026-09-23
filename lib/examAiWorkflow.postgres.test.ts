@@ -264,7 +264,7 @@ describe("2~5. 업무지시 → 배정/업무풀 → 진행 → 완료 → 원�
     expect(pending.missing[0].candidates).toHaveLength(2);
     expect(tables.tasks).toHaveLength(0);
 
-    const second = await continuePendingInput(JSON.parse(JSON.stringify(pending)), "고2B");
+    const second = await continuePendingInput(JSON.parse(JSON.stringify(pending)), "고2B", { staffName: "원장님" });
     expect(second.ok).toBe(true);
     expect(tables.tasks).toHaveLength(1);
     const row = tables.tasks[0];
@@ -711,5 +711,31 @@ describe("학생별 학습 기록(student_learning_records)", () => {
     expect(res.ok).toBe(false);
     expect(res.outcomes[0]).toMatchObject({ status: "실패" });
     expect(tables.tasks).toHaveLength(0);
+  });
+});
+
+describe("작성자 = 로그인 사용자", () => {
+  it("본문 속 다른 이름은 담당자일 뿐 — 지시자/작성자는 로그인 사용자", async () => {
+    parseUnifiedInput.mockResolvedValue([
+      intent({ route: "task", taskType: "재시험", students: ["이지호"], instruction: "재시험 확인", ownerName: "민지" }),
+      intent({ route: "student_record", className: "고2 이사벨A", students: ["박지훈"], recordType: "homework", completed: false }),
+      intent({ route: "class_progress", className: "고2 이사벨A", progress: "본문 3과", homework: "" }),
+    ]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    await runUnifiedNlInput("민지에게 이지호 재시험 확인 맡겨, 박지훈 과제 미완료, 고2 이사벨A 본문 3과", { staffName: "서도영" });
+    expect(tables.tasks[0].staff_notion_ids).toEqual(["staff-minji"]);
+    expect(tables.tasks[0].source_payload.workflow.createdBy).toBe("서도영");
+    expect(tables.student_learning_records[0].entered_by).toBe("서도영");
+    expect(tables.class_progress[0].source_payload.examAiLog[0].by).toBe("서도영");
+  });
+
+  it("되묻기 답변 시 클라이언트가 돌려준 pending의 작성자 값은 무시하고 현재 로그인 사용자로 기록한다", async () => {
+    parseUnifiedInput.mockResolvedValue([intent({ route: "student_record", students: ["김민수"], recordType: "vocab", score: 84 })]);
+    const { runUnifiedNlInput, continuePendingInput } = await import("@/lib/nl-input");
+    const first = await runUnifiedNlInput("김민수 단어 84점", { staffName: "서도영" });
+    const tampered = JSON.parse(JSON.stringify(first.outcomes[0].pending));
+    tampered.draft.enteredBy = "가짜작성자";
+    await continuePendingInput(tampered, "", { choiceId: "stu-minsu-1a", staffName: "박민지" });
+    expect(tables.student_learning_records[0].entered_by).toBe("박민지");
   });
 });
