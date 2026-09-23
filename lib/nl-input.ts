@@ -45,7 +45,8 @@ import {
   listMyTasks,
 } from "@/lib/notion";
 import { createHash, createHmac, timingSafeEqual } from "crypto";
-import { searchFileArchives, type FileHit } from "@/lib/fileArchive";
+import { fileBranchFromText, fileDateRange, searchFileArchives, type FileHit } from "@/lib/fileArchive";
+import { branchCode } from "@/lib/supabaseRepo";
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
 import {
@@ -1233,13 +1234,19 @@ function toCorrection(i: UnifiedIntent, text: string): UnifiedIntent {
 }
 
 // 파일 검색 신호 → 읽기 전용 file_search(AI가 업무/기록으로 잘못 분류해도 write 0건).
-const FILE_QUERY_STOPWORDS = /^(파일|자료|문서|첨부|찾아줘|찾아|찾기|검색|보여줘|보여|열어줘|올린|올라온|올린거|거|좀|slack|슬랙|에|의|오늘|어제|지난주|이번주|작년|최근|pdf|hwp)$/i;
+const FILE_QUERY_STOPWORDS =
+  /^(파일|자료|문서|첨부|찾아줘|찾아|찾기|검색|보여줘|보여|열어줘|올린|올라온|올린거|거|좀|slack|슬랙|drive|드라이브|구글|원본|관련|목록|에|의|오늘|어제|그저께|그제|지난주|이번주|저번주|지난달|이번달|저번달|지난번|저번|이번|지난|작년|최근|pdf|hwp|사직|금정)$/i;
+const cleanFileKeyword = (w: string) => w.trim().replace(/(에서|에게|에|의|을|를|이|가|은|는|쌤이|쌤|님이|님|꺼|거)$/, "");
+const isFileKeyword = (w: string) => w.length >= 2 && !FILE_QUERY_STOPWORDS.test(w) && !SIG_FIND.test(w);
 export function fileKeywordsFromText(text: string): string[] {
-  return text
-    .split(/[\s,.!?]+/)
-    .map((w) => w.replace(/(에서|에게|에|의|을|를|이|가|은|는|쌤이|쌤|님이|님)$/, ""))
-    .filter((w) => w.length >= 2 && !FILE_QUERY_STOPWORDS.test(w) && !SIG_FIND.test(w));
+  return text.split(/[\s,.!?]+/).map(cleanFileKeyword).filter(isFileKeyword);
 }
+/** AI 검색어도 같은 기준으로 정리(기간·지점·'파일' 같은 말이 검색어로 들어가 결과를 좁히지 않게). */
+export function cleanFileKeywords(words: string[]): string[] {
+  return Array.from(new Set(words.flatMap((w) => w.split(/\s+/)).map(cleanFileKeyword).filter(isFileKeyword)));
+}
+// 원문에 기간 표현이 있는지(상대 표현은 fileDateRange가 계산, 그 밖의 날짜 표현만 AI 값을 쓴다)
+const FILE_DATE_HINT = /(\d{1,2}\s*월|\d{1,2}\s*일|\d{4}-\d{2}|작년|올해|며칠|주\s*전|달\s*전|개월)/;
 function toFileSearch(i: UnifiedIntent, text: string): UnifiedIntent {
   return {
     ...i,
@@ -2763,14 +2770,22 @@ async function processIntents(
         }
         case "file_search": {
           // 읽기 전용 — 현재 지점 + 공용 자료만 검색, 어떤 저장 함수도 부르지 않는다.
-          const keywords = (intent.fileKeywords ?? []).filter(Boolean);
+          // 검색어: AI 추출값(+학생 이름) → 없으면 원문에서. 기간·지점은 원문 표현으로만 건다
+          // (AI가 기간을 추측해 '오늘'로 채워도 문장에 기간이 없으면 전체 기간을 검색).
+          const aiKeywords = cleanFileKeywords([...(intent.fileKeywords ?? []), ...(intent.students ?? [])]);
+          const keywords = aiKeywords.length ? aiKeywords : fileKeywordsFromText(text);
+          const uploaderWord = intent.fileUploader?.trim() || "";
+          const range = fileDateRange(text, today) ?? (FILE_DATE_HINT.test(text) && intent.historyFrom ? { from: intent.historyFrom, to: intent.historyTo || intent.historyFrom } : null);
+          const pdfLike = /pdf/i.test(text) ? "pdf" : "";
           const filter = {
-            keywords: keywords.length ? keywords : fileKeywordsFromText(text),
-            uploader: intent.fileUploader?.trim() || "",
-            from: intent.historyFrom || undefined,
-            to: intent.historyTo || intent.historyFrom || undefined,
-            kind: intent.fileKind || "",
+            keywords: keywords.filter((k) => !uploaderWord || !uploaderWord.includes(k.replace(/(쌤|선생님|조교님|조교|님)$/, ""))),
+            uploader: uploaderWord,
+            from: range?.from,
+            to: range?.to,
+            kind: intent.fileKind || pdfLike,
+            branch: fileBranchFromText(text),
           };
+          const myBranchCode = branchCode() ?? "";
           try {
             const hits = await searchFileArchives(filter);
             const conds = [
@@ -2778,14 +2793,16 @@ async function processIntents(
               filter.uploader ? `올린 사람 ${filter.uploader}` : "",
               filter.from ? `${filter.from}${filter.to && filter.to !== filter.from ? `~${filter.to}` : ""}` : "",
               filter.kind ? filter.kind.toUpperCase() : "",
+              filter.branch ? (filter.branch === "sajik" ? "사직" : "금정") : "",
             ].filter(Boolean);
+            const otherBranchNote = filter.branch && filter.branch !== myBranchCode ? " 다른 지점 자료는 공용으로 공유된 것만 보입니다." : "";
             outcomes.push({
               route: "file_search",
               label: "파일 검색",
               status: "완료",
               message: hits.length
-                ? `파일 ${hits.length}건을 찾았습니다${conds.length ? ` (${conds.join(", ")})` : ""}.`
-                : `조건에 맞는 파일을 찾지 못했습니다${conds.length ? ` (${conds.join(", ")})` : ""}. 검색어를 줄이거나 기간을 바꿔 보세요.`,
+                ? `파일 ${hits.length}건을 찾았습니다${conds.length ? ` (${conds.join(", ")})` : ""}.${otherBranchNote}`
+                : `조건에 맞는 파일을 찾지 못했습니다${conds.length ? ` (${conds.join(", ")})` : ""}. 검색어를 줄이거나 기간을 바꿔 보세요.${otherBranchNote}`,
               files: hits,
             });
           } catch (err) {

@@ -354,12 +354,14 @@ describe("자연어 파일 검색(읽기 전용, 현재 지점 + 공용)", () =>
   });
 
   it("7. '지난주 민지쌤이 올린 PDF 찾아줘' → 기간·업로더·형식 필터", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-09-24T03:00:00Z") });
     seedFiles();
     const day = (n: number) => new Date(Date.now() + 9 * 3600000 - n * 86400000).toISOString().slice(0, 10);
     const res = await ask("지난주 민지쌤이 올린 PDF 찾아줘", [
       { intentClass: "query", route: "file_search", fileKeywords: [], fileUploader: "민지쌤", fileKind: "pdf", historyFrom: day(10), historyTo: day(5) },
     ]);
     expect(res.outcomes[0].files!.map((f) => f.id)).toEqual(["fa-1"]);
+    vi.useRealTimers();
   });
 
   it("8/9. 사직 사용자: 사직 + 공용만, 금정 private 불가", async () => {
@@ -398,6 +400,68 @@ describe("자연어 파일 검색(읽기 전용, 현재 지점 + 공용)", () =>
     vi.stubGlobal("fetch", vi.fn(async (u: string, init?: any) => (methods.push((init?.method ?? "GET").toUpperCase()), base(u, init))));
     await ask("거성중2 파일 찾아줘", [{ intentClass: "query", route: "file_search", fileKeywords: ["거성중2"] }]);
     expect(methods.every((m) => m === "GET")).toBe(true);
+  });
+
+  describe("기간·관련성·지점 표현(2026-09-24 목 12:00 KST 기준)", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-09-24T03:00:00Z") });
+      seedFiles();
+      tables.file_archives.push(
+        { id: "fa-old-pdf", branch_id: "b-sajik", visibility: "branch", source: "slack", original_filename: "작년_모의고사.pdf", mime_type: "application/pdf", uploader_name: "서도영", message_text: "", drive_url: "https://drive.google.com/file/d/EEE/view", drive_file_id: "EEE", uploaded_at: new Date(Date.now() - 40 * 86400000).toISOString(), classification: {} },
+        { id: "fa-student", branch_id: "b-sajik", visibility: "branch", source: "slack", original_filename: "scan_0924.jpg", mime_type: "image/jpeg", uploader_name: "박민지", message_text: "박재하 오답노트 스캔", drive_url: "https://drive.google.com/file/d/FFF/view", drive_file_id: "FFF", uploaded_at: new Date(Date.now() - 3600000).toISOString(), classification: {} },
+      );
+    });
+    afterEach(() => vi.useRealTimers());
+    const ids = (r: Awaited<ReturnType<typeof ask>>) => r.outcomes[0].files!.map((f) => f.id);
+
+    it("상대 날짜: 오늘/어제/이번 주/지난주/이번 달/지난달(주는 월요일 시작), 표현 없으면 null", async () => {
+      const { fileDateRange } = await import("@/lib/fileArchive");
+      const t = "2026-09-24";
+      expect(fileDateRange("오늘 올린 파일", t)).toEqual({ from: t, to: t });
+      expect(fileDateRange("어제 파일", t)).toEqual({ from: "2026-09-23", to: "2026-09-23" });
+      expect(fileDateRange("이번 주 자료", t)).toEqual({ from: "2026-09-21", to: t });
+      expect(fileDateRange("지난주 파일", t)).toEqual({ from: "2026-09-14", to: "2026-09-20" });
+      expect(fileDateRange("이번 달 PDF", t)).toEqual({ from: "2026-09-01", to: t });
+      expect(fileDateRange("지난달 자료", t)).toEqual({ from: "2026-08-01", to: "2026-08-31" });
+      expect(fileDateRange("거성중2 파일", t)).toBeNull();
+    });
+
+    it("파일명 + message_text 관련성 순(모두 맞는 파일 먼저), AI가 기간을 추측해도 문장에 기간이 없으면 전체 기간, drive_url·지점 반환", async () => {
+      const r = await ask("거성중2 중간고사 파일 찾아줘", [
+        { intentClass: "query", route: "file_search", fileKeywords: ["거성중2", "중간고사", "파일"], historyFrom: "2026-09-24" },
+      ]);
+      expect(ids(r)).toEqual(["fa-1", "fa-gj-shared"]); // fa-1: 파일명 거성중2 + 메시지 중간고사
+      expect(r.outcomes[0].files![0]).toMatchObject({ driveUrl: "https://drive.google.com/file/d/AAA/view", branchLabel: "사직" });
+      expect(r.outcomes[0].files![1]).toMatchObject({ scope: "공용", branchLabel: "금정" });
+      expect(ids(r)).not.toContain("fa-gj-private");
+    });
+
+    it("'이번 달 올린 PDF 찾아줘' → 이번 달 + PDF만, 최신순", async () => {
+      const r = await ask("이번 달 올린 PDF 찾아줘", [{ intentClass: "query", route: "file_search", fileKeywords: ["이번 달", "PDF"] }]);
+      expect(ids(r)).toEqual(["fa-gj-shared", "fa-1"]);
+    });
+
+    it("'지난번 여명중2 시험대비 자료 보여줘' → message_text로 찾음(기간 필터 없음)", async () => {
+      const r = await ask("지난번 여명중2 시험대비 자료 보여줘", [{ intentClass: "query", route: "history_query" }]);
+      expect(r.outcomes[0].route).toBe("file_search");
+      expect(ids(r)).toEqual(["fa-2"]);
+    });
+
+    it("'박재하 관련 파일 찾아줘' → 학생 이름을 메시지에서 찾음", async () => {
+      const r = await ask("박재하 관련 파일 찾아줘", [{ intentClass: "query", route: "file_search", students: ["박재하"], fileKeywords: [] }]);
+      expect(ids(r)).toEqual(["fa-student"]);
+    });
+
+    it("'사직에서 올린 어순배열 파일' → 사직만, '금정에서 올린 파일'(사직 배포) → 금정 공용만 + 안내, 금정 배포에선 금정 전체", async () => {
+      const r1 = await ask("사직에서 올린 어순배열 파일 찾아줘", [{ intentClass: "query", route: "file_search", fileKeywords: ["사직", "어순배열"] }]);
+      expect(ids(r1)).toEqual(["fa-1"]);
+      const r2 = await ask("금정에서 올린 파일 보여줘", [{ intentClass: "query", route: "file_search", fileKeywords: [] }]);
+      expect(ids(r2)).toEqual(["fa-gj-shared"]);
+      expect(r2.outcomes[0].message).toContain("공용으로 공유된 것만");
+      useBranch("geumjeong");
+      const r3 = await ask("금정에서 올린 파일 보여줘", [{ intentClass: "query", route: "file_search", fileKeywords: [] }]);
+      expect(ids(r3).sort()).toEqual(["fa-gj-private", "fa-gj-shared"]);
+    });
   });
 });
 

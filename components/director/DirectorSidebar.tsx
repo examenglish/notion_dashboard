@@ -14,6 +14,7 @@ import {
   ChevronRight,
   ListChecks,
   BookOpen,
+  FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -49,6 +50,7 @@ const NAV_ITEMS: NavItem[] = [
   },
   { href: "/director/student-levels", label: "학생 레벨", icon: BarChart3, exact: false },
   { href: "/director/reports", label: "학생 리포트", icon: FileText, exact: false },
+  { href: "/director/files", label: "파일", icon: FolderOpen, exact: false },
   { href: "/director/manuals", label: "매뉴얼", icon: BookOpen, exact: false },
 ];
 

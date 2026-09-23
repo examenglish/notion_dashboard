@@ -330,6 +330,7 @@ export type FileSearchFilter = {
   from?: string; // YYYY-MM-DD (KST, 포함)
   to?: string; // YYYY-MM-DD (KST, 포함)
   kind?: string; // pdf | hwp | doc | sheet | ppt | image
+  branch?: string; // sajik | geumjeong — 이 배포 지점이 아니면 그 지점의 공용(shared) 자료만 남는다
 };
 
 export type FileHit = {
@@ -339,6 +340,7 @@ export type FileHit = {
   uploader: string;
   scope: "이 지점" | "공용";
   fromOtherBranch: boolean;
+  branchLabel: string;
   messageSnippet: string;
   mimeType: string;
   driveUrl: string;
@@ -365,8 +367,38 @@ const kstStart = (d: string) => new Date(`${d}T00:00:00+09:00`).toISOString();
 const norm = (v: string) => v.replace(/\s+/g, "").toLowerCase();
 // 검색어에서 의미 없는 말("파일", "자료", 조사 등)은 빼고 비교한다.
 const STOPWORDS = new Set(["파일", "자료", "문서", "첨부", "찾아줘", "찾아", "보여줘", "검색", "올린", "올라온", "최종본"]);
+const BRANCH_LABEL: Record<string, string> = { sajik: "사직", geumjeong: "금정" };
 
-export async function searchFileArchives(filter: FileSearchFilter, limit = 20): Promise<FileHit[]> {
+/** 자연어 속 지점 언급("사직에서", "금정 자료") → 지점 코드. 없으면 undefined. */
+export function fileBranchFromText(text: string): string | undefined {
+  if (/사직/.test(text) && !/금정/.test(text)) return "sajik";
+  if (/금정/.test(text) && !/사직/.test(text)) return "geumjeong";
+  return undefined;
+}
+
+/**
+ * 상대 날짜 표현 → KST 기간(YYYY-MM-DD, 양끝 포함). 주는 월요일 시작. 표현이 없으면 null.
+ * AI가 날짜를 추측해 넣어도 문장에 기간이 없으면 기간 필터를 걸지 않기 위해 원문에서 직접 계산한다.
+ */
+export function fileDateRange(text: string, today: string): { from: string; to: string } | null {
+  const t = text.replace(/\s+/g, "");
+  const d = new Date(`${today}T00:00:00Z`);
+  const fmt = (x: Date) => x.toISOString().slice(0, 10);
+  const add = (n: number) => fmt(new Date(d.getTime() + n * 86400000));
+  const dow = (d.getUTCDay() + 6) % 7; // 월=0
+  const monthStart = (offset: number) => fmt(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + offset, 1)));
+  const monthEnd = (offset: number) => fmt(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + offset + 1, 0)));
+  if (/(그저께|그제)/.test(t)) return { from: add(-2), to: add(-2) };
+  if (/어제/.test(t)) return { from: add(-1), to: add(-1) };
+  if (/오늘/.test(t)) return { from: today, to: today };
+  if (/(지난주|저번주)/.test(t)) return { from: add(-dow - 7), to: add(-dow - 1) };
+  if (/이번주/.test(t)) return { from: add(-dow), to: today };
+  if (/(지난달|저번달)/.test(t)) return { from: monthStart(-1), to: monthEnd(-1) };
+  if (/이번달/.test(t)) return { from: monthStart(0), to: today };
+  return null;
+}
+
+export async function searchFileArchives(filter: FileSearchFilter, limit = 50): Promise<FileHit[]> {
   const myBranch = await currentBranchId();
   const parts: string[] = [];
   if (filter.from) parts.push(`uploaded_at=gte.${encodeURIComponent(kstStart(filter.from))}`);
@@ -377,17 +409,28 @@ export async function searchFileArchives(filter: FileSearchFilter, limit = 20): 
   const keywords = (filter.keywords ?? []).map((k) => k.trim()).filter((k) => k && !STOPWORDS.has(k));
   const uploader = (filter.uploader ?? "").trim().replace(/(쌤|선생님|조교님|조교|님)$/, "");
   const kind = filter.kind && KIND_PATTERNS[filter.kind] ? filter.kind : "";
-  const matched = rows.filter((r) => {
-    const hay = norm(
-      [r.original_filename, r.message_text, r.uploader_name, JSON.stringify(r.classification ?? {})].map((v) => String(v ?? "")).join(" ")
+  const myCode = branchCode() ?? "";
+  const otherCode = Object.keys(BRANCH_LABEL).find((c) => c !== myCode) ?? "";
+  const branchOf = (r: Record<string, unknown>) => (r.branch_id === myBranch ? myCode : otherCode);
+  // 관련성: 파일명에 맞으면 2점, 메시지/업로더/분류/형식/채널에 맞으면 1점. 검색어가 여러 개면 하나라도
+  // 맞는 파일을 모두 보여주고(애매하면 여러 개), 더 많이 맞는 파일 → 최신 순으로 정렬한다.
+  const scored: { r: Record<string, unknown>; score: number }[] = [];
+  for (const r of rows) {
+    if (filter.branch && branchOf(r) !== filter.branch) continue;
+    if (uploader && !norm(String(r.uploader_name ?? "")).includes(norm(uploader))) continue;
+    if (kind && !(KIND_PATTERNS[kind].test(String(r.mime_type ?? "")) || EXT_PATTERNS[kind].test(String(r.original_filename ?? "")))) continue;
+    const name = norm(String(r.original_filename ?? ""));
+    const rest = norm(
+      [r.message_text, r.uploader_name, r.mime_type, r.slack_channel_id, JSON.stringify(r.classification ?? {})].map((v) => String(v ?? "")).join(" ")
     );
-    if (!keywords.every((k) => hay.includes(norm(k)))) return false;
-    if (uploader && !norm(String(r.uploader_name ?? "")).includes(norm(uploader))) return false;
-    if (kind && !(KIND_PATTERNS[kind].test(String(r.mime_type ?? "")) || EXT_PATTERNS[kind].test(String(r.original_filename ?? "")))) return false;
-    return true;
-  });
-  matched.sort((a, b) => String(b.uploaded_at ?? b.created_at ?? "").localeCompare(String(a.uploaded_at ?? a.created_at ?? "")));
-  const top = matched.slice(0, limit);
+    let score = 0;
+    for (const k of keywords.map(norm)) score += name.includes(k) ? 2 : rest.includes(k) ? 1 : 0;
+    if (keywords.length && score === 0) continue;
+    scored.push({ r, score });
+  }
+  const at = (r: Record<string, unknown>) => String(r.uploaded_at ?? r.created_at ?? "");
+  scored.sort((a, b) => b.score - a.score || at(b.r).localeCompare(at(a.r)));
+  const top = scored.slice(0, limit).map((x) => x.r);
 
   const taskIds = Array.from(new Set(top.map((r) => r.related_task_id).filter(Boolean) as string[]));
   const tasks = taskIds.length ? await pgQueryRaw("TODO", `id=in.(${taskIds.map(encodeURIComponent).join(",")})`).catch(() => []) : [];
@@ -400,6 +443,7 @@ export async function searchFileArchives(filter: FileSearchFilter, limit = 20): 
     uploader: String(r.uploader_name ?? "알 수 없음"),
     scope: r.visibility === "shared" ? "공용" : "이 지점",
     fromOtherBranch: r.branch_id !== myBranch,
+    branchLabel: BRANCH_LABEL[branchOf(r)] ?? "",
     messageSnippet: String(r.message_text ?? "").replace(/\s+/g, " ").slice(0, 80),
     mimeType: String(r.mime_type ?? ""),
     // 저장 시 검증한 Drive URL만(자격증명 없는 공유 링크) — 서버 프록시 없음
