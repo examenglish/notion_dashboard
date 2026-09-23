@@ -372,6 +372,7 @@ export type UnifiedIntentRoute =
   | "counseling"
   | "student_action"
   | "attendance_check"
+  | "class_progress"
   | "clarify";
 
 export type UnifiedIntent = {
@@ -392,6 +393,8 @@ export type UnifiedIntent = {
   counselor?: string;
   priority?: "긴급" | "보통";
   message?: string;
+  progress?: string;
+  homework?: string;
 };
 
 const UNIFIED_INTENTS_TOOL = (taskTypeLabels: string[]): Anthropic.Tool => ({
@@ -409,9 +412,9 @@ const UNIFIED_INTENTS_TOOL = (taskTypeLabels: string[]): Anthropic.Tool => ({
           properties: {
             route: {
               type: "string",
-              enum: ["task", "admin_inbox", "schedule", "counseling", "student_action", "attendance_check", "clarify"],
+              enum: ["task", "admin_inbox", "schedule", "counseling", "student_action", "attendance_check", "class_progress", "clarify"],
               description:
-                "task=업무 생성(아래 taskType 13종 중 하나), admin_inbox=행정실 기록(결석예정/긴급상담요청/신규생문의/기타), schedule=예정된 일정(보강/재시/신입생상담/레벨체크), counseling=이미 진행한 상담 기록, student_action=학생 조치사항 메모, attendance_check=이미 입력된 출결/결석 여부를 조회만 하는 확인 요청(새로 기록하지 않음), clarify=위 어디에도 명확히 해당하지 않을 때.",
+                "task=업무 생성(아래 taskType 13종 중 하나), admin_inbox=행정실 기록(결석예정/긴급상담요청/신규생문의/기타), schedule=예정된 일정(보강/재시/신입생상담/레벨체크), counseling=이미 진행한 상담 기록, student_action=학생 조치사항 메모, attendance_check=이미 입력된 출결/결석 여부를 조회만 하는 확인 요청(새로 기록하지 않음), class_progress=반 전체의 오늘 수업 진도/과제(숙제) 기록, clarify=위 어디에도 명확히 해당하지 않을 때.",
             },
             taskType: { type: "string", enum: taskTypeLabels, description: "route가 task일 때만. 업무 유형 한글 라벨." },
             inboxType: { type: "string", enum: ["결석예정", "긴급상담요청", "신규생문의", "기타"], description: "route가 admin_inbox일 때만." },
@@ -429,10 +432,15 @@ const UNIFIED_INTENTS_TOOL = (taskTypeLabels: string[]): Anthropic.Tool => ({
             date: { type: "string", description: "YYYY-MM-DD. 언급 없으면 오늘." },
             endDate: { type: "string", description: "YYYY-MM-DD. 기간이 있는 admin_inbox(결석예정)에만, 없으면 빈 문자열." },
             time: { type: "string", description: "예: 16:00. 없으면 빈 문자열." },
-            ownerName: { type: "string", description: "담당 직원 이름(schedule). 없으면 빈 문자열." },
+            ownerName: {
+              type: "string",
+              description: "담당 직원 이름. schedule의 담당자, 또는 task에서 '민지에게 맡겨/OO쌤이 해줘'처럼 지시자가 담당자를 직접 지정한 경우 그 직원 이름(직원 명단 기준). 지정이 없으면 빈 문자열.",
+            },
             counselor: { type: "string", description: "상담자 이름(counseling). 없으면 빈 문자열." },
             priority: { type: "string", enum: ["긴급", "보통"], description: "급한 표현이 있으면 긴급, 아니면 보통." },
             message: { type: "string", description: "route가 clarify일 때만, 무엇이 불명확한지 한국어 설명." },
+            progress: { type: "string", description: "route가 class_progress일 때만. 오늘 수업한 진도 내용(예: '3과 본문 1~4번'). 없으면 빈 문자열." },
+            homework: { type: "string", description: "route가 class_progress일 때만. 내준 과제/숙제 내용(예: '워크북 22~25쪽'). 없으면 빈 문자열." },
           },
           required: ["route", "students", "instruction"],
         },
@@ -465,6 +473,8 @@ intent 분리 예시:
 - route:"attendance_check"는 "확인해줘/입력됐는지 봐줘"처럼 이미 있어야 할 기록을 조회만 하는 요청 — 새로 기록을 만들라는 뜻이 아니다. 절대 task나 admin_inbox로 분류하지 않는다.
 - 학생 이름은 재원생 명단과 최대한 정확히 일치시킨다. 명단에 없어도 clarify를 쓰지 말고 문장 그대로 students에 넣는다(신입생일 수 있음 — 이후 처리는 시스템이 담당).
 - 문장 전체가 어디에도 해당하지 않을 때만 그 부분을 route:"clarify"로 남긴다(문장 전체를 통째로 포기하지 말고, 해석 가능한 다른 부분은 정상 분류한다).
+- route:"class_progress"는 반 이름 + 그 반의 오늘 수업 진도/과제(숙제)를 기록하는 문장일 때(학생 개인이 아니라 반 전체 기록). className은 반 목록에서 가장 가까운 이름을 그대로 쓰고(학년 표기 '고2/중2' 등은 반 이름에 있을 때만 포함), progress에 진도, homework에 과제를 나눠 넣는다. students는 빈 배열. 예: "고2 이사벨A 오늘 3과 본문 1~4번 했고 숙제는 워크북 22~25쪽" → route:"class_progress", className:"이사벨A"(반 목록의 실제 이름), progress:"3과 본문 1~4번", homework:"워크북 22~25쪽". 이것을 task로 분류하지 않는다.
+- route:"task"에서 "OO에게 맡겨/OO가 해줘"처럼 담당 직원이 명시되면 ownerName에 그 직원 이름을 넣는다. 명시가 없으면 ownerName은 빈 문자열(시스템이 조교 업무풀/자동배정으로 처리). "8시까지"처럼 마감 시각이 있으면 time에 넣는다.
 - intents 배열은 최소 1개 이상이어야 한다.
 
 재원생 명단 (이름(학교)):
@@ -493,4 +503,34 @@ export async function parseUnifiedInput(text: string, ref: NlReference, taskType
   const toolUse = res.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
   const input = (toolUse?.input as { intents?: UnifiedIntent[] }) ?? {};
   return input.intents ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// EXAM AI 대화형 보완(pending) — 앞 입력에서 이미 구조화한 draft는 그대로 두고,
+// 사용자의 후속 답변에서 "부족했던 항목"만 뽑는다(전체 명령을 다시 해석하지
+// 않는다). 부족 항목이 1개면 lib/nl-input.ts가 LLM 없이 답변 전체를 그 값으로
+// 쓰고, 2개 이상일 때만 이 함수를 부른다.
+// ---------------------------------------------------------------------------
+export async function parsePendingAnswer(answer: string, questions: { key: string; question: string }[]): Promise<Record<string, string>> {
+  const properties = Object.fromEntries(
+    questions.map((q) => [q.key, { type: "string", description: `질문: "${q.question}"에 대한 답. 답변에 없으면 빈 문자열.` }])
+  );
+  const res = await anthropic.messages.create({
+    model: NL_MODEL,
+    max_tokens: 512,
+    system:
+      "너는 학원 관리 시스템의 후속 답변 해석기다. 직원이 앞서 받은 질문들에 한 번에 답한 문장에서 각 질문에 해당하는 값만 원문 표현 그대로 뽑아 submit_answers를 호출한다. 추측하지 말고, 답하지 않은 항목은 빈 문자열로 둔다.",
+    tools: [
+      {
+        name: "submit_answers",
+        description: "질문별 답변 값",
+        input_schema: { type: "object", properties, required: questions.map((q) => q.key) } as Anthropic.Tool.InputSchema,
+      },
+    ],
+    tool_choice: { type: "tool", name: "submit_answers" },
+    messages: [{ role: "user", content: `질문:\n${questions.map((q, i) => `${i + 1}. ${q.question}`).join("\n")}\n\n답변: ${answer}` }],
+  });
+  const toolUse = res.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+  const out = (toolUse?.input as Record<string, unknown>) ?? {};
+  return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, typeof v === "string" ? v.trim() : ""]));
 }

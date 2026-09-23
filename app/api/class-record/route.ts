@@ -3,6 +3,7 @@ import {
   createClassProgress,
   getClassProgressForEdit,
   getPlannedAbsentStudentIds,
+  classProgressHasStudentRecords,
   resolveOrCreateClass,
   updateClassProgress,
 } from "@/lib/notion";
@@ -32,10 +33,15 @@ function canEditExisting(role: string): boolean {
 }
 
 export async function PATCH(req: NextRequest) {
-  if (!canEditExisting(readStaffRole(req))) {
-    return NextResponse.json({ error: "이미 저장된 수업 기록의 수정은 원장/행정만 가능합니다." }, { status: 403 });
-  }
   const body = await req.json().catch(() => null);
+  // 예외: EXAM AI로 반 진도/과제만 먼저 넣어둔 행(학생별 기록 0건)은 덮어쓸
+  // 확정 출결이 없으므로 강사/조교도 이어서 완성할 수 있다.
+  if (!canEditExisting(readStaffRole(req))) {
+    const progressId = typeof body?.progressId === "string" ? body.progressId : "";
+    if (!progressId || (await classProgressHasStudentRecords(progressId))) {
+      return NextResponse.json({ error: "이미 저장된 수업 기록의 수정은 원장/행정만 가능합니다." }, { status: 403 });
+    }
+  }
   const {
     progressId,
     classId,

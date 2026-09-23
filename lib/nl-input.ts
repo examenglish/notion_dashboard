@@ -1,4 +1,4 @@
-import { parseNaturalLanguageInput, parseCreateTasksInput, parseUnifiedInput, resolveRelativeDate, type UnifiedIntent } from "@/lib/anthropic";
+import { parseNaturalLanguageInput, parseCreateTasksInput, parseUnifiedInput, parsePendingAnswer, resolveRelativeDate, type UnifiedIntent } from "@/lib/anthropic";
 import {
   createAdminInboxEntry,
   createScheduleEntry,
@@ -8,6 +8,7 @@ import {
   createTasks,
   getNlRoster,
   getAttendanceOnDate,
+  saveClassProgressFromText,
 } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
 import { stripClassSuffix } from "@/lib/format";
@@ -490,26 +491,421 @@ export type UnifiedOutcome = {
   label: string;
   status: "완료" | "확인필요" | "실패";
   message: string;
+  // 실행에 꼭 필요한 정보가 부족할 때 — 화면이 이 값을 보관했다가 다음 답변과
+  // 함께 /api/ai-input { pending }으로 돌려보낸다(continuePendingInput).
+  pending?: PendingAction;
 };
+
+// ---------------------------------------------------------------------------
+// 대화형 보완(pending action). 무거운 대화 세션 없이, 이미 구조화한 draft와
+// "실행에 꼭 필요한데 비어있는 항목(missing)"만 클라이언트가 들고 있다가
+// 다음 답변과 함께 돌려준다. 원칙:
+//  - 필수(missing)만 묻는다: 반/학생 특정 불가, 업무 종류 불명, 지정 담당자
+//    불명, 진도·과제 둘 다 없음. 담당자 미지정(→업무풀), 마감시간 없음,
+//    과제 없음(진도만 있는 수업) 같은 선택(optional) 항목은 묻지 않는다.
+//  - 여러 개가 부족하면 한 번에 묻고, 일부만 답하면 받은 건 유지하고 남은 것만 다시 묻는다.
+//  - 답변은 전체 명령으로 재해석하지 않는다(부족 항목 1개면 LLM 없이 그대로 사용).
+// ---------------------------------------------------------------------------
+export type PendingField = "class" | "student" | "owner" | "taskType" | "content";
+export type MissingInfo = { key: string; field: PendingField; question: string; candidates?: { id: string; label: string }[]; ref?: string };
+type Choice = { id: string; label: string };
+
+export type ClassProgressDraft = {
+  kind: "class_progress";
+  className: string;
+  classId: string | null;
+  date: string;
+  progress: string;
+  homework: string;
+};
+export type TaskDraft = {
+  kind: "task";
+  taskType: string;
+  instruction: string;
+  material: string;
+  quantity: number | null;
+  date: string;
+  time: string;
+  priority?: "긴급" | "보통";
+  classIds: string[];
+  students: { id: string; name: string }[];
+  unresolved: string[];
+  ambiguous: { name: string; candidates: Choice[] }[];
+  ownerName: string;
+  ownerId: string | null;
+  ownerToPool?: boolean;
+  createdBy?: string;
+};
+export type PendingAction = { draft: ClassProgressDraft | TaskDraft; missing: MissingInfo[]; question: string; attempts: number };
+
+type Roster = Awaited<ReturnType<typeof getNlRoster>>;
+const POOL_ANSWER = /업무풀|풀로|아무나|미지정|없음/;
+const norm = (v: string) => v.replace(/\s+/g, "").toLowerCase();
+
+// draft를 보고 비어있는 필수 항목을 채울 수 있으면 채우고(결정론적 매칭),
+// 그래도 비어있는 것만 missing으로 돌려준다.
+function checkDraft(draft: ClassProgressDraft | TaskDraft, roster: Roster): MissingInfo[] {
+  const missing: MissingInfo[] = [];
+  if (draft.kind === "class_progress") {
+    if (!draft.classId) {
+      const found = resolveClassCandidates(draft.className, roster.classes);
+      if (found.length === 1) {
+        draft.classId = found[0].id;
+        draft.className = found[0].name;
+      } else if (found.length > 1) {
+        missing.push({
+          key: "class",
+          field: "class",
+          question: `"${draft.className}"에 해당하는 반이 여러 개입니다(${found.map((c) => c.name).join(", ")}). 어느 반인가요?`,
+          candidates: found.map((c) => ({ id: c.id, label: c.name })),
+        });
+      } else {
+        missing.push({
+          key: "class",
+          field: "class",
+          question: draft.className ? `"${draft.className}" 반을 찾지 못했습니다. 어느 반인가요?` : "어느 반의 수업인가요?",
+        });
+      }
+    }
+    if (!draft.progress && !draft.homework) {
+      missing.push({ key: "content", field: "content", question: "오늘 수업 진도(또는 과제)는 무엇인가요?" });
+    }
+    return missing;
+  }
+
+  if (!taskTypeFromLabel(draft.taskType)) {
+    missing.push({ key: "taskType", field: "taskType", question: `어떤 작업인가요? (예: ${TASK_TYPE_LABEL_LIST.slice(0, 6).join(", ")} …)` });
+  }
+  draft.ambiguous.forEach((a, i) => {
+    missing.push({
+      key: `student${i}`,
+      field: "student",
+      ref: a.name,
+      question: `${a.name} 학생이 여러 명입니다(${a.candidates.map((c) => c.label).join(" / ")}). 어느 학생인가요?`,
+      candidates: a.candidates,
+    });
+  });
+  if (draft.ownerName && !draft.ownerId && !draft.ownerToPool) {
+    const owner = resolveStaffByName(draft.ownerName, roster.staff);
+    if (owner && owner !== "ambiguous") {
+      draft.ownerId = owner.id;
+      draft.ownerName = owner.name;
+    } else {
+      const cands = staffCandidates(draft.ownerName, roster.staff);
+      missing.push({
+        key: "owner",
+        field: "owner",
+        question:
+          owner === "ambiguous"
+            ? `"${draft.ownerName}"에 해당하는 직원이 여러 명입니다. 누구에게 맡길까요?`
+            : `"${draft.ownerName}" 직원을 찾지 못했습니다. 누구에게 맡길까요? ("업무풀"이라고 답하면 조교 업무풀로 보냅니다)`,
+        candidates: cands.length > 0 ? cands : undefined,
+      });
+    }
+  }
+  return missing;
+}
+
+function staffCandidates(name: string, staff: { id: string; name: string; role?: string | null }[]): Choice[] {
+  const n = name.trim().replace(/(쌤|선생님|조교님|조교|님)$/, "");
+  return staff
+    .filter((s) => n && (s.name.includes(n) || n.includes(s.name)))
+    .map((s) => ({ id: s.id, label: `${s.name}${s.role ? ` (${s.role})` : ""}` }));
+}
+
+function buildQuestion(draft: ClassProgressDraft | TaskDraft, missing: MissingInfo[]): string {
+  const prefix =
+    draft.kind === "class_progress" && draft.progress && missing.every((m) => m.field !== "content")
+      ? `오늘 진도는 "${draft.progress}"(으)로 확인했습니다. `
+      : "";
+  if (missing.length === 1) return prefix + missing[0].question;
+  const what = draft.kind === "class_progress" ? "진도를 저장하려면" : "업무를 등록하려면";
+  const marks = ["①", "②", "③", "④", "⑤"];
+  return `${prefix}${what} ${missing.length}가지 정보가 더 필요합니다.\n${missing.map((m, i) => `${marks[i] ?? `${i + 1}.`} ${m.question}`).join("\n")}`;
+}
+
+function pendingOutcome(draft: ClassProgressDraft | TaskDraft, missing: MissingInfo[], attempts: number, note = ""): UnifiedOutcome {
+  const question = buildQuestion(draft, missing);
+  return {
+    route: draft.kind,
+    label: draft.kind === "class_progress" ? draft.className || "반 진도" : draft.taskType || "업무",
+    status: "확인필요",
+    message: note ? `${note}\n${question}` : question,
+    pending: { draft, missing, question, attempts },
+  };
+}
+
+// 답변 값 하나를 missing 항목 하나에 적용한다. 적용됐으면 true.
+function applyValue(draft: ClassProgressDraft | TaskDraft, m: MissingInfo, value: string, roster: Roster, choiceId?: string): boolean {
+  const v = value.trim();
+  const pick = (cands: Choice[] | undefined): Choice | null => {
+    if (!cands || cands.length === 0) return null;
+    if (choiceId) return cands.find((c) => c.id === choiceId) ?? null;
+    const hits = cands.filter((c) => norm(c.label).includes(norm(v)) || norm(v).includes(norm(c.label)));
+    return hits.length === 1 ? hits[0] : null;
+  };
+  if (!v && !choiceId) return false;
+  switch (m.field) {
+    case "class": {
+      if (draft.kind !== "class_progress") return false;
+      const chosen = pick(m.candidates);
+      const found = chosen ? [{ id: chosen.id, name: chosen.label }] : resolveClassCandidates(v, roster.classes);
+      const inCands = m.candidates ? found.filter((f) => m.candidates!.some((c) => c.id === f.id)) : found;
+      const final = inCands.length === 1 ? inCands : found.length === 1 ? found : [];
+      if (final.length !== 1) return false;
+      draft.classId = final[0].id;
+      draft.className = final[0].name;
+      return true;
+    }
+    case "content": {
+      if (draft.kind !== "class_progress") return false;
+      draft.progress = v;
+      return true;
+    }
+    case "taskType": {
+      if (draft.kind !== "task") return false;
+      const exact = taskTypeFromLabel(v);
+      const hits = exact ? [v] : TASK_TYPE_LABEL_LIST.filter((l) => v.includes(l) || l.includes(v));
+      if (hits.length !== 1) return false;
+      draft.taskType = hits[0];
+      return true;
+    }
+    case "student": {
+      if (draft.kind !== "task") return false;
+      const idx = draft.ambiguous.findIndex((a) => a.name === m.ref);
+      if (idx < 0) return false;
+      let chosen = pick(m.candidates);
+      if (!chosen && m.candidates) {
+        // "고2B"/"금정고"처럼 반·학교·학년 단서로 답한 경우 — 기존 동명이인 좁히기 규칙 재사용.
+        const infos = roster.students.filter((st) => m.candidates!.some((c) => c.id === st.id));
+        const classNameById = new Map(roster.classes.map((c) => [c.id, stripClassSuffix(c.name)]));
+        const narrowed = narrowCandidates(v, infos, classNameById);
+        if (narrowed.length === 1) chosen = m.candidates.find((c) => c.id === narrowed[0].id) ?? null;
+      }
+      if (!chosen) return false;
+      const name = roster.students.find((st) => st.id === chosen!.id)?.name ?? draft.ambiguous[idx].name;
+      draft.students.push({ id: chosen.id, name });
+      draft.ambiguous.splice(idx, 1);
+      return true;
+    }
+    case "owner": {
+      if (draft.kind !== "task") return false;
+      if (!choiceId && POOL_ANSWER.test(v)) {
+        draft.ownerToPool = true;
+        draft.ownerId = null;
+        return true;
+      }
+      const chosen = pick(m.candidates);
+      const owner = chosen ? roster.staff.find((st) => st.id === chosen.id) ?? null : resolveStaffByName(v, roster.staff);
+      if (!owner || owner === "ambiguous") return false;
+      draft.ownerId = owner.id;
+      draft.ownerName = owner.name;
+      return true;
+    }
+  }
+}
+
+function taskInputFromDraft(draft: TaskDraft, today: string): { input: NewTaskInput; label: string } | null {
+  const type = taskTypeFromLabel(draft.taskType);
+  if (!type) return null;
+  const studentIds = draft.students.map((st) => st.id);
+  const unresolvedNote = draft.unresolved.length > 0 ? ` (찾지 못한 이름: ${draft.unresolved.join(", ")})` : "";
+  const contentParts = [
+    draft.instruction,
+    draft.material ? `자료: ${draft.material}` : "",
+    draft.quantity ? `수량: ${draft.quantity}` : "",
+  ].filter(Boolean);
+  return {
+    input: {
+      type,
+      studentId: studentIds[0] ?? null,
+      studentIds: studentIds.length > 1 ? studentIds : undefined,
+      classIds: draft.classIds.length > 0 ? draft.classIds : undefined,
+      content: contentParts.join(" / "),
+      date: draft.date || today,
+      time: draft.time || "",
+      priority: draft.priority,
+      // 학생 이름이 명단에 없거나(신입생 등) "업무풀"로 답했으면 자동배정 없이 업무풀로.
+      forcePool: (draft.unresolved.length > 0 && studentIds.length === 0) || !!draft.ownerToPool,
+      ownerId: draft.ownerId,
+      createdBy: draft.createdBy,
+    },
+    label: `${draft.taskType}${draft.students.length ? " · " + draft.students.map((st) => st.name).join(",") : ""}${unresolvedNote}`,
+  };
+}
+
+type SlackTask = { typeLabel: string; studentName: string; ownerName: string | null; pool: boolean };
+
+async function createTaskOutcomes(
+  taskInputs: { input: NewTaskInput; label: string }[],
+  roster: Roster,
+  studentNames: Map<string, string>
+): Promise<{ outcomes: UnifiedOutcome[]; slackTasks: SlackTask[] }> {
+  const outcomes: UnifiedOutcome[] = [];
+  const slackTasks: SlackTask[] = [];
+  if (taskInputs.length === 0) return { outcomes, slackTasks };
+  mark("unified:before_createTasks_write");
+  try {
+    const created = await createTasks(taskInputs.map((t) => t.input), { staff: roster.staff, classes: roster.classes, studentNames });
+    mark("unified:after_createTasks_write");
+    const staffNameById = new Map(roster.staff.map((st) => [st.id, st.name]));
+    created.forEach((c, i) => {
+      outcomes.push({
+        route: "task",
+        label: taskInputs[i].label,
+        status: "완료",
+        message: `업무 등록: ${taskInputs[i].label} → ${
+          c.ownerId
+            ? `${staffNameById.get(c.ownerId) ?? "담당자"} ${taskInputs[i].input.ownerId ? "지정 배정" : "자동배정"}`
+            : "조교 업무풀(근무 중인 조교에게 자동배정 대기)"
+        }`,
+      });
+      const rawStudentId = taskInputs[i].input.studentId;
+      slackTasks.push({
+        typeLabel: TASK_TYPE_LABELS[c.type],
+        studentName: rawStudentId ? studentNames.get(rawStudentId) ?? "" : "",
+        ownerName: c.ownerId ? staffNameById.get(c.ownerId) ?? null : null,
+        pool: c.pool,
+      });
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "업무 저장 중 오류가 발생했습니다.";
+    taskInputs.forEach((t) => outcomes.push({ route: "task", label: t.label, status: "실패", message }));
+  }
+  return { outcomes, slackTasks };
+}
+
+async function executeDraft(
+  draft: ClassProgressDraft | TaskDraft,
+  roster: Roster,
+  studentNames: Map<string, string>,
+  today: string
+): Promise<{ outcomes: UnifiedOutcome[]; slackTasks: SlackTask[] }> {
+  if (draft.kind === "class_progress") {
+    return {
+      outcomes: [await saveClassProgressOutcome({ classId: draft.classId as string, date: draft.date, progress: draft.progress, homework: draft.homework })],
+      slackTasks: [],
+    };
+  }
+  const t = taskInputFromDraft(draft, today);
+  if (!t) return { outcomes: [{ route: "task", label: draft.taskType, status: "실패", message: "업무 유형을 확인할 수 없습니다." }], slackTasks: [] };
+  return createTaskOutcomes([t], roster, studentNames);
+}
+
+// 후속 답변 처리 — pending.draft에 답변을 병합하고, 충분하면 바로 실행한다.
+export async function continuePendingInput(
+  pending: PendingAction,
+  answer: string,
+  opts: { choiceId?: string } = {}
+): Promise<{ ok: boolean; outcomes: UnifiedOutcome[]; tasks: SlackTask[] }> {
+  const today = todayKST();
+  const roster = await getNlRoster();
+  const studentNames = new Map(roster.students.map((st) => [st.id, st.name]));
+  const draft = pending.draft;
+  const missing = checkDraft(draft, roster);
+
+  let applied = 0;
+  if (opts.choiceId) {
+    const target = missing.find((m) => m.candidates?.some((c) => c.id === opts.choiceId));
+    if (target && applyValue(draft, target, answer, roster, opts.choiceId)) applied++;
+  } else if (missing.length === 1) {
+    if (applyValue(draft, missing[0], answer, roster)) applied++;
+  } else if (missing.length > 1) {
+    let values: Record<string, string> = {};
+    try {
+      values = await parsePendingAnswer(answer, missing.map((m) => ({ key: m.key, question: m.question })));
+    } catch {
+      values = {};
+    }
+    for (const m of missing) {
+      if (values[m.key] && applyValue(draft, m, values[m.key], roster)) applied++;
+    }
+  }
+
+  const remaining = checkDraft(draft, roster);
+  if (remaining.length > 0) {
+    const attempts = pending.attempts + (applied === 0 ? 1 : 0);
+    if (attempts >= 3) {
+      return {
+        ok: false,
+        outcomes: [{ route: draft.kind, label: "", status: "실패", message: "필요한 정보를 확인하지 못해 요청을 취소했습니다. 처음부터 다시 입력해 주세요." }],
+        tasks: [],
+      };
+    }
+    const note = applied === 0 ? "답변에서 필요한 정보를 찾지 못했습니다." : "";
+    return { ok: false, outcomes: [pendingOutcome(draft, remaining, attempts, note)], tasks: [] };
+  }
+  const { outcomes, slackTasks } = await executeDraft(draft, roster, studentNames, today);
+  return { ok: outcomes.every((o) => o.status !== "실패"), outcomes, tasks: slackTasks };
+}
+
+// class_progress 전용 반 매칭. 띄어쓰기를 무시하고 정확 일치 → 부분 일치 순으로
+// 찾고, 부분 일치가 여러 개면 가장 길게 겹치는(가장 구체적인) 이름만 남긴다
+// (예: "고2 이사벨A" → "이사벨"보다 "이사벨A"). 그래도 여러 개면 사용자 선택.
+export function resolveClassCandidates(className: string | undefined, classes: { id: string; name: string }[]): { id: string; name: string }[] {
+  const norm = (v: string) => v.replace(/\s+/g, "").toLowerCase();
+  const target = norm(className ?? "");
+  if (!target) return [];
+  const named = classes.map((c) => ({ id: c.id, name: stripClassSuffix(c.name) }));
+  const exact = named.filter((c) => norm(c.name) === target);
+  if (exact.length > 0) return exact;
+  const partial = named.filter((c) => {
+    const cn = norm(c.name);
+    return cn.length > 0 && (cn.includes(target) || target.includes(cn));
+  });
+  if (partial.length <= 1) return partial;
+  const score = (c: { name: string }) => Math.min(norm(c.name).length, target.length);
+  const best = Math.max(...partial.map(score));
+  return partial.filter((c) => score(c) === best);
+}
+
+// 반 진도/과제 저장 + 화면 표시용 결과 문구(선택 후 재요청 경로도 같이 쓴다).
+export async function saveClassProgressOutcome(input: { classId: string; date: string; progress: string; homework: string }): Promise<UnifiedOutcome> {
+  const saved = await saveClassProgressFromText(input);
+  const lines = [
+    saved.className,
+    `${input.date === todayKST() ? "오늘" : input.date} 진도: ${saved.progress || "-"}`,
+    `과제: ${saved.homework || "-"}`,
+    saved.mode === "updated" ? "기존 수업기록에 반영 완료" : "저장 완료",
+  ];
+  return { route: "class_progress", label: saved.className, status: "완료", message: lines.join("\n") };
+}
+
+// "민지" → "김민지"처럼 직원 이름을 찾는다. 정확 일치 우선, 아니면 부분 일치가
+// 딱 1명일 때만 확정한다(여러 명이면 임의로 고르지 않는다).
+function resolveStaffByName(name: string | undefined, staff: { id: string; name: string }[]): { id: string; name: string } | null | "ambiguous" {
+  const n = name?.trim().replace(/(쌤|선생님|조교님|조교|님)$/, "");
+  if (!n) return null;
+  const exact = staff.filter((s) => s.name === n);
+  if (exact.length === 1) return exact[0];
+  const partial = staff.filter((s) => s.name.includes(n) || n.includes(s.name));
+  if (partial.length === 1) return partial[0];
+  return partial.length > 1 || exact.length > 1 ? "ambiguous" : null;
+}
 
 function resolveNamesForIntent(
   names: string[],
   students: StudentInfo[],
   classNameById: Map<string, string>,
-  contextText: string
-): { resolved: { id: string; name: string }[]; unresolved: string[] } {
+  contextText: string,
+  strict = false
+): { resolved: { id: string; name: string }[]; unresolved: string[]; ambiguous: { name: string; candidates: Choice[] }[] } {
   const resolved: { id: string; name: string }[] = [];
   const unresolved: string[] = [];
+  const ambiguous: { name: string; candidates: Choice[] }[] = [];
   for (const raw of names ?? []) {
     const name = raw?.trim();
     if (!name) continue;
     const exact = students.filter((s) => s.name === name);
     let candidates = exact.length > 0 ? exact : students.filter((s) => s.name.includes(name) || name.includes(s.name));
     if (candidates.length > 1) candidates = narrowCandidates(contextText, candidates, classNameById);
-    if (candidates.length >= 1) resolved.push({ id: candidates[0].id, name: candidates[0].name });
+    // strict(업무 생성): 동명이인이 남으면 첫 번째를 임의로 고르지 않고 되묻는다.
+    if (strict && candidates.length > 1) {
+      ambiguous.push({ name, candidates: candidates.map((c) => ({ id: c.id, label: candidateLabel(c, classNameById) })) });
+    } else if (candidates.length >= 1) resolved.push({ id: candidates[0].id, name: candidates[0].name });
     else unresolved.push(name);
   }
-  return { resolved, unresolved };
+  return { resolved, unresolved, ambiguous };
 }
 
 export async function runUnifiedNlInput(
@@ -523,7 +919,8 @@ export async function runUnifiedNlInput(
   mark("unified:start");
   const today = todayKST();
   mark("unified:before_getNlRoster");
-  const { students: allStudents, classes, staff } = await getNlRoster();
+  const roster = await getNlRoster();
+  const { students: allStudents, classes, staff } = roster;
   mark("unified:after_getNlRoster");
   const activeStudents = allStudents.filter((s) => s.status === "재원" || !s.status);
   const classNameById = new Map(classes.map((c) => [c.id, stripClassSuffix(c.name)]));
@@ -599,33 +996,31 @@ export async function runUnifiedNlInput(
           break;
         }
         case "task": {
-          const type = intent.taskType ? taskTypeFromLabel(intent.taskType) : null;
-          if (!type) {
-            outcomes.push({ route: "task", label, status: "실패", message: `"${intent.taskType ?? ""}"은(는) 알 수 없는 업무 유형입니다.` });
+          const strictNames = resolveNamesForIntent(intent.students ?? [], activeStudents, classNameById, text, true);
+          const draft: TaskDraft = {
+            kind: "task",
+            taskType: intent.taskType ?? "",
+            instruction: intent.instruction ?? "",
+            material: intent.material || "",
+            quantity: intent.quantity || null,
+            date: intent.date || today,
+            time: intent.time || "",
+            priority: intent.priority,
+            classIds: resolveClassIds(intent.className, classes),
+            students: strictNames.resolved,
+            unresolved: strictNames.unresolved,
+            ambiguous: strictNames.ambiguous,
+            ownerName: intent.ownerName?.trim() || "",
+            ownerId: null,
+            createdBy: opts.staffName,
+          };
+          const missing = checkDraft(draft, roster);
+          if (missing.length > 0) {
+            outcomes.push(pendingOutcome(draft, missing, 0));
             break;
           }
-          const studentIds = resolved.map((s) => s.id);
-          const forcePool = (intent.students?.length ?? 0) > 0 && studentIds.length === 0;
-          const classIds = resolveClassIds(intent.className, classes);
-          const contentParts = [
-            intent.instruction,
-            intent.material ? `자료: ${intent.material}` : "",
-            intent.quantity ? `수량: ${intent.quantity}` : "",
-          ].filter(Boolean);
-          taskInputs.push({
-            input: {
-              type,
-              studentId: studentIds[0] ?? null,
-              studentIds: studentIds.length > 1 ? studentIds : undefined,
-              classIds: classIds.length > 0 ? classIds : undefined,
-              content: contentParts.join(" / "),
-              date: intent.date || today,
-              time: intent.time || "",
-              priority: intent.priority,
-              forcePool,
-            },
-            label: `${intent.taskType}${resolved.length ? " · " + resolved.map((s) => s.name).join(",") : ""}${unresolvedNote}`,
-          });
+          const t = taskInputFromDraft(draft, today);
+          if (t) taskInputs.push(t);
           break;
         }
         case "admin_inbox": {
@@ -709,6 +1104,23 @@ export async function runUnifiedNlInput(
           });
           break;
         }
+        case "class_progress": {
+          const draft: ClassProgressDraft = {
+            kind: "class_progress",
+            className: intent.className?.trim() || "",
+            classId: null,
+            date: intent.date || today,
+            progress: intent.progress?.trim() || "",
+            homework: intent.homework?.trim() || "",
+          };
+          const missing = checkDraft(draft, roster);
+          if (missing.length > 0) {
+            outcomes.push(pendingOutcome(draft, missing, 0));
+            break;
+          }
+          outcomes.push(...(await executeDraft(draft, roster, studentNames, today)).outcomes);
+          break;
+        }
         default: {
           outcomes.push({ route: intent.route, label, status: "실패", message: "처리할 수 없는 요청 유형입니다." });
         }
@@ -718,33 +1130,9 @@ export async function runUnifiedNlInput(
     }
   }
 
-  const slackTasks: { typeLabel: string; studentName: string; ownerName: string | null; pool: boolean }[] = [];
-  if (taskInputs.length > 0) {
-    mark("unified:before_createTasks_write");
-    try {
-      const created = await createTasks(taskInputs.map((t) => t.input), { staff, classes, studentNames });
-      mark("unified:after_createTasks_write");
-      const staffNameById = new Map(staff.map((s) => [s.id, s.name]));
-      created.forEach((c, i) => {
-        outcomes.push({
-          route: "task",
-          label: taskInputs[i].label,
-          status: "완료",
-          message: `업무 등록: ${TASK_TYPE_LABELS[c.type]}${c.pool ? " (공용업무풀)" : ""}`,
-        });
-        const rawStudentId = taskInputs[i].input.studentId;
-        slackTasks.push({
-          typeLabel: TASK_TYPE_LABELS[c.type],
-          studentName: rawStudentId ? studentNames.get(rawStudentId) ?? "" : "",
-          ownerName: c.ownerId ? staffNameById.get(c.ownerId) ?? null : null,
-          pool: c.pool,
-        });
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "업무 저장 중 오류가 발생했습니다.";
-      taskInputs.forEach((t) => outcomes.push({ route: "task", label: t.label, status: "실패", message }));
-    }
-  }
+  const created = await createTaskOutcomes(taskInputs, roster, studentNames);
+  outcomes.push(...created.outcomes);
+  const slackTasks = created.slackTasks;
 
   const ok = outcomes.length > 0 && outcomes.every((o) => o.status !== "실패");
   return { ok, outcomes, tasks: slackTasks };

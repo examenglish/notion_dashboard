@@ -104,7 +104,8 @@ async function slackApi<T>(method: string, body: Record<string, string>): Promis
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(body),
     });
-    const result = (await response.json()) as T & { ok?: boolean };
+    const result = (await response.json()) as T & { ok?: boolean; error?: string };
+    if (!result.ok) console.error(`Slack API ${method} not ok`, result.error ?? "unknown_error");
     return result.ok ? result : null;
   } catch (error) {
     console.error(`Slack API ${method} failed`, error instanceof Error ? error.name : "unknown_error");
@@ -138,7 +139,10 @@ export function notifyTaskAssignments(tasks: { typeLabel: string; studentName: s
   if (!channel) return;
   for (const t of tasks) {
     if (!t.ownerName) continue;
-    void postSlackMessage(channel, `📌 새 업무: ${t.typeLabel}${t.studentName ? " · " + t.studentName : ""} → ${t.ownerName}`);
+    // Slack 실패가 업무 저장/배정 결과에 영향을 주지 않도록 기록만 한다.
+    postSlackMessage(channel, `📌 새 업무: ${t.typeLabel}${t.studentName ? " · " + t.studentName : ""} → ${t.ownerName}`).catch((err) =>
+      console.error("[slack] notifyTaskAssignments failed", { typeLabel: t.typeLabel, owner: t.ownerName, message: err instanceof Error ? err.message : String(err) })
+    );
   }
 }
 

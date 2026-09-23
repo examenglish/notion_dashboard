@@ -25,15 +25,51 @@ type TaskRecord = {
   pool: boolean;
   parentTaskId: string | null;
   className?: string;
+  status?: "업무풀" | "대기" | "진행중" | "완료";
+  createdAt?: string | null;
+  createdBy?: string;
+  assignedVia?: "direct" | "auto" | "pool_auto" | "claim" | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  completedByName?: string;
 };
+
+const ASSIGNED_VIA_LABEL: Record<string, string> = { direct: "지정", auto: "자동배정", pool_auto: "업무풀→자동배정", claim: "직접 가져감" };
+
+const KST_DATETIME = new Intl.DateTimeFormat("ko-KR", {
+  timeZone: "Asia/Seoul",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+function fmtDateTime(iso: string | null | undefined): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "-" : KST_DATETIME.format(d);
+}
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
-function TaskRow({ task, onClick, badge }: { task: TaskRecord; onClick: () => void; badge?: string }) {
+function TaskRow({
+  task,
+  onClick,
+  badge,
+  onStart,
+  busy,
+}: {
+  task: TaskRecord;
+  onClick: () => void;
+  badge?: string;
+  onStart?: () => void;
+  busy?: boolean;
+}) {
   return (
     <li className="schedule-item-row" onClick={onClick} style={{ cursor: "pointer" }}>
       <div>
         <span className="badge">{task.typeLabel}</span>{" "}
+        {task.status === "진행중" && <span className="badge badge-success">진행중</span>}
         {task.studentName && task.studentName !== "-" && <strong>{task.studentName}</strong>}
         {task.className && <span className="muted"> ({task.className})</span>}
         {task.urgent && <span className="badge badge-urgent">긴급</span>}
@@ -44,6 +80,20 @@ function TaskRow({ task, onClick, badge }: { task: TaskRecord; onClick: () => vo
         </span>
         {task.note && <p className="muted" style={{ margin: "2px 0 0", fontSize: 13 }}>{task.note}</p>}
       </div>
+      {!task.done && (
+        <div style={{ display: "flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>
+          {onStart && task.status !== "진행중" && (
+            <button type="button" className="secondary" disabled={busy} onClick={onStart}>
+              {busy ? "처리 중..." : "진행 시작"}
+            </button>
+          )}
+          {onStart && (
+            <button type="button" onClick={onClick}>
+              완료
+            </button>
+          )}
+        </div>
+      )}
     </li>
   );
 }
@@ -80,6 +130,9 @@ export default function TaskBoardClient({
   const [showByStaff, setShowByStaff] = useState(false);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [claiming, setClaiming] = useState<string | null>(null);
+  const [starting, setStarting] = useState<string | null>(null);
+  const [boardTasks, setBoardTasks] = useState<TaskRecord[] | null>(null);
+  const [showBoard, setShowBoard] = useState(false);
 
   function reloadAll() {
     fetch("/api/tasks?scope=mine")
@@ -93,6 +146,7 @@ export default function TaskBoardClient({
         .then((r) => r.json())
         .then((d) => setReviewInbox(d.tasks ?? []));
       if (showByStaff) loadByStaff();
+      if (showBoard) loadBoard();
     }
     if (showCompleted) loadCompleted();
   }
@@ -102,6 +156,37 @@ export default function TaskBoardClient({
       .then((r) => r.json())
       .then((d) => setCompleted(d.tasks ?? []));
   }
+
+  function loadBoard() {
+    fetch("/api/tasks?scope=board")
+      .then((r) => r.json())
+      .then((d) => setBoardTasks(d.tasks ?? []));
+  }
+
+  async function start(taskId: string) {
+    setStarting(taskId);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/start`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) {
+        alert(data.message ?? "진행 시작에 실패했습니다.");
+        return;
+      }
+      reloadAll();
+    } finally {
+      setStarting(null);
+    }
+  }
+
+  // 진행현황 표: 미완료(업무풀→대기→진행중) 먼저, 그 다음 최근 완료.
+  const boardRows = useMemo(() => {
+    const order: Record<string, number> = { 업무풀: 0, 대기: 1, 진행중: 2, 완료: 3 };
+    return [...(boardTasks ?? [])].sort(
+      (a, b) =>
+        (order[a.status ?? "대기"] ?? 1) - (order[b.status ?? "대기"] ?? 1) ||
+        String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? ""))
+    );
+  }, [boardTasks]);
 
   function loadByStaff() {
     fetch("/api/tasks?scope=byStaff")
@@ -162,15 +247,17 @@ export default function TaskBoardClient({
     return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   }, []);
 
-  const overdue = myTasks.filter((t) => t.date && t.date < today);
-  const urgent = myTasks.filter((t) => !overdue.includes(t) && t.urgent);
-  const dueSoon = myTasks.filter(
+  const inProgress = myTasks.filter((t) => t.status === "진행중");
+  const waiting = myTasks.filter((t) => t.status !== "진행중");
+  const overdue = waiting.filter((t) => t.date && t.date < today);
+  const urgent = waiting.filter((t) => !overdue.includes(t) && t.urgent);
+  const dueSoon = waiting.filter(
     (t) => !overdue.includes(t) && !urgent.includes(t) && t.date === today && t.time && t.time <= addMinutes(nowLabel, 60) && t.time >= nowLabel
   );
-  const restToday = myTasks.filter(
+  const restToday = waiting.filter(
     (t) => !overdue.includes(t) && !urgent.includes(t) && !dueSoon.includes(t) && t.date === today
   );
-  const other = myTasks.filter(
+  const other = waiting.filter(
     (t) => !overdue.includes(t) && !urgent.includes(t) && !dueSoon.includes(t) && !restToday.includes(t)
   );
   const topPick = overdue[0] ?? urgent[0] ?? dueSoon[0] ?? restToday[0] ?? null;
@@ -191,7 +278,18 @@ export default function TaskBoardClient({
         <div className="card">
           <h2>지금 할 일</h2>
           <ul className="schedule-list">
-            <TaskRow task={topPick} onClick={() => setOpenTaskId(topPick.id)} />
+            <TaskRow task={topPick} onClick={() => setOpenTaskId(topPick.id)} onStart={() => start(topPick.id)} busy={starting === topPick.id} />
+          </ul>
+        </div>
+      )}
+
+      {inProgress.length > 0 && (
+        <div className="card">
+          <h2>진행 중 {inProgress.length}</h2>
+          <ul className="schedule-list">
+            {inProgress.map((t) => (
+              <TaskRow key={t.id} task={t} onClick={() => setOpenTaskId(t.id)} onStart={() => start(t.id)} />
+            ))}
           </ul>
         </div>
       )}
@@ -213,7 +311,7 @@ export default function TaskBoardClient({
           <h2>긴급/지연 {overdue.length + urgent.length}</h2>
           <ul className="schedule-list">
             {[...overdue, ...urgent].map((t) => (
-              <TaskRow key={t.id} task={t} onClick={() => setOpenTaskId(t.id)} />
+              <TaskRow key={t.id} task={t} onClick={() => setOpenTaskId(t.id)} onStart={() => start(t.id)} busy={starting === t.id} />
             ))}
           </ul>
         </div>
@@ -226,7 +324,7 @@ export default function TaskBoardClient({
         ) : (
           <ul className="schedule-list">
             {[...dueSoon, ...restToday].map((t) => (
-              <TaskRow key={t.id} task={t} onClick={() => setOpenTaskId(t.id)} />
+              <TaskRow key={t.id} task={t} onClick={() => setOpenTaskId(t.id)} onStart={() => start(t.id)} busy={starting === t.id} />
             ))}
           </ul>
         )}
@@ -250,7 +348,7 @@ export default function TaskBoardClient({
             <h3 style={{ fontSize: 14, fontWeight: 600, marginTop: 12 }}>기타 배정 업무</h3>
             <ul className="schedule-list">
               {other.map((t) => (
-                <TaskRow key={t.id} task={t} onClick={() => setOpenTaskId(t.id)} />
+                <TaskRow key={t.id} task={t} onClick={() => setOpenTaskId(t.id)} onStart={() => start(t.id)} busy={starting === t.id} />
               ))}
             </ul>
           </>
@@ -278,6 +376,74 @@ export default function TaskBoardClient({
           </ul>
         )}
       </div>
+
+      {isManager && (
+        <div className="card">
+          <h2>지시업무 진행현황</h2>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              setShowBoard((v) => !v);
+              if (!showBoard) loadBoard();
+            }}
+          >
+            {showBoard ? "접기" : "업무별 진행상황 보기 (미완료 + 최근 7일)"}
+          </button>
+          {showBoard && (
+            <div className="table-scroll" style={{ marginTop: 10, maxHeight: 480, overflowY: "auto" }}>
+              {boardTasks === null ? (
+                <p className="muted">불러오는 중...</p>
+              ) : boardRows.length === 0 ? (
+                <p className="muted">표시할 업무가 없습니다.</p>
+              ) : (
+                <table className="sortable-table">
+                  <thead>
+                    <tr>
+                      <th>업무 내용</th>
+                      <th>담당자</th>
+                      <th>상태</th>
+                      <th>생성</th>
+                      <th>마감</th>
+                      <th>완료</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {boardRows.map((t) => (
+                      <tr key={t.id} onClick={() => setOpenTaskId(t.id)} style={{ cursor: "pointer" }}>
+                        <td>
+                          <span className="badge">{t.typeLabel}</span> {t.studentName && t.studentName !== "-" ? t.studentName + " " : ""}
+                          {t.className ? `(${t.className}) ` : ""}
+                          <span className="muted">{t.note}</span>
+                        </td>
+                        <td>
+                          {t.ownerName || "업무풀"}
+                          {t.assignedVia && <div className="muted" style={{ fontSize: 12 }}>{ASSIGNED_VIA_LABEL[t.assignedVia] ?? ""}</div>}
+                        </td>
+                        <td>
+                          <span className={t.status === "완료" ? "badge badge-success" : t.status === "업무풀" ? "badge badge-urgent" : "badge"}>
+                            {t.status ?? (t.done ? "완료" : "대기")}
+                          </span>
+                          {t.status === "완료" && t.outcome && <div className="muted" style={{ fontSize: 12 }}>{t.outcome}</div>}
+                        </td>
+                        <td>
+                          {fmtDateTime(t.createdAt)}
+                          {t.createdBy && <div className="muted" style={{ fontSize: 12 }}>{t.createdBy}</div>}
+                        </td>
+                        <td>{t.date ? `${t.date.slice(5)} ${t.time}` : "-"}</td>
+                        <td>
+                          {fmtDateTime(t.completedAt)}
+                          {t.completedByName && <div className="muted" style={{ fontSize: 12 }}>{t.completedByName}</div>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {isManager && (
         <div className="card">

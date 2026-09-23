@@ -9,7 +9,10 @@ import { SLASH_COMMAND_LIST } from "@/lib/slash-commands";
 
 type Candidate = { id: string; label: string };
 type CreatedTask = { id: string; typeLabel: string; studentName: string; ownerName: string | null; pool: boolean };
-type Outcome = { route: string; label: string; status: "완료" | "확인필요" | "실패"; message: string };
+// 서버(lib/nl-input.ts PendingAction)가 준 그대로 보관했다가 다음 답변과 함께
+// 돌려보낸다 — 화면은 question/missing[].candidates만 읽는다.
+type Pending = { question: string; missing: { candidates?: Candidate[] }[]; [key: string]: unknown };
+type Outcome = { route: string; label: string; status: "완료" | "확인필요" | "실패"; message: string; pending?: Pending };
 
 type AiResponse = {
   ok: boolean;
@@ -64,6 +67,10 @@ export default function AiUnifiedInput({
   const [outcomes, setOutcomes] = useState<Outcome[] | null>(null);
   const [pendingText, setPendingText] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
+  // 정보가 부족해 되물은 요청들(대화형 보완). 맨 앞 것부터 답변을 받는다.
+  const [pendingQueue, setPendingQueue] = useState<Pending[]>([]);
+  const currentPending = pendingQueue[0] ?? null;
+  const pendingChoices = currentPending?.missing.find((m) => m.candidates && m.candidates.length > 0)?.candidates ?? null;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // "/"만 치면 그 뒤 글자로 필터링된 단축어 목록을 검색창 바로 아래에
@@ -77,7 +84,10 @@ export default function AiUnifiedInput({
     textareaRef.current?.focus();
   }
 
-  async function submit(currentText: string, opts: { confirmNewStudent?: boolean; selectedStudentId?: string; forceNewStudent?: boolean } = {}): Promise<AiResponse> {
+  async function submit(
+    currentText: string,
+    opts: { confirmNewStudent?: boolean; selectedStudentId?: string; forceNewStudent?: boolean; pending?: Pending; choiceId?: string } = {}
+  ): Promise<AiResponse> {
     const res = await fetch("/api/ai-input", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -86,7 +96,7 @@ export default function AiUnifiedInput({
     return res.json();
   }
 
-  function finish(data: AiResponse) {
+  function finish(data: AiResponse, answeredPending = false) {
     if (data.mode === "tasks" && data.ok) {
       setCreatedTasks(data.tasks ?? []);
       setOutcomes(null);
@@ -103,7 +113,9 @@ export default function AiUnifiedInput({
       // 자연어 입력 — staff.md PART 8), 문장 하나가 실패해도 전체를 에러로
       // 뭉개지 않고 outcomes 목록을 그대로 보여준다.
       setCreatedTasks(null);
-      setOutcomes(data.outcomes ?? []);
+      const newPending = (data.outcomes ?? []).flatMap((o) => (o.pending ? [o.pending] : []));
+      setPendingQueue((cur) => [...(answeredPending ? cur.slice(1) : []), ...newPending]);
+      setOutcomes((data.outcomes ?? []).filter((o) => !o.pending));
       setMessage(null);
       setText("");
       setPendingText(null);
@@ -132,6 +144,10 @@ export default function AiUnifiedInput({
     setOutcomes(null);
     setCandidates(null);
     try {
+      if (currentPending) {
+        finish(await submit(currentText, { pending: currentPending }), true);
+        return;
+      }
       let data = await submit(currentText);
       if (!data.ok && data.needsConfirm && data.message && window.confirm(data.message)) {
         data = await submit(currentText, { confirmNewStudent: true });
@@ -150,7 +166,20 @@ export default function AiUnifiedInput({
   }
 
   async function pickCandidate(id: string) {
-    if (!pendingText || saving) return;
+    if (saving) return;
+    if (currentPending) {
+      setSaving(true);
+      try {
+        const label = pendingChoices?.find((c) => c.id === id)?.label ?? "";
+        finish(await submit(label, { pending: currentPending, choiceId: id }), true);
+      } catch {
+        setMessage({ ok: false, text: "네트워크 오류가 발생했습니다." });
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+    if (!pendingText) return;
     setSaving(true);
     try {
       finish(await submit(pendingText, { selectedStudentId: id }));
@@ -159,6 +188,36 @@ export default function AiUnifiedInput({
     } finally {
       setSaving(false);
     }
+  }
+
+  function cancelPending() {
+    setPendingQueue((cur) => cur.slice(1));
+    setMessage({ ok: false, text: "해당 요청을 취소했습니다." });
+  }
+
+  // 되묻는 질문 + (있으면) 후보 버튼 — 후보 버튼은 기존 학생 후보 선택과 같은 모양.
+  function renderPending(figmaStyle: boolean) {
+    if (!currentPending) return null;
+    return (
+      <div
+        className={figmaStyle ? "landing-result landing-result-error" : "error-text"}
+        role="status"
+        style={figmaStyle ? { whiteSpace: "pre-line" } : { whiteSpace: "pre-line", marginTop: 10, textAlign: "left", maxWidth: 480, marginLeft: "auto", marginRight: "auto" }}
+      >
+        ❓ {currentPending.question}
+        <div style={{ fontSize: 12, marginTop: 4 }}>입력창에 답변을 적어 주세요{pendingQueue.length > 1 ? ` (남은 확인 ${pendingQueue.length}건)` : ""}.</div>
+        <div className={figmaStyle ? "landing-candidates" : undefined} style={figmaStyle ? undefined : { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+          {(pendingChoices ?? []).map((c) => (
+            <button type="button" key={c.id} className={figmaStyle ? undefined : "secondary"} disabled={saving} onClick={() => pickCandidate(c.id)}>
+              {c.label}
+            </button>
+          ))}
+          <button type="button" className={figmaStyle ? undefined : "secondary"} disabled={saving} onClick={cancelPending}>
+            취소
+          </button>
+        </div>
+      </div>
+    );
   }
 
   async function registerAsNew() {
@@ -187,7 +246,7 @@ export default function AiUnifiedInput({
               id="director-ai-prompt"
               value={text}
               onChange={(event) => setText(event.target.value)}
-              placeholder="무엇을 함께 해결할까요?   ‘/’를 입력하면 빠른 명령이 열립니다."
+              placeholder={currentPending ? "위 질문에 대한 답변을 입력하세요" : "무엇을 함께 해결할까요?   ‘/’를 입력하면 빠른 명령이 열립니다."}
               rows={1}
               disabled={saving}
               onKeyDown={(event) => {
@@ -238,10 +297,17 @@ export default function AiUnifiedInput({
             <button type="button" disabled={saving} onClick={registerAsNew}>새로운 학생으로 등록</button>
           </div>
         )}
-        {outcomes && (
+        {renderPending(true)}
+        {outcomes && outcomes.length > 0 && (
           <div className={`landing-result ${outcomes.every((outcome) => outcome.status === "완료") ? "landing-result-success" : "landing-result-error"}`} role="status">
             요청 {outcomes.length}건 처리 결과
-            <ul>{outcomes.map((outcome, index) => <li key={index}>{outcome.message}</li>)}</ul>
+            <ul>
+              {outcomes.map((outcome, index) => (
+                <li key={index} style={{ whiteSpace: "pre-line" }}>
+                  {outcome.message}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
         {createdTasks && (
@@ -282,7 +348,7 @@ export default function AiUnifiedInput({
               ref={textareaRef}
               value={text}
               onChange={(e) => setText(e.target.value)}
-              placeholder={placeholder}
+              placeholder={currentPending ? "위 질문에 대한 답변을 입력하세요" : placeholder}
               rows={2}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey && slashMatches.length === 0) {
@@ -335,12 +401,13 @@ export default function AiUnifiedInput({
           </div>
         )}
 
-        {outcomes && (
+        {renderPending(false)}
+        {outcomes && outcomes.length > 0 && (
           <div className={outcomes.every((o) => o.status === "완료") ? "success-box" : "error-text"} style={{ marginTop: 10, textAlign: "left", maxWidth: 480, marginLeft: "auto", marginRight: "auto" }}>
             요청 {outcomes.length}건 처리 결과
             <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
               {outcomes.map((o, i) => (
-                <li key={i}>
+                <li key={i} style={{ whiteSpace: "pre-line" }}>
                   {o.status === "완료" ? "✅" : o.status === "확인필요" ? "❓" : "⚠️"} {o.message}
                 </li>
               ))}

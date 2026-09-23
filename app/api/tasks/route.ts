@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readStaffId, readStaffRole } from "@/lib/session";
-import { listMyTasks, listPoolTasks, listReviewInbox, listAllOpenTasks, getBasicChecklist, listCompletedToday } from "@/lib/notion";
+import { listMyTasks, listPoolTasks, listReviewInbox, listAllOpenTasks, listTaskBoard, getBasicChecklist, listCompletedToday } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
 
 export const dynamic = "force-dynamic";
 
-// scope=mine(기본)|pool|review|checklist — 내 업무 화면(TaskBoardClient)이
+// scope=mine(기본)|pool|review|byStaff|board|checklist|completed — 내 업무 화면(TaskBoardClient)이
 // 섹션별로 나눠 호출한다.
 export async function GET(req: NextRequest) {
   const staffId = readStaffId(req);
@@ -34,6 +34,13 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "권한이 없습니다." }, { status: 403 });
       }
       return NextResponse.json({ tasks: await listAllOpenTasks() });
+    }
+    if (scope === "board") {
+      const role = readStaffRole(req);
+      if (role !== "원장" && role !== "행정") {
+        return NextResponse.json({ error: "권한이 없습니다." }, { status: 403 });
+      }
+      return NextResponse.json({ tasks: await listTaskBoard() });
     }
     if (scope === "checklist") {
       return NextResponse.json({ items: await getBasicChecklist(staffId, todayKST()) });

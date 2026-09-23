@@ -119,4 +119,34 @@ export type NewTaskInput = {
   // 명단에 없음) — routeTask()로 아무 조교에게나 배정하지 않고, 무조건
   // 공용업무풀로 보내 담당자가 직접 학생을 확인하게 한다.
   forcePool?: boolean;
+  // "민지에게 ~ 맡겨"처럼 지시자가 담당자를 직접 지정한 경우 — routeTask()
+  // 자동배정을 건너뛰고 이 직원에게 바로 배정한다.
+  ownerId?: string | null;
+  // 지시한 직원 이름(진행현황의 "지시자" 표시용, tasks.source_payload.workflow).
+  createdBy?: string;
 };
+
+// 업무 진행 이력 — 새 컬럼/마이그레이션 없이 tasks.source_payload.workflow에
+// 병합 저장한다(source_payload.archived와 같은 기존 관례). 완료 여부의 정본은
+// 여전히 tasks.complete이고, 여기엔 "누가/언제"만 둔다.
+export type TaskWorkflow = {
+  createdBy?: string;
+  // direct=지시자가 담당자 지정, auto=생성 즉시 자동배정, pool_auto=업무풀에
+  // 있다가 나중에 자동배정, claim=조교가 업무풀에서 직접 가져감
+  assignedVia?: "direct" | "auto" | "pool_auto" | "claim";
+  assignedAt?: string;
+  assignReason?: string;
+  pooledAt?: string;
+  startedAt?: string;
+  startedBy?: string;
+  completedAt?: string;
+  completedBy?: string;
+};
+
+export type TaskStatus = "업무풀" | "대기" | "진행중" | "완료";
+
+export function taskStatusOf(t: { done: boolean; ownerId: string | null; startedAt?: string | null }): TaskStatus {
+  if (t.done) return "완료";
+  if (!t.ownerId) return "업무풀";
+  return t.startedAt ? "진행중" : "대기";
+}

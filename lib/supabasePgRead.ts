@@ -14,8 +14,8 @@
 // 중 "출결≠결석"이면 출석, "과제여부" 체크박스, "단어테스트결과=통과"
 // 비율 — 분모는 그 학생의 전체 일일기록 수(기간 제한 없음, "누적"이므로).
 import { branchCode } from "./supabaseRepo";
-import { taskTypeFromLabel, TASK_TYPE_LABEL_LIST, classifyFeedback, isReviewOutcome } from "./tasks";
-import { todayKST } from "./date";
+import { taskTypeFromLabel, TASK_TYPE_LABEL_LIST, classifyFeedback, isReviewOutcome, taskStatusOf, type TaskWorkflow } from "./tasks";
+import { todayKST, isoDateKST } from "./date";
 import { stripClassSuffix } from "./format";
 
 function supabaseEnv(): { url: string; key: string } | null {
@@ -179,7 +179,42 @@ function mapPgTask(
     parentTaskId: r.parent_task_notion_ids?.[0] ?? null,
     classId,
     className: classId ? classNames?.get(classId) ?? "" : "",
+    ...workflowFields(r, staffNames),
   };
+}
+
+// tasks.source_payload.workflow(lib/tasks.ts TaskWorkflow) → 진행상태/시각 필드.
+function workflowFields(r: PgTaskRow, staffNames: Map<string, string>) {
+  const wf: TaskWorkflow = r.source_payload?.workflow ?? {};
+  const ownerId = r.staff_notion_ids?.[0] ?? null;
+  const nameOf = (id?: string) => (id ? staffNames.get(id) ?? "" : "");
+  return {
+    status: taskStatusOf({ done: !!r.complete, ownerId, startedAt: wf.startedAt }),
+    createdAt: (r as { created_at?: string }).created_at ?? null,
+    createdBy: wf.createdBy ?? "",
+    assignedVia: wf.assignedVia ?? null,
+    assignedAt: wf.assignedAt ?? null,
+    startedAt: wf.startedAt ?? null,
+    startedByName: nameOf(wf.startedBy),
+    completedAt: wf.completedAt ?? null,
+    completedByName: nameOf(wf.completedBy),
+  };
+}
+
+// 원장 "지시업무 진행현황" — 미완료 전체 + 최근 sinceIso 이후 생성/완료된
+// 업무. 담당자/상태/생성·마감·완료 시각을 한 표로 보여주기 위한 조회.
+export async function pgListTaskBoard(
+  sinceIso: string,
+  studentNames: Map<string, string>,
+  staffNames: Map<string, string>,
+  classNames?: Map<string, string>
+) {
+  const enc = encodeURIComponent(sinceIso);
+  const rows = (await pgFetch("tasks", `select=*&or=(complete.eq.false,updated_at.gte.${enc})`)) as PgTaskRow[];
+  return rows
+    .filter(notArchived)
+    .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
+    .map((r) => mapPgTask(r, studentNames, staffNames, classNames));
 }
 
 export async function pgListMyTasks(
@@ -257,7 +292,7 @@ export async function pgListCompletedToday(
     .filter(notArchived)
     .filter((r) => AI_TASK_TYPE_LABELS.has(r.type ?? ""))
     .filter((r) => r.staff_notion_ids?.includes(staffNotionId))
-    .filter((r) => r.due_date === date)
+    .filter((r) => r.due_date === date || isoDateKST(r.source_payload?.workflow?.completedAt) === date)
     .map((r) => mapPgTask(r, studentNames, staffNames, classNames));
 }
 

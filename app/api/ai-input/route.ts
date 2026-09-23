@@ -3,7 +3,7 @@ import { resolveRelativeDate } from "@/lib/anthropic";
 import { createPersonalTodo } from "@/lib/notion";
 import { todayKST } from "@/lib/date";
 import { readStaffName, readStaffId } from "@/lib/session";
-import { runNaturalLanguageCommand, runUnifiedNlInput, parseSlashCommand, matchToDoListShortcut } from "@/lib/nl-input";
+import { runNaturalLanguageCommand, runUnifiedNlInput, continuePendingInput, parseSlashCommand, matchToDoListShortcut, type PendingAction } from "@/lib/nl-input";
 import { notifyTaskAssignments } from "@/lib/slack";
 import { mark } from "@/lib/timing";
 
@@ -25,6 +25,23 @@ export async function POST(req: NextRequest) {
   mark("route:start");
   const body = await req.json().catch(() => null);
   const text = (body?.text ?? "").trim();
+  // 대화형 보완: 앞 요청에서 "정보가 더 필요합니다"로 돌려준 pending(구조화된
+  // draft + 부족 항목)과 이번 답변을 합쳐 이어서 처리한다. 답변은 전체 명령으로
+  // 재해석하지 않는다(lib/nl-input.ts continuePendingInput).
+  const pending = body?.pending;
+  if (pending && typeof pending === "object" && pending.draft && Array.isArray(pending.missing)) {
+    const choiceId = typeof body?.choiceId === "string" ? body.choiceId : undefined;
+    if (!text && !choiceId) return NextResponse.json({ ok: false, message: "답변을 입력해 주세요." }, { status: 400 });
+    try {
+      const result = await continuePendingInput(pending as PendingAction, text, { choiceId });
+      if (result.tasks.length > 0) notifyTaskAssignments(result.tasks);
+      return NextResponse.json({ ok: result.ok, mode: "multi", message: result.outcomes.map((o) => o.message).join("\n"), outcomes: result.outcomes });
+    } catch (err) {
+      console.error("/api/ai-input pending failed", err);
+      const message = err instanceof Error ? err.message : "처리 중 오류가 발생했습니다.";
+      return NextResponse.json({ ok: false, message }, { status: 500 });
+    }
+  }
   const confirmNewStudent = !!body?.confirmNewStudent;
   const forceNewStudent = !!body?.forceNewStudent;
   const selectedStudentId = typeof body?.selectedStudentId === "string" ? body.selectedStudentId : undefined;

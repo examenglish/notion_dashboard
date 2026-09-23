@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { todayKST, formatDateLabel } from "@/lib/date";
-import { listMyTasks, listPoolTasks, listReviewInbox, getBasicChecklist, listStaff, type TaskRecord } from "@/lib/notion";
+import { listMyTasks, listPoolTasks, listReviewInbox, getBasicChecklist, listStaff, autoAssignPoolTasks, type TaskRecord } from "@/lib/notion";
+import { notifyTaskAssignments } from "@/lib/slack";
 import DirectorSidebar from "@/components/director/DirectorSidebar";
 import DirectorTopbar from "@/components/director/DirectorTopbar";
 import TaskBoardClient from "@/components/director/TaskBoardClient";
@@ -25,6 +26,16 @@ export default async function DirectorTasksPage() {
   let reviewInbox: TaskRecord[] = [];
   let staffList: Awaited<ReturnType<typeof listStaff>> = [];
   let setupNeeded = false;
+  // 업무풀에 남은 오늘/지연 업무를 지금 근무 중인 조교에게 먼저 배정한다 —
+  // 그래야 이번 화면의 "내 업무"에 바로 보인다. 실패해도 화면은 그대로 뜬다.
+  try {
+    const assigned = await autoAssignPoolTasks();
+    if (assigned.length > 0) {
+      notifyTaskAssignments(assigned.map((a) => ({ typeLabel: a.typeLabel, studentName: a.studentName, ownerName: a.ownerName, pool: false })));
+    }
+  } catch (err) {
+    console.error("director/tasks autoAssignPoolTasks failed", err);
+  }
   try {
     let poolTasksResult: TaskRecord[];
     let reviewInboxResult: TaskRecord[];

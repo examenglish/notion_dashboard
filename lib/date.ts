@@ -14,6 +14,20 @@ export function todayKST(): string {
   return KST_FORMATTER.format(new Date()); // en-CA => YYYY-MM-DD
 }
 
+// ISO 타임스탬프(예: tasks.created_at)를 KST 날짜(YYYY-MM-DD)로. 없으면 null.
+export function isoDateKST(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : KST_FORMATTER.format(d);
+}
+
+const KST_TIME_FORMATTER = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+
+// 현재 KST 시각 "HH:MM" — 근무시간표(isStaffWorkingAt) 비교용.
+export function nowTimeKST(): string {
+  return KST_TIME_FORMATTER.format(new Date());
+}
+
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
 // Pure calendar-date arithmetic (via Date.UTC) so this never depends on the

@@ -1,6 +1,6 @@
 import { Client } from "@notionhq/client";
 import { unstable_cache, revalidateTag } from "next/cache";
-import { todayKST, daysUntilKST } from "./date";
+import { todayKST, daysUntilKST, nowTimeKST } from "./date";
 import { formatBriefingText } from "./briefingFormat";
 import { uploadMaterialFileToStorage, createSignedMaterialFileUrl } from "./supabaseStorage";
 import {
@@ -47,8 +47,11 @@ import {
   taskTypeFromLabel,
   classifyFeedback,
   isReviewOutcome,
+  taskStatusOf,
   type TaskType,
   type NewTaskInput,
+  type TaskStatus,
+  type TaskWorkflow,
 } from "./tasks";
 import { routeTask, type StaffCandidate, type ClassInfo } from "./task-routing";
 import { hashPin, verifyPin } from "./pinAuth";
@@ -80,6 +83,7 @@ import {
   pgListPoolTasks,
   pgListReviewInbox,
   pgListCompletedToday,
+  pgListTaskBoard,
   pgGetTask,
   pgHasPriorFailure,
   pgGetTaskChildren,
@@ -2787,6 +2791,75 @@ export async function getClassProgressForEdit(classId: string, date: string, per
     studentIds,
     perStudent,
   };
+}
+
+// EXAM AI 자연어 "반 진도/과제" 입력(runUnifiedNlInput class_progress) 전용.
+// 반 단위 class_progress 한 행만 쓴다 — createClassProgress처럼 학생별
+// 일일기록/브리핑을 만들지 않는다(자연어 한 줄로는 출결·단어·과제 여부를 알 수
+// 없어 전원 "출석"으로 복제하면 오히려 틀린 기록이 된다). 같은 반·같은 날
+// (교시 없음) 기록이 이미 있으면 진도/과제 칸만 갱신해 중복 행을 만들지 않는다.
+// 이후 강사가 수업기록 화면에서 같은 반/날짜를 열면 이 행이 불러와지고, 저장
+// 시 updateClassProgress가 빠진 학생 기록/브리핑을 그때 만든다.
+export async function saveClassProgressFromText(input: {
+  classId: string;
+  date: string;
+  progress: string;
+  homework: string;
+}): Promise<{ mode: "created" | "updated"; className: string; progress: string; homework: string }> {
+  if (getDbProvider() !== "postgres") throw new Error("반 진도 자연어 입력은 Postgres 모드에서만 지원합니다.");
+  const classes = await listClasses();
+  const cls = classes.find((c) => c.id === input.classId);
+  if (!cls) throw new Error("반을 찾을 수 없습니다.");
+  const classPgId = await pgResolveRelationId("CLASS", input.classId);
+  const progress = input.progress.trim();
+  const homework = input.homework.trim();
+
+  const existing = classPgId
+    ? (await pgQueryRaw("CLASS_PROGRESS", `class_id=eq.${classPgId}&record_date=eq.${input.date}&period=is.null`)).filter(pgNotArchived)[0]
+    : undefined;
+  if (existing) {
+    const patch: Record<string, unknown> = {};
+    if (progress) patch.progress_content = progress;
+    if (homework) patch.homework_content = homework;
+    if (Object.keys(patch).length > 0) await pgPatchById("CLASS_PROGRESS", existing.id as string, patch);
+    // 학생 기록이 이미 만들어진 날이면 그 기록들의 진도 칸도 맞춰준다(updateClassProgressPg와 동일).
+    if (progress) {
+      const dailyRows = await pgFindDailyRecordsForProgress(existing);
+      await Promise.all(dailyRows.map((d) => pgPatchById("DAILY_RECORD", d.id as string, { progress_content: progress })));
+    }
+    return {
+      mode: "updated",
+      className: stripClassSuffix(cls.name),
+      progress: progress || ((existing.progress_content as string) ?? ""),
+      homework: homework || ((existing.homework_content as string) ?? ""),
+    };
+  }
+
+  await pgInsertRow("CLASS_PROGRESS", {
+    title: `${input.date} ${cls.name} 진도`,
+    class_id: classPgId,
+    class_notion_ids: [input.classId],
+    record_date: input.date,
+    subjects: [],
+    progress_content: progress,
+    homework_content: homework,
+    next_test: "",
+    notice: "",
+    period: null,
+    student_records_created: false,
+  });
+  return { mode: "created", className: stripClassSuffix(cls.name), progress, homework };
+}
+
+// 수업기록 PATCH 권한 판단용 — 학생별 기록이 아직 하나도 없는 진도 행(EXAM AI로
+// 반 진도만 먼저 넣어둔 경우)은 덮어쓸 확정 출결이 없으므로 강사/조교도 이어서
+// 완성할 수 있게 한다. 판단이 안 되면(Notion 모드/조회 실패) 기존처럼 막는다.
+export async function classProgressHasStudentRecords(progressId: string): Promise<boolean> {
+  if (getDbProvider() !== "postgres") return true;
+  const row = await pgGetByNotionId("CLASS_PROGRESS", progressId);
+  if (!row) return true;
+  if (row.student_records_created) return true;
+  return (await pgFindDailyRecordsForProgress(row)).length > 0;
 }
 
 // 이미 저장된 수업 기록에 학생별 테스트/과제 점수(성취사항)만 덧붙여
@@ -6728,6 +6801,16 @@ export type TaskRecord = {
   parentTaskId: string | null;
   classId: string | null;
   className: string;
+  // 진행상태/이력(postgres: tasks.source_payload.workflow, lib/tasks.ts TaskWorkflow).
+  status?: TaskStatus;
+  createdAt?: string | null;
+  createdBy?: string;
+  assignedVia?: TaskWorkflow["assignedVia"] | null;
+  assignedAt?: string | null;
+  startedAt?: string | null;
+  startedByName?: string;
+  completedAt?: string | null;
+  completedByName?: string;
 };
 
 function mapTaskPage(
@@ -6761,6 +6844,8 @@ function mapTaskPage(
     parentTaskId: getRelationIds(p, "상위업무")[0] ?? null,
     classId,
     className: classId ? classNames?.get(classId) ?? "" : "",
+    status: taskStatusOf({ done: getCheckbox(p, "완료여부"), ownerId }),
+    createdAt: (p.created_time as string | undefined) ?? null,
   };
 }
 
@@ -6823,29 +6908,50 @@ export async function createTasks(
     }));
     const classInfos: ClassInfo[] = classes.map((c) => ({ id: c.id, studentIds: c.studentIds, assistantIds: c.assistantIds }));
 
+    const nowIso = new Date().toISOString();
+    const today = todayKST();
+    const nowTime = nowTimeKST();
     const planned = inputs.map((input) => {
-      const route = input.forcePool
-        ? ({ assigned: false, pool: true } as const)
-        : routeTask(
-            { type: input.type, studentId: input.studentId, date: input.date, time: input.time },
-            { staff: candidates, classes: classInfos }
-          );
+      // 담당자 직접 지정 > (학생 특정 실패 시) 강제 업무풀 > routeTask 자동배정.
+      // 직접 지정이 아니면 전부 "조교 업무풀 경유"로 보고 pool=true를 남긴다
+      // (listPoolTasks는 담당자가 비어있는 것만 보여주므로, 자동배정된 업무가
+      // 풀 목록에 다시 뜨지는 않는다). 자동배정할 사람이 없으면 유형과
+      // 무관하게 풀에 남겨 나중에 autoAssignPoolTasks/직접 가져가기로 처리한다.
+      const direct = input.ownerId && staffList.some((s) => s.id === input.ownerId) ? input.ownerId : null;
+      const route = direct
+        ? ({ assigned: true, staffId: direct, reason: "direct" } as const)
+        : input.forcePool
+          ? ({ assigned: false, pool: true } as const)
+          : routeTask(
+              // 시간 없는 "오늘" 업무는 지금 근무 중인지로 판단한다 — 빈 시간은
+              // isStaffWorkingAt에서 "항상 근무"로 취급돼, 퇴근/휴무 조교에게도
+              // 배정되던 문제를 막는다. 그런 사람이 없으면 조교 업무풀에 남는다.
+              { type: input.type, studentId: input.studentId, date: input.date, time: input.time || (input.date === today ? nowTime : "") },
+              { staff: candidates, classes: classInfos }
+            );
       const ownerId = route.assigned ? route.staffId : null;
       if (ownerId) {
         const c = candidates.find((c) => c.id === ownerId);
         if (c) c.openTaskCount += 1;
       }
-      const poolFlag = !route.assigned && route.pool;
+      const poolFlag = !direct;
+      const workflow: TaskWorkflow = {
+        ...(input.createdBy ? { createdBy: input.createdBy } : {}),
+        ...(poolFlag ? { pooledAt: nowIso } : {}),
+        ...(route.assigned
+          ? { assignedVia: direct ? "direct" : "auto", assignedAt: nowIso, assignReason: route.reason }
+          : {}),
+      };
       const studentIds = input.studentIds && input.studentIds.length > 0 ? input.studentIds : input.studentId ? [input.studentId] : [];
       const studentName = input.studentId ? names.get(input.studentId) ?? "" : "";
       const studentNamesJoined = studentIds.map((id) => names.get(id) ?? "").filter(Boolean).join(",");
       const label = TASK_TYPE_LABELS[input.type];
-      return { input, ownerId, poolFlag, studentIds, studentName: studentName || studentNamesJoined, label };
+      return { input, ownerId, poolFlag, workflow, studentIds, studentName: studentName || studentNamesJoined, label };
     });
 
     mark("createTasks:before_notion_create");
     const results = await Promise.all(
-      planned.map(async ({ input, ownerId, poolFlag, studentIds, studentName, label }) => {
+      planned.map(async ({ input, ownerId, poolFlag, workflow, studentIds, studentName, label }) => {
         const parentTaskId = input.parentTaskId ? await pgResolveRelationId("TODO", input.parentTaskId) : null;
         const row = await pgInsertRow("TODO", {
           title: `${label}${studentName ? " - " + studentName : ""}`,
@@ -6862,6 +6968,7 @@ export async function createTasks(
           pool: poolFlag,
           parent_task_id: parentTaskId,
           parent_task_notion_ids: input.parentTaskId ? [input.parentTaskId] : [],
+          source_payload: { workflow },
         });
         console.log("[postgres-primary] createTasks: postgres write ok", { id: row.id, type: label });
         fireAndForget("notion:createTasks", async () => {
@@ -6885,7 +6992,8 @@ export async function createTasks(
           await pgSetNotionId("TODO", row.id, page.id);
           console.log("[postgres-primary] createTasks: notion mirror synced", { id: row.id, notionId: page.id });
         });
-        return { id: row.id, type: input.type, ownerId, pool: poolFlag };
+        // 반환값 pool은 기존 의미(= 지금 담당자 없이 업무풀에 남아있음)를 유지한다.
+        return { id: row.id, type: input.type, ownerId, pool: !ownerId };
       })
     );
     mark("createTasks:after_dualwrite");
@@ -6923,7 +7031,10 @@ export async function createTasks(
   // 누적해야 하므로 이 부분은 I/O 없이 순서 보장이 필요하다(입력 순서와
   // 배정 결과가 바뀌면 안 됨).
   const planned = inputs.map((input) => {
-    const route = input.forcePool
+    const direct = input.ownerId && staffList.some((s) => s.id === input.ownerId) ? input.ownerId : null;
+    const route = direct
+      ? ({ assigned: true, staffId: direct } as const)
+      : input.forcePool
       ? ({ assigned: false, pool: true } as const)
       : routeTask(
           { type: input.type, studentId: input.studentId, date: input.date, time: input.time },
@@ -6934,7 +7045,7 @@ export async function createTasks(
       const c = candidates.find((c) => c.id === ownerId);
       if (c) c.openTaskCount += 1;
     }
-    const poolFlag = !route.assigned && route.pool;
+    const poolFlag = !route.assigned;
     const studentName = input.studentId ? names.get(input.studentId) ?? "" : "";
     const label = TASK_TYPE_LABELS[input.type];
     return { input, ownerId, poolFlag, studentName, label };
@@ -7057,7 +7168,11 @@ export async function claimTask(taskId: string, staffId: string): Promise<{ ok: 
       return { ok: false, message: "이미 다른 직원이 가져간 업무입니다." };
     }
     const staffPgId = await pgResolveRelationId("STAFF", staffId);
-    await pgPatchByNotionId("TODO", taskId, { staff_notion_ids: [staffId], staff_id: staffPgId });
+    await pgPatchByNotionId("TODO", taskId, {
+      staff_notion_ids: [staffId],
+      staff_id: staffPgId,
+      source_payload: mergeWorkflow(row, { assignedVia: "claim", assignedAt: new Date().toISOString() }),
+    });
     fireAndForget("notion:claimTask", () =>
       notion.pages.update({ page_id: taskId, properties: { 담당자: { relation: [{ id: staffId }] } } as any })
     );
@@ -7070,6 +7185,132 @@ export async function claimTask(taskId: string, staffId: string): Promise<{ ok: 
   const updated = await notion.pages.update({ page_id: taskId, properties: { 담당자: { relation: [{ id: staffId }] } } as any });
   await dualWriteEntity("TODO", updated);
   return { ok: true };
+}
+
+// tasks.source_payload.workflow에 이력 필드를 병합한다(나머지 source_payload —
+// archived 등 — 는 그대로 보존). row는 방금 읽은 tasks 행.
+function mergeWorkflow(row: Record<string, unknown> | null, patch: TaskWorkflow): Record<string, unknown> {
+  const payload = ((row?.source_payload as Record<string, unknown> | null) ?? {}) as Record<string, unknown>;
+  const workflow = (payload.workflow as TaskWorkflow | undefined) ?? {};
+  return { ...payload, workflow: { ...workflow, ...patch } };
+}
+
+// 조교 "진행 시작" — 담당자가 비어있으면(업무풀) 먼저 가져가기와 같은 검사로
+// 자기에게 배정한 뒤 시작 시각을 남긴다. 다른 사람 업무는 시작할 수 없다.
+// 상태 정본: 완료=tasks.complete, 진행중=workflow.startedAt(새 컬럼 없음).
+export async function startTask(taskId: string, staffId: string): Promise<{ ok: boolean; message?: string }> {
+  if (getDbProvider() !== "postgres") return { ok: false, message: "진행 상태 기록은 Postgres 모드에서만 지원합니다." };
+  const row = await pgGetByNotionId("TODO", taskId);
+  if (!row) return { ok: false, message: "업무를 찾을 수 없습니다." };
+  if (row.complete) return { ok: false, message: "이미 완료된 업무입니다." };
+  const owners = (row.staff_notion_ids as string[] | null) ?? [];
+  if (owners.length > 0 && !owners.includes(staffId)) return { ok: false, message: "다른 직원에게 배정된 업무입니다." };
+  const nowIso = new Date().toISOString();
+  const patch: Record<string, unknown> = {
+    source_payload: mergeWorkflow(row, {
+      startedAt: nowIso,
+      startedBy: staffId,
+      ...(owners.length === 0 ? { assignedVia: "claim", assignedAt: nowIso } : {}),
+    }),
+  };
+  if (owners.length === 0) {
+    patch.staff_notion_ids = [staffId];
+    patch.staff_id = await pgResolveRelationId("STAFF", staffId);
+    fireAndForget("notion:startTask", () =>
+      notion.pages.update({ page_id: taskId, properties: { 담당자: { relation: [{ id: staffId }] } } as any })
+    );
+  }
+  await pgPatchByNotionId("TODO", taskId, patch);
+  return { ok: true };
+}
+
+// 업무풀에 남아있는(담당자 없음) 오늘/지연 업무를 지금 근무 중인 조교/행정에게
+// 자동 배정한다. 배정 규칙은 생성 시와 같은 routeTask(반 담당조교 우선 →
+// 근무 중 → 미완료 업무 적은 순)를 현재 KST 시각 기준으로 다시 돌리는 것뿐 —
+// 새 기준을 만들지 않는다. 마감(예정일/시간)이 이른 업무부터 배정해 급한
+// 업무가 먼저 사람을 잡게 한다. 내일 이후 업무는 그날 근무자에게 가도록 둔다.
+// /director/tasks 로드 시 호출(별도 cron 없음). 실패해도 화면은 계속 뜬다.
+export async function autoAssignPoolTasks(): Promise<{ id: string; typeLabel: string; studentName: string; ownerId: string; ownerName: string }[]> {
+  if (getDbProvider() !== "postgres") return [];
+  const today = todayKST();
+  const now = nowTimeKST();
+  const poolRows = (await pgQueryRaw("TODO", "complete=eq.false&pool=eq.true"))
+    .filter(pgNotArchived)
+    .filter((r) => TASK_TYPE_LABEL_LIST.includes(r.type as string))
+    .filter((r) => ((r.staff_notion_ids as string[] | null) ?? []).length === 0)
+    .filter((r) => !r.due_date || (r.due_date as string) <= today)
+    .sort((a, b) =>
+      String(a.due_date ?? "").localeCompare(String(b.due_date ?? "")) ||
+      String(a.time_text || "99:99").localeCompare(String(b.time_text || "99:99"))
+    );
+  if (poolRows.length === 0) return [];
+
+  const [staffList, classes, openRows, names] = await Promise.all([
+    listStaff(),
+    listClasses(),
+    pgQueryRaw("TODO", "complete=eq.false"),
+    pgStudentNameMap(),
+  ]);
+  const openCounts = new Map<string, number>();
+  for (const r of openRows) {
+    if (!TASK_TYPE_LABEL_LIST.includes(r.type as string)) continue;
+    const owner = (r.staff_notion_ids as string[] | null)?.[0];
+    if (owner) openCounts.set(owner, (openCounts.get(owner) ?? 0) + 1);
+  }
+  const candidates: StaffCandidate[] = staffList.map((s) => ({
+    id: s.id,
+    name: s.name,
+    role: s.role,
+    workHours: s.workHours,
+    openTaskCount: openCounts.get(s.id) ?? 0,
+  }));
+  const classInfos: ClassInfo[] = classes.map((c) => ({ id: c.id, studentIds: c.studentIds, assistantIds: c.assistantIds }));
+  const staffName = new Map(staffList.map((s) => [s.id, s.name]));
+
+  const assigned: { id: string; typeLabel: string; studentName: string; ownerId: string; ownerName: string }[] = [];
+  for (const row of poolRows) {
+    const type = taskTypeFromLabel(row.type as string);
+    if (!type) continue;
+    const studentId = (row.student_notion_ids as string[] | null)?.[0] ?? null;
+    // 근무 여부는 "지금" 기준 — 과거 마감시각으로 판단하면 이미 퇴근한 사람을 고르게 된다.
+    const route = routeTask({ type, studentId, date: today, time: now }, { staff: candidates, classes: classInfos });
+    if (!route.assigned) continue;
+    const id = (row.notion_id as string | null) ?? (row.id as string);
+    // 가져가기(claimTask)와 같은 직전 재확인 — 그 사이 누가 가져갔으면 건너뛴다.
+    const fresh = await pgGetByNotionId("TODO", id);
+    if (!fresh || fresh.complete || ((fresh.staff_notion_ids as string[] | null) ?? []).length > 0) continue;
+    await pgPatchByNotionId("TODO", id, {
+      staff_notion_ids: [route.staffId],
+      staff_id: await pgResolveRelationId("STAFF", route.staffId),
+      source_payload: mergeWorkflow(fresh, { assignedVia: "pool_auto", assignedAt: new Date().toISOString(), assignReason: route.reason }),
+    });
+    const c = candidates.find((c) => c.id === route.staffId);
+    if (c) c.openTaskCount += 1;
+    if (row.notion_id) {
+      const notionId = row.notion_id as string;
+      fireAndForget("notion:autoAssignPoolTasks", () =>
+        notion.pages.update({ page_id: notionId, properties: { 담당자: { relation: [{ id: route.staffId }] } } as any })
+      );
+    }
+    assigned.push({
+      id,
+      typeLabel: row.type as string,
+      studentName: studentId ? names.get(studentId) ?? "" : "",
+      ownerId: route.staffId,
+      ownerName: staffName.get(route.staffId) ?? "",
+    });
+  }
+  return assigned;
+}
+
+// 원장 "지시업무 진행현황" — 미완료 전체 + 최근 7일 안에 갱신(완료 포함)된 업무.
+export async function listTaskBoard(): Promise<TaskRecord[]> {
+  if (getDbProvider() === "postgres") {
+    const since = new Date(Date.now() - 7 * 86400000).toISOString();
+    const [names, staffMap, classMap] = await Promise.all([pgStudentNameMap(), pgStaffNameMap(), classNamePgMap()]);
+    return pgListTaskBoard(since, names, staffMap, classMap) as unknown as TaskRecord[];
+  }
+  return listAllOpenTasks();
 }
 
 export async function hasPriorFailure(studentId: string | null, typeLabel: string, excludeTaskId: string): Promise<boolean> {
@@ -7090,9 +7331,20 @@ export async function hasPriorFailure(studentId: string | null, typeLabel: strin
   return (records as any[]).some((p) => p.id !== excludeTaskId && isReviewOutcome(getRichText(p, "결과값")));
 }
 
-export async function completeTaskEntry(taskId: string, input: { outcome: string; memo?: string; urgent?: boolean }): Promise<void> {
+export async function completeTaskEntry(
+  taskId: string,
+  input: { outcome: string; memo?: string; urgent?: boolean; completedBy?: string }
+): Promise<void> {
   if (getDbProvider() === "postgres") {
-    const patch: Record<string, unknown> = { complete: true, outcome: input.outcome };
+    const row = await pgGetByNotionId("TODO", taskId);
+    const patch: Record<string, unknown> = {
+      complete: true,
+      outcome: input.outcome,
+      source_payload: mergeWorkflow(row, {
+        completedAt: new Date().toISOString(),
+        ...(input.completedBy ? { completedBy: input.completedBy } : {}),
+      }),
+    };
     if (input.memo !== undefined) patch.memo = input.memo;
     if (input.urgent !== undefined) patch.urgent = input.urgent;
     await pgPatchByNotionId("TODO", taskId, patch);

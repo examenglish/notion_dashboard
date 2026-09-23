@@ -25,7 +25,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const repeatFailure = await hasPriorFailure(task.studentId, task.typeLabel, params.id);
   // repeatFailure로 인한 URGENT 승격은 원장 확인함이 다시 계산하지 않고도
   // 그대로 유지되도록 긴급여부 자체에 반영해둔다.
-  await completeTaskEntry(params.id, { outcome, memo, urgent: urgentFlag || repeatFailure });
+  await completeTaskEntry(params.id, { outcome, memo, urgent: urgentFlag || repeatFailure, completedBy: staffId });
 
   const tier = classifyFeedback({ outcome, urgentFlag, repeatFailure });
   // NORMAL 완료는 절대 발신하지 않는다(섹션15, 알림 폭탄 방지) — REVIEW/URGENT만.
