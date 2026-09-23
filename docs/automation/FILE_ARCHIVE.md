@@ -4,7 +4,7 @@
 
 ```
 Slack(파일 첨부 메시지)
-  → EXAM AI /api/slack/events  (Slack 서명·팀 검증, 채널→지점 매핑 확인, FILE_ARCHIVE_SECRET로 서명해 전달)
+  → EXAM AI /api/slack/file-archive  (EXAM AI File Archive 앱 전용: Slack 서명 검증, Slack 팀→지점 판별, FILE_ARCHIVE_SECRET로 서명해 전달)
   → n8n  (서명 검증 → EXAM AI에 이미 있나? → Drive에 이미 있나? → Slack 다운로드 → Drive 업로드)
   → EXAM AI /api/files/archive (서명 검증 → 지점/채널/팀 재검증 → file_archives 멱등 등록)
 EXAM AI 입력창 "거성중2 어순배열 파일 찾아줘" → file_search(읽기 전용) → 현재 지점 + 공용 자료 → [Google Drive에서 열기]
@@ -54,11 +54,17 @@ EXAM AI/
 ### 1) DB
 - `supabase/schema/007_file_archives.sql`을 Supabase SQL Editor에서 **한 번** 실행(사직·금정 공용 DB).
 
-### 2) Slack (지점 Slack 앱)
-- Event Subscriptions: 보관할 채널 종류에 맞게 `message.channels`(공개) / `message.groups`(비공개) 구독 — 기존 Request URL(`/api/slack/events`) 그대로.
-- Bot 권한(n8n이 쓰는 토큰): `files:read`, `channels:history`/`groups:history`(이벤트), `users:read`(선택).
-- 보관할 채널에 봇 초대.
-- 한 Slack 앱은 이벤트 URL이 하나 → 사직·금정이 한 앱을 쓰면 수신 배포(예: 사직)의 `SLACK_FILE_ARCHIVE_CHANNELS`에 두 지점 채널을 모두 매핑하고 `FILE_ARCHIVE_BRANCH_URLS`로 각 지점 등록 주소를 지정한다. 등록은 해당 지점 배포가 자기 매핑으로 다시 검증한다.
+### 2) Slack (별도 앱 "EXAM AI File Archive")
+- 학생기록 봇(`/api/slack/events`, `SLACK_SIGNING_SECRET`)과 **분리**된 앱·endpoint. 학생기록 봇 설정은 건드리지 않는다.
+- Event Subscriptions Request URL: `https://<Slack 이벤트를 받는 지점 배포 도메인>/api/slack/file-archive`
+  (n8n URL이 아님 — n8n은 EXAM AI가 서명해서 보낸 job만 받는다)
+- Bot events: `message.channels`(공개), `message.groups`(비공개 채널도 보관할 때). `file_shared`는 구독하지 않는다(메타데이터가 없어 무시됨).
+- Bot scopes: `channels:history`, `groups:history`(비공개), `files:read`(n8n이 files.info·다운로드에 사용).
+- 보관할 채널에 앱 초대.
+- 지점 = Slack 워크스페이스: `SLACK_FILE_ARCHIVE_TEAMS=T사직팀ID=sajik,T금정팀ID=geumjeong`. 같은 코드로 두 워크스페이스를 처리한다.
+  - 한 앱을 두 워크스페이스에 설치(Request URL 1개)하면 수신 배포가 `FILE_ARCHIVE_BRANCH_URLS`로 다른 지점 등록 주소를 지정한다.
+  - 워크스페이스마다 앱을 따로 만들면 각 지점 배포 URL을 Request URL로 쓰면 된다(각 배포의 signing secret).
+- 등록(`/api/files/archive`)은 해당 지점 배포가 자기 `SLACK_FILE_ARCHIVE_TEAMS`로 다시 검증한다.
 
 ### 3) n8n
 - Credentials(이름은 워크플로 JSON과 동일하게, secret은 n8n에만):
@@ -66,14 +72,16 @@ EXAM AI/
   - `EXAM AI Slack Bot` — Slack API (bot token `xoxb-…`, `files:read`)
 - 환경변수: `FILE_ARCHIVE_SECRET`, `DRIVE_ARCHIVE_FOLDER_SAJIK`, `DRIVE_ARCHIVE_FOLDER_GEUMJEONG`, `NODE_FUNCTION_ALLOW_BUILTIN=crypto`, `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`
 - 워크플로 import → 두 credential 연결 → 활성화 → Webhook Production URL을 EXAM AI `N8N_FILE_ARCHIVE_WEBHOOK_URL`에 등록.
+- Webhook 노드 응답은 `Immediately`(onReceived) — Slack이 n8n을 직접 호출하지 않으므로 challenge용 `Respond to Webhook` 분기는 필요 없다.
 
 ### 4) EXAM AI (Vercel, 지점별 프로젝트)
 | 이름 | 설명 |
 |---|---|
 | `FILE_ARCHIVE_SECRET` | EXAM AI ↔ n8n HMAC 공유 비밀(n8n과 동일 값) |
 | `N8N_FILE_ARCHIVE_WEBHOOK_URL` | n8n Webhook Production URL (Slack 이벤트를 받는 배포에 필요) |
-| `SLACK_FILE_ARCHIVE_CHANNELS` | `C채널ID=sajik,C채널ID=geumjeong` 채널→지점 매핑 |
-| `SLACK_FILE_ARCHIVE_TEAM_ID` | 허용 Slack 팀(없으면 `SLACK_TEAM_ID`) |
+| `SLACK_FILE_ARCHIVE_SIGNING_SECRET` | EXAM AI File Archive 앱의 Signing Secret (Slack 이벤트를 받는 배포) |
+| `SLACK_FILE_ARCHIVE_TEAMS` | `T팀ID=sajik,T팀ID=geumjeong` Slack 워크스페이스→지점 (두 배포 모두) |
+| `SLACK_FILE_ARCHIVE_CHANNELS` | (선택) `C채널ID=sajik,…` — 설정하면 이 채널만 보관 |
 | `FILE_ARCHIVE_BRANCH_URLS` | `sajik=https://…,geumjeong=https://…` (다른 지점 채널을 받는 경우만) |
 
 ## 기존 Drive 자료 backfill(향후)

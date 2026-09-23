@@ -56,8 +56,13 @@ function pruneReplayCache(now: number) {
   }
 }
 
-export function verifySlackRequest(rawBody: string, timestamp: string | null, signature: string | null): SlackVerification {
-  const secret = process.env.SLACK_SIGNING_SECRET;
+// secret 기본값은 학생기록 봇(SLACK_SIGNING_SECRET). 파일 자동보관 앱은 자기 signing secret을 넘긴다.
+export function verifySlackRequest(
+  rawBody: string,
+  timestamp: string | null,
+  signature: string | null,
+  secret = process.env.SLACK_SIGNING_SECRET
+): SlackVerification {
   if (!secret) return { ok: false, reason: "configuration" };
 
   const timestampNumber = Number(timestamp);
@@ -74,6 +79,11 @@ export function verifySlackRequest(rawBody: string, timestamp: string | null, si
   if (replayCache.has(signature)) return { ok: true, replay: true };
   replayCache.set(signature, now + FIVE_MINUTES_SECONDS);
   return { ok: true, replay: false };
+}
+
+/** 전달 실패 시 예약을 풀어 Slack 재전송이 다시 처리되게 한다. */
+export function releaseSlackEvent(eventId: string) {
+  replayCache.delete(`event:${eventId}`);
 }
 
 export function reserveSlackEvent(eventId: string): boolean {

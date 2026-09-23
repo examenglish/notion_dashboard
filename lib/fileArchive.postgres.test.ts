@@ -100,6 +100,7 @@ function fakeFetch() {
 
 const SECRET = "test-file-archive-secret";
 const SLACK_SECRET = "test-slack-signing";
+const ARCHIVE_SLACK_SECRET = "test-archive-app-signing";
 function useBranch(code: "sajik" | "geumjeong") {
   process.env.ACADEMY_BRANCH_ID = code;
   vi.resetModules();
@@ -131,7 +132,8 @@ beforeEach(() => {
     SLACK_SIGNING_SECRET: SLACK_SECRET,
     SLACK_TEAM_ID: "T_ACADEMY",
     SLACK_BOT_TOKEN: "xoxb-should-never-leak",
-    SLACK_FILE_ARCHIVE_CHANNELS: "C_SAJIK=sajik,C_GJ=geumjeong",
+    SLACK_FILE_ARCHIVE_SIGNING_SECRET: ARCHIVE_SLACK_SECRET,
+    SLACK_FILE_ARCHIVE_TEAMS: "T_SAJIK=sajik,T_GJ=geumjeong",
     N8N_FILE_ARCHIVE_WEBHOOK_URL: "https://n8n.example/webhook/exam-ai-file-archive",
     FILE_ARCHIVE_BRANCH_URLS: "sajik=https://staffsj.example,geumjeong=https://staff.example",
   });
@@ -142,7 +144,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   for (const k of [
     "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "ACADEMY_BRANCH_ID", "ACADEMY_DB_PROVIDER", "ACADEMY_STUDENT_READ_PROVIDER", "SESSION_SECRET",
-    "FILE_ARCHIVE_SECRET", "SLACK_SIGNING_SECRET", "SLACK_TEAM_ID", "SLACK_BOT_TOKEN", "SLACK_FILE_ARCHIVE_CHANNELS", "N8N_FILE_ARCHIVE_WEBHOOK_URL", "FILE_ARCHIVE_BRANCH_URLS",
+    "FILE_ARCHIVE_SECRET", "SLACK_SIGNING_SECRET", "SLACK_TEAM_ID", "SLACK_BOT_TOKEN", "SLACK_FILE_ARCHIVE_CHANNELS", "SLACK_FILE_ARCHIVE_SIGNING_SECRET", "SLACK_FILE_ARCHIVE_TEAMS", "N8N_FILE_ARCHIVE_WEBHOOK_URL", "FILE_ARCHIVE_BRANCH_URLS",
   ]) delete process.env[k];
 });
 
@@ -153,7 +155,7 @@ function signed(body: string, secret = SECRET) {
 }
 function archiveBody(over: Record<string, unknown> = {}) {
   return {
-    branchCode: "sajik", teamId: "T_ACADEMY", channelId: "C_SAJIK", messageTs: "1790000000.000100", threadTs: "",
+    branchCode: "sajik", teamId: "T_SAJIK", channelId: "C_SAJIK", messageTs: "1790000000.000100", threadTs: "",
     fileId: "F0ABCDEF1", userId: "U_MINJI", uploaderName: "Minji (Slack)", messageText: "거성중2 중간고사 어순배열 수정본입니다",
     originalFilename: "거성중2_어순배열_수정본.pdf", mimeType: "application/pdf", fileSize: 12345, uploadedAt: new Date().toISOString(),
     driveFileId: "1AbCdEfGhIjKlMnOp", driveUrl: "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view", driveFolderId: "FOLDER0001",
@@ -193,7 +195,7 @@ describe("저장(n8n → EXAM AI archive API)", () => {
 
   it("2. 금정 Slack PDF → 금정 배포에서 금정 archive", async () => {
     useBranch("geumjeong");
-    const r = await postArchive(archiveBody({ branchCode: "geumjeong", channelId: "C_GJ", fileId: "F0GJFILE01", driveFileId: "1GjDriveFile0001" }));
+    const r = await postArchive(archiveBody({ branchCode: "geumjeong", teamId: "T_GJ", channelId: "C_GJ", fileId: "F0GJFILE01", driveFileId: "1GjDriveFile0001" }));
     expect(r.status).toBe(201);
     expect(tables.file_archives[0]).toMatchObject({ branch_id: "b-gj", visibility: "branch" });
   });
@@ -205,7 +207,7 @@ describe("저장(n8n → EXAM AI archive API)", () => {
     expect(again.body).toMatchObject({ status: "existing", driveFileId: "1AbCdEfGhIjKlMnOp" });
     expect(tables.file_archives).toHaveLength(1);
     const { GET } = await import("@/app/api/files/archive/route");
-    const search = "?teamId=T_ACADEMY&fileId=F0ABCDEF1";
+    const search = "?teamId=T_SAJIK&fileId=F0ABCDEF1";
     const s = signed(search);
     const res = await GET(new NextRequest(`http://localhost/api/files/archive${search}`, { headers: { "x-exam-ai-timestamp": s.ts, "x-exam-ai-signature": s.sig } }));
     expect(await res.json()).toMatchObject({ archived: true, driveFileId: "1AbCdEfGhIjKlMnOp" });
@@ -233,24 +235,35 @@ describe("저장(n8n → EXAM AI archive API)", () => {
   });
 });
 
-describe("Slack 이벤트 → n8n 전달", () => {
-  async function slackEvent(event: Record<string, unknown>, team = "T_ACADEMY") {
-    const { POST } = await import("@/app/api/slack/events/route");
-    const body = JSON.stringify({ type: "event_callback", team_id: team, event_id: `Ev${Math.random()}`, event });
-    const ts = String(Math.floor(Date.now() / 1000));
-    const sig = `v0=${createHmac("sha256", SLACK_SECRET).update(`v0:${ts}:${body}`).digest("hex")}`;
-    const res = await POST(new NextRequest("https://staffsj.example/api/slack/events", {
+describe("Slack 이벤트(File Archive 앱) → n8n 전달", () => {
+  // tsOffset: Slack 재전송은 새 타임스탬프/서명으로 온다
+  async function slackPost(path: string, body: string, secret = ARCHIVE_SLACK_SECRET, tsOffset = 0) {
+    const { POST } = await import(path === "events" ? "@/app/api/slack/events/route" : "@/app/api/slack/file-archive/route");
+    const ts = String(Math.floor(Date.now() / 1000) + tsOffset);
+    const sig = `v0=${createHmac("sha256", secret).update(`v0:${ts}:${body}`).digest("hex")}`;
+    const res = await POST(new NextRequest(`https://staffsj.example/api/slack/${path}`, {
       method: "POST", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": sig }, body,
     }));
     return { status: res.status, body: await res.json() };
   }
+  const envelope = (event: Record<string, unknown>, team = "T_SAJIK", eventId = `Ev${Math.random()}`) =>
+    JSON.stringify({ type: "event_callback", team_id: team, event_id: eventId, event });
+  const slackEvent = (event: Record<string, unknown>, team = "T_SAJIK") => slackPost("file-archive", envelope(event, team));
   const fileEvent = (over: Record<string, unknown> = {}) => ({
     type: "message", subtype: "file_share", channel: "C_SAJIK", user: "U_MINJI", ts: "1790000000.000100", text: "거성중2 어순배열 수정본입니다",
     files: [{ id: "F0ABCDEF1", name: "거성중2_어순배열.pdf", mimetype: "application/pdf", size: 100, created: 1790000000, url_private_download: "https://files.slack.com/secret-url" }],
     ...over,
   });
 
-  it("매핑된 채널 파일 → 서명해서 n8n 전달(Slack 토큰·다운로드 URL 미포함), 지점/등록주소 포함", async () => {
+  it("url_verification challenge 응답, 서명 틀리면 401(학생기록 봇 secret으로 서명해도 거부)", async () => {
+    const challenge = JSON.stringify({ type: "url_verification", challenge: "abc123" });
+    expect(await slackPost("file-archive", challenge)).toEqual({ status: 200, body: { challenge: "abc123" } });
+    expect((await slackPost("file-archive", challenge, SLACK_SECRET)).status).toBe(401);
+    delete process.env.SLACK_FILE_ARCHIVE_SIGNING_SECRET;
+    expect((await slackPost("file-archive", challenge)).status).toBe(503);
+  });
+
+  it("사직 워크스페이스 파일 → 서명해서 n8n 전달(Slack 토큰·다운로드 URL 미포함), 금정 워크스페이스 → 금정 등록 주소", async () => {
     const r = await slackEvent(fileEvent());
     expect(r).toEqual({ status: 200, body: { ok: true, archive: 1 } });
     expect(n8nCalls).toHaveLength(1);
@@ -258,21 +271,45 @@ describe("Slack 이벤트 → n8n 전달", () => {
     expect(call.body).not.toContain("xoxb");
     expect(call.body).not.toContain("files.slack.com");
     const job = JSON.parse(call.body);
-    expect(job).toMatchObject({ branchCode: "sajik", callbackUrl: "https://staffsj.example/api/files/archive", channelId: "C_SAJIK", teamId: "T_ACADEMY" });
+    expect(job).toMatchObject({
+      version: 1, branchCode: "sajik", callbackUrl: "https://staffsj.example/api/files/archive", teamId: "T_SAJIK", channelId: "C_SAJIK",
+      messageTs: "1790000000.000100", threadTs: "", userId: "U_MINJI", messageText: "거성중2 어순배열 수정본입니다",
+      files: [{ id: "F0ABCDEF1", name: "거성중2_어순배열.pdf", mimeType: "application/pdf", size: 100 }],
+    });
     expect(call.headers["x-exam-ai-signature"]).toBe(`v1=${createHmac("sha256", SECRET).update(`${call.headers["x-exam-ai-timestamp"]}.${call.body}`).digest("hex")}`);
-    // 금정 채널 → 금정 등록 주소
-    await slackEvent(fileEvent({ channel: "C_GJ" }));
-    expect(JSON.parse(n8nCalls[1].body)).toMatchObject({ branchCode: "geumjeong", callbackUrl: "https://staff.example/api/files/archive" });
+    await slackEvent(fileEvent({ channel: "C_GJ_ANY" }), "T_GJ");
+    expect(JSON.parse(n8nCalls[1].body)).toMatchObject({ branchCode: "geumjeong", teamId: "T_GJ", callbackUrl: "https://staff.example/api/files/archive" });
   });
 
-  it("n8n 전달 실패 → 503(Slack 재전송 유도), 매핑 안 된 채널·다른 팀·봇 메시지는 전달 안 함", async () => {
+  it("같은 event_id 재전송 → 한 번만 전달, n8n 실패 → 503 후 재전송은 다시 전달", async () => {
+    const body = envelope(fileEvent(), "T_SAJIK", "EvSAME1");
+    expect((await slackPost("file-archive", body)).status).toBe(200);
+    expect((await slackPost("file-archive", body, ARCHIVE_SLACK_SECRET, 1)).body).toMatchObject({ duplicate: true });
+    expect(n8nCalls).toHaveLength(1);
+
     process.env.__N8N_DOWN = "1";
-    expect((await slackEvent(fileEvent())).status).toBe(503);
+    const failing = envelope(fileEvent(), "T_SAJIK", "EvFAIL1");
+    expect((await slackPost("file-archive", failing)).status).toBe(503);
     delete process.env.__N8N_DOWN;
-    n8nCalls.length = 0;
-    await slackEvent(fileEvent({ channel: "C_UNKNOWN" }));
-    await slackEvent(fileEvent({ bot_id: "B1" }));
-    expect((await slackEvent(fileEvent(), "T_OTHER")).status).toBe(403);
+    expect((await slackPost("file-archive", failing, ARCHIVE_SLACK_SECRET, 1)).status).toBe(200);
+    expect(n8nCalls).toHaveLength(3); // 성공 1 + 실패 1 + 재전송 성공 1
+  });
+
+  it("매핑 안 된 팀·봇 메시지·파일 없는 메시지·file_shared는 200 무시, 채널 제한 시 목록 밖 채널 무시", async () => {
+    for (const r of [
+      await slackEvent(fileEvent(), "T_OTHER"),
+      await slackEvent(fileEvent({ bot_id: "B1" })),
+      await slackEvent(fileEvent({ subtype: undefined, files: [] })),
+      await slackEvent({ type: "file_shared", file_id: "F0ABCDEF1", channel_id: "C_SAJIK", user_id: "U_MINJI" }),
+    ]) expect(r).toEqual({ status: 200, body: { ok: true, ignored: true } });
+    process.env.SLACK_FILE_ARCHIVE_CHANNELS = "C_SAJIK=sajik";
+    expect((await slackEvent(fileEvent({ channel: "C_UNKNOWN" }))).body).toMatchObject({ ignored: true });
+    expect((await slackEvent(fileEvent())).body).toMatchObject({ archive: 1 });
+    expect(n8nCalls).toHaveLength(1);
+  });
+
+  it("학생기록 봇 endpoint(/api/slack/events)는 파일 메시지를 n8n으로 보내지 않는다", async () => {
+    await slackPost("events", envelope(fileEvent(), "T_ACADEMY"), SLACK_SECRET);
     expect(n8nCalls).toHaveLength(0);
   });
 });
@@ -354,18 +391,22 @@ describe("보안", () => {
     expect((await postArchive(archiveBody(), { unsigned: true })).status).toBe(401);
     expect((await postArchive(archiveBody(), { secret: "wrong" })).status).toBe(401);
     const { GET } = await import("@/app/api/files/archive/route");
-    expect((await GET(new NextRequest("http://localhost/api/files/archive?teamId=T_ACADEMY&fileId=F0ABCDEF1"))).status).toBe(401);
+    expect((await GET(new NextRequest("http://localhost/api/files/archive?teamId=T_SAJIK&fileId=F0ABCDEF1"))).status).toBe(401);
     expect(tables.file_archives).toHaveLength(0);
   });
 
   it("12. 잘못된 지점 매핑 → 403(n8n이 보낸 지점을 믿지 않음)", async () => {
-    // 사직 배포에 금정 지점/금정 채널로 등록 시도
-    expect((await postArchive(archiveBody({ branchCode: "geumjeong", channelId: "C_GJ" }))).status).toBe(403);
-    // 사직 지점이라 주장하지만 금정 채널
-    expect((await postArchive(archiveBody({ channelId: "C_GJ" }))).status).toBe(403);
-    // 매핑 안 된 채널, 다른 Slack 팀
-    expect((await postArchive(archiveBody({ channelId: "C_RANDOM" }))).status).toBe(403);
+    // 사직 배포에 금정 지점/금정 워크스페이스로 등록 시도
+    expect((await postArchive(archiveBody({ branchCode: "geumjeong", teamId: "T_GJ", channelId: "C_GJ" }))).status).toBe(403);
+    // 사직 지점이라 주장하지만 금정 워크스페이스
+    expect((await postArchive(archiveBody({ teamId: "T_GJ" }))).status).toBe(403);
+    // 매핑 안 된 Slack 팀
     expect((await postArchive(archiveBody({ teamId: "T_OTHER" }))).status).toBe(403);
+    // 채널 제한을 켜면 목록 밖 채널·다른 지점 채널은 거부
+    process.env.SLACK_FILE_ARCHIVE_CHANNELS = "C_SAJIK=sajik,C_GJ=geumjeong";
+    expect((await postArchive(archiveBody({ channelId: "C_RANDOM" }))).status).toBe(403);
+    expect((await postArchive(archiveBody({ channelId: "C_GJ" }))).status).toBe(403);
+    delete process.env.SLACK_FILE_ARCHIVE_CHANNELS;
     // 자격증명이 붙은 URL/Drive가 아닌 URL
     expect((await postArchive(archiveBody({ driveUrl: "https://drive.google.com/file/d/X/view?access_token=abc" }))).status).toBe(400);
     expect((await postArchive(archiveBody({ driveUrl: "https://evil.example/x" }))).status).toBe(400);
@@ -379,7 +420,7 @@ describe("보안", () => {
     const r2 = await postArchive(archiveBody());
     const logged = JSON.stringify(spies.flatMap((s) => s.mock.calls));
     const responses = JSON.stringify([r1.body, r2.body]);
-    for (const secret of [SECRET, SLACK_SECRET, "xoxb-should-never-leak", "service-key"]) {
+    for (const secret of [SECRET, SLACK_SECRET, ARCHIVE_SLACK_SECRET, "xoxb-should-never-leak", "service-key"]) {
       expect(logged).not.toContain(secret);
       expect(responses).not.toContain(secret);
     }

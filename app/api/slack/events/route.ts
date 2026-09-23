@@ -8,7 +8,6 @@ import {
   type SlackEnvelope,
   verifySlackRequest,
 } from "@/lib/slack";
-import { buildArchiveJob, forwardArchiveJob, type SlackFileEvent } from "@/lib/fileArchive";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -39,19 +38,6 @@ export async function POST(req: NextRequest) {
   }
   if (envelope.team_id !== process.env.SLACK_TEAM_ID) {
     return NextResponse.json({ error: "workspace_not_allowed" }, { status: 403 });
-  }
-
-  // 파일 자동보관: 매핑된 채널의 파일 첨부 메시지는 n8n(Slack 다운로드 → Drive → 파일 인덱스)으로
-  // 서명해서 넘긴다. Slack 토큰/다운로드 URL은 넘기지 않는다. 전달 실패면 5xx로 응답해 Slack이
-  // 재전송하게 한다(n8n 쪽은 Slack file id 기준 멱등이라 재전송돼도 중복 보관되지 않음).
-  const archiveJob = envelope.event ? buildArchiveJob(envelope, envelope.event as SlackFileEvent, req.nextUrl.origin) : null;
-  if (archiveJob) {
-    const forwarded = await forwardArchiveJob(archiveJob);
-    if (!forwarded) {
-      console.error("slack file archive forward failed", envelope.event_id);
-      return NextResponse.json({ error: "archive_forward_failed" }, { status: 503 });
-    }
-    return NextResponse.json({ ok: true, archive: archiveJob.files.length });
   }
 
   const allowedChannels = (process.env.SLACK_STUDENT_LOG_CHANNEL_ID ?? "")

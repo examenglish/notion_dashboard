@@ -7,8 +7,8 @@
 //  - EXAM AI: 메타데이터 정본 + 지점/공용 범위 + 자연어 검색
 //
 // 보안: EXAM AI ↔ n8n 호출은 FILE_ARCHIVE_SECRET HMAC-SHA256 서명(`v1=hex`, 타임스탬프 5분창).
-// 지점은 n8n이 보낸 값을 믿지 않고, 이 배포의 지점 코드 + 채널→지점 매핑(SLACK_FILE_ARCHIVE_CHANNELS)
-// + 허용 Slack 팀으로 서버가 다시 검증한다. Slack 토큰·Drive 자격증명은 저장/전달/응답하지 않는다.
+// 지점은 n8n이 보낸 값을 믿지 않고, 이 배포의 지점 코드 + Slack 팀→지점 매핑(SLACK_FILE_ARCHIVE_TEAMS,
+// 선택적으로 채널 제한 SLACK_FILE_ARCHIVE_CHANNELS)으로 서버가 다시 검증한다. Slack 토큰·Drive 자격증명은 저장/전달/응답하지 않는다.
 import { createHmac, timingSafeEqual } from "crypto";
 import {
   branchCode,
@@ -28,18 +28,38 @@ function archiveSecret(): string | null {
   return process.env.FILE_ARCHIVE_SECRET || null;
 }
 
-/** "C0123=sajik,C0456=geumjeong" → Map(channel → branch code) */
-export function archiveChannelMap(): Map<string, string> {
+/** "K=v,K=v" → Map(K → v) */
+function pairMap(value: string | undefined): Map<string, string> {
   const map = new Map<string, string>();
-  for (const part of (process.env.SLACK_FILE_ARCHIVE_CHANNELS ?? "").split(",")) {
-    const [channel, code] = part.split("=").map((v) => v?.trim());
-    if (channel && code) map.set(channel, code);
+  for (const part of (value ?? "").split(",")) {
+    const [key, code] = part.split("=").map((v) => v?.trim());
+    if (key && code) map.set(key, code);
   }
   return map;
 }
 
-function allowedTeamId(): string | null {
-  return process.env.SLACK_FILE_ARCHIVE_TEAM_ID || process.env.SLACK_TEAM_ID || null;
+/** "T0SAJIK=sajik,T0GEUMJ=geumjeong" → Map(Slack team → branch code). 지점은 Slack 워크스페이스로 구분한다. */
+export function archiveTeamMap(): Map<string, string> {
+  return pairMap(process.env.SLACK_FILE_ARCHIVE_TEAMS);
+}
+
+/** (선택) "C0123=sajik,..." — 설정하면 이 채널만 보관한다(채널 → 지점). 비우면 팀의 모든 채널. */
+export function archiveChannelMap(): Map<string, string> {
+  return pairMap(process.env.SLACK_FILE_ARCHIVE_CHANNELS);
+}
+
+/** Slack 팀(+선택 채널 제한) → 지점 코드. 보관 대상이 아니면 null. */
+export function resolveArchiveBranch(teamId: string | undefined, channelId: string | undefined): string | null {
+  if (!teamId || !channelId) return null;
+  const teamCode = archiveTeamMap().get(teamId) ?? null;
+  const channels = archiveChannelMap();
+  if (channels.size === 0) return teamCode;
+  const channelCode = channels.get(channelId);
+  if (!channelCode) return null;
+  // 팀 매핑이 있으면 채널 지점과 일치해야 하고, 없으면 기존 단일 팀 설정(SLACK_FILE_ARCHIVE_TEAM_ID/SLACK_TEAM_ID)만 허용
+  if (teamCode) return teamCode === channelCode ? channelCode : null;
+  const legacyTeam = process.env.SLACK_FILE_ARCHIVE_TEAM_ID || process.env.SLACK_TEAM_ID;
+  return legacyTeam && legacyTeam === teamId ? channelCode : null;
 }
 
 /** "sajik=https://a,geumjeong=https://b" → n8n이 등록 API를 부를 지점별 주소 */
@@ -132,9 +152,7 @@ export function validateArchiveInput(body: unknown): { ok: true; input: ArchiveI
 export function checkArchiveScope(input: Pick<ArchiveInput, "branchCode" | "teamId" | "channelId">): { ok: true } | { ok: false; reason: string } {
   const myCode = branchCode();
   if (!myCode || input.branchCode !== myCode) return { ok: false, reason: "branch_mismatch" };
-  const team = allowedTeamId();
-  if (!team || input.teamId !== team) return { ok: false, reason: "team_not_allowed" };
-  if (archiveChannelMap().get(input.channelId) !== myCode) return { ok: false, reason: "channel_not_mapped_to_branch" };
+  if (resolveArchiveBranch(input.teamId, input.channelId) !== myCode) return { ok: false, reason: "team_or_channel_not_mapped_to_branch" };
   return { ok: true };
 }
 
@@ -244,9 +262,8 @@ export function buildArchiveJob(envelope: { team_id?: string; event_id?: string 
   if (event.subtype && event.subtype !== "file_share") return null;
   const files = (event.files ?? []).filter((f) => f.id && f.mode !== "tombstone" && f.mode !== "external");
   if (files.length === 0) return null;
-  const code = archiveChannelMap().get(event.channel ?? "");
-  if (!code) return null;
-  if (!envelope.team_id || envelope.team_id !== allowedTeamId()) return null;
+  const code = resolveArchiveBranch(envelope.team_id, event.channel);
+  if (!code || !envelope.team_id) return null;
   const base = code === branchCode() ? requestOrigin : branchBaseUrls().get(code);
   if (!base) return null;
   return {
