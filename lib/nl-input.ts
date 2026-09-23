@@ -18,7 +18,6 @@ import {
   getAttendanceOnDate,
   saveClassProgressFromText,
   listClassProgressPeriods,
-  setTaskDependency,
   saveStudentLearningRecord,
   linkLearningRecordTask,
   type ProgressEditMode,
@@ -2789,24 +2788,30 @@ async function processIntents(
     if (dup) outcomes.push({ route: "task", label: t.label, status: "완료", message: `업무 생략: ${t.label} — 학생 기록의 후속 업무로 이미 생성됨` });
     return !dup;
   });
-  const created = await createTaskOutcomes(dedupedTaskInputs, roster, studentNames);
-  outcomes.push(...created.outcomes);
-  // 선후관계 기록(생성 순서 = dedupedTaskInputs 순서)
-  if (created.createdIds.length === dedupedTaskInputs.length) {
-    const idOf = new Map(dedupedTaskInputs.map((t, i) => [t, created.createdIds[i]]));
-    for (const t of dedupedTaskInputs) {
-      const predId = t.after ? idOf.get(t.after) : undefined;
-      const selfId = idOf.get(t);
-      if (predId && selfId) {
-        try {
-          await setTaskDependency(selfId, predId);
-        } catch (err) {
-          console.error("[exam-ai] setTaskDependency failed", { message: err instanceof Error ? err.message : String(err) });
-        }
-      }
+  // 선후관계: 선행 업무를 먼저 만들고, 후속 업무는 선행 업무 id(dependsOn)를 담아 생성한다
+  // — 생성과 동시에 선행 대기 상태라 자동배정/가져가기 틈이 없다. 선행 생성이 실패하면
+  // 후속 업무는 만들지 않는다.
+  const idOf = new Map<TaskInputEntry, string>();
+  const createdSlack: SlackTask[] = [];
+  let remaining = dedupedTaskInputs;
+  while (remaining.length > 0) {
+    const ready = remaining.filter((t) => !t.after || idOf.has(t.after) || !dedupedTaskInputs.includes(t.after));
+    if (ready.length === 0) {
+      remaining.forEach((t) =>
+        outcomes.push({ route: "task", label: t.label, status: "실패", message: `업무 등록 안 함: ${t.label} — 앞 업무를 만들지 못해 순서를 보장할 수 없습니다.` })
+      );
+      break;
     }
+    const batch = ready.map((t) =>
+      t.after && idOf.has(t.after) ? { ...t, input: { ...t.input, dependsOn: [idOf.get(t.after) as string] } } : t
+    );
+    const created = await createTaskOutcomes(batch, roster, studentNames);
+    outcomes.push(...created.outcomes);
+    createdSlack.push(...created.slackTasks);
+    if (created.createdIds.length === ready.length) ready.forEach((t, i) => idOf.set(t, created.createdIds[i]));
+    remaining = remaining.filter((t) => !ready.includes(t));
   }
-  const slackTasks = [...recordSlackTasks, ...created.slackTasks];
+  const slackTasks = [...recordSlackTasks, ...createdSlack];
 
   const ok = outcomes.length > 0 && outcomes.every((o) => o.status !== "실패");
   const lastContext = [...outcomes].reverse().find((o) => o.context)?.context;

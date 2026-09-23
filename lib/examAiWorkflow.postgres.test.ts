@@ -6,6 +6,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UnifiedIntent } from "@/lib/anthropic";
 
+// 라우트 핸들러(app/api/...)를 직접 호출하는 테스트용 — Next 전용 표식 모듈은 비워둔다.
+vi.mock("server-only", () => ({}));
+
 vi.mock("next/cache", () => ({
   unstable_cache: (fn: (...args: any[]) => any) => fn,
   revalidateTag: vi.fn(),
@@ -283,8 +286,11 @@ describe("1. 자연어 → 반 진도/과제 저장", () => {
 
 describe("2~5. 업무지시 → 배정/업무풀 → 진행 → 완료 → 원장 진행현황", () => {
   it("'이사벨A 김민수 대화문 암기 확인…' 동명이인 → '고2B' 답변으로 확정 → 업무 생성 → 시작 → 완료 → 진행현황", async () => {
+    // 학생관리 자동배정은 반이 하나로 정해지고 그 반 담당조교가 정확히 1명일 때만 —
+    // 문장의 반(고2 이사벨A)을 명시하고, 그 반 담당조교를 박민지 1명으로 둔다.
+    tables.classes.find((c) => c.id === "cls-isabel-a")!.assistant_notion_ids = ["staff-minji"];
     parseUnifiedInput.mockResolvedValue([
-      intent({ route: "task", taskType: "암기확인", students: ["김민수"], instruction: "대화문 암기 확인, 미완이면 재시험" }),
+      intent({ route: "task", taskType: "암기확인", className: "고2 이사벨A", students: ["김민수"], instruction: "대화문 암기 확인, 미완이면 재시험" }),
     ]);
     const { runUnifiedNlInput, continuePendingInput } = await import("@/lib/nl-input");
     const first = await runUnifiedNlInput("김민수 대화문 암기 확인하고 미완이면 재시험 시켜줘", { staffName: "원장님" });
@@ -368,12 +374,14 @@ describe("2~5. 업무지시 → 배정/업무풀 → 진행 → 완료 → 원�
     expect((await notion.listPoolTasks()).map((t) => t.status)).toEqual(["업무풀", "업무풀"]);
     expect(await notion.autoAssignPoolTasks()).toEqual([]);
 
-    // 최소라 근무 시작 → 풀의 오늘 업무가 자동배정
+    // 최소라 근무 시작 → 출력·배부(전달)만 근무 조교에게 자동배정. 학생관리(암기확인)는 반
+    // 담당조교가 없어 "근무 중인 아무 조교"에게 가지 않고 학생관리 Pool에 남는다.
     tables.staff.find((s) => s.name === "최소라")!.work_schedule = "";
     const assigned = await notion.autoAssignPoolTasks();
-    expect(assigned.map((a) => a.ownerName)).toEqual(["최소라", "최소라"]);
-    expect(tables.tasks.every((t) => t.staff_notion_ids[0] === "staff-sora" && t.source_payload.workflow.assignedVia === "pool_auto")).toBe(true);
-    expect(await notion.listPoolTasks()).toEqual([]);
+    expect(assigned.map((a) => [a.typeLabel, a.ownerName])).toEqual([["전달", "최소라"]]);
+    expect(tables.tasks.find((t) => t.type === "전달")!.source_payload.workflow.assignedVia).toBe("pool_auto");
+    expect(tables.tasks.find((t) => t.type === "암기확인")!.staff_notion_ids).toEqual([]);
+    expect((await notion.listPoolTasks()).map((t) => t.typeLabel)).toEqual(["암기확인"]);
   });
 
   it("업무풀 업무는 조교가 '진행 시작'으로 바로 가져가 진행할 수 있다", async () => {
@@ -1452,5 +1460,139 @@ describe("업무 Pool(학생관리/교재편집/출력·배부/행정) + 가져�
     const [a, b] = await Promise.all([notion.claimTask(id, "staff-minji"), notion.claimTask(id, "staff-sora")]);
     expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
     expect(tables.tasks[0].staff_notion_ids).toHaveLength(1);
+  });
+});
+
+describe("배포 전 필수 수정: 선후관계 우회 차단 + 자동배정 정책", () => {
+  async function completeViaApi(taskId: string, staffId: string) {
+    const { NextRequest } = await import("next/server");
+    const { POST } = await import("@/app/api/tasks/[id]/complete/route");
+    const req = new NextRequest(`http://localhost/api/tasks/${taskId}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-staff-id": staffId },
+      body: JSON.stringify({ outcome: "출력완료" }),
+    });
+    const res = await POST(req, { params: { id: taskId } });
+    return { status: res.status, body: await res.json() };
+  }
+
+  it("A. 교재편집 → 출력: 생성 직후 출력은 담당자 없음·선행 대기, 편집 완료 전 가져가기/시작/완료 모두 실패, 완료 후 모두 가능", async () => {
+    // 근무 중 조교가 있어도(근무시간표 비어있음 = 항상 근무) 후속 출력은 배정되지 않아야 한다.
+    parseUnifiedInput.mockResolvedValueOnce([
+      intent({ intentClass: "action", route: "task", taskType: "교재편집", instruction: "거성중2 어순배열 수정" }),
+      intent({ intentClass: "action", route: "task", taskType: "출력", instruction: "거성중2 어순배열 출력", quantity: 15, afterPrevious: true }),
+    ]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    await runUnifiedNlInput("거성중2 어순배열 수정하고 15부 출력해줘", { staffName: "서도영", staffId: "staff-seo" });
+    const edit = tables.tasks.find((t) => t.type === "교재편집")!;
+    const print = tables.tasks.find((t) => t.type === "출력")!;
+    expect(edit).toMatchObject({ staff_notion_ids: [], pool: true });
+    expect(print).toMatchObject({ staff_notion_ids: [], pool: true });
+    expect(print.source_payload.workflow.dependsOn).toEqual([edit.id]);
+
+    const notion = await import("@/lib/notion");
+    expect((await notion.listPoolTasks()).find((t) => t.typeLabel === "출력")!.blocked).toBe(true);
+    expect(await notion.autoAssignPoolTasks()).toEqual([]);
+    expect((await notion.claimTask(print.id, "staff-sora")).ok).toBe(false);
+    expect((await notion.startTask(print.id, "staff-sora")).ok).toBe(false);
+    const early = await completeViaApi(print.id, "staff-sora");
+    expect(early.status).toBe(409);
+    expect(early.body.message).toContain("먼저 끝나야 하는 업무가 있습니다");
+    expect(print).toMatchObject({ staff_notion_ids: [], complete: false });
+
+    await notion.claimTask(edit.id, "staff-minji");
+    await notion.completeTaskEntry(edit.id, { outcome: "완료", completedBy: "staff-minji" });
+    expect(await notion.claimTask(print.id, "staff-sora")).toEqual({ ok: true });
+    expect(await notion.startTask(print.id, "staff-sora")).toEqual({ ok: true });
+    const done = await completeViaApi(print.id, "staff-sora");
+    expect(done.status).toBe(200);
+    expect(print.complete).toBe(true);
+  });
+
+  it("A′. 담당자를 직접 지정한 후속 업무도 선행 완료 전에는 시작·완료 불가", async () => {
+    parseUnifiedInput.mockResolvedValueOnce([
+      intent({ intentClass: "action", route: "task", taskType: "교재편집", instruction: "거성중2 빈칸 수정", ownerName: "민지" }),
+      intent({ intentClass: "action", route: "task", taskType: "출력", instruction: "출력", ownerName: "소라", afterPrevious: true }),
+    ]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    await runUnifiedNlInput("민지는 거성중2 빈칸 수정하고 소라는 출력해줘", { staffName: "서도영", staffId: "staff-seo" });
+    const print = tables.tasks.find((t) => t.type === "출력")!;
+    expect(print.staff_notion_ids).toEqual(["staff-sora"]);
+    const notion = await import("@/lib/notion");
+    expect((await notion.startTask(print.id, "staff-sora")).ok).toBe(false);
+    expect((await completeViaApi(print.id, "staff-sora")).status).toBe(409);
+  });
+
+  it("B. 학생관리 + 반 담당조교 정확히 1명 → 그 조교에게 자동배정(근무 여부로 고르지 않음)", async () => {
+    makeEveryoneOffShift();
+    tables.classes[0].assistant_notion_ids = ["staff-minji"];
+    await say("고2 이사벨A 이지호 대화문 암기 확인해줘", { intentClass: "action", route: "task", taskType: "암기확인", className: "고2 이사벨A", students: ["이지호"], instruction: "대화문 암기 확인" });
+    expect(tables.tasks[0].staff_notion_ids).toEqual(["staff-minji"]);
+    expect(tables.tasks[0].source_payload.workflow).toMatchObject({ assignedVia: "auto", assignReason: "class_owner" });
+  });
+
+  it("C. 학생관리 + 반 담당조교 없음 → 근무 중 조교가 있어도 학생관리 Pool", async () => {
+    await say("이지호 대화문 암기 확인해줘", { intentClass: "action", route: "task", taskType: "암기확인", students: ["이지호"], instruction: "대화문 암기 확인" });
+    expect(tables.tasks[0]).toMatchObject({ staff_notion_ids: [], pool: true });
+  });
+
+  it("D. 학생관리 + 담당조교 여러 명 또는 반이 모호 → 임의 선택 없이 Pool", async () => {
+    tables.classes[0].assistant_notion_ids = ["staff-minji", "staff-sora"];
+    await say("이지호 단어 재시험 시켜줘", { intentClass: "action", route: "task", taskType: "단어재시", students: ["이지호"], instruction: "단어 재시험" });
+    expect(tables.tasks[0].staff_notion_ids).toEqual([]);
+
+    // 반이 두 개(명시 없음) — 각 반 담당조교가 1명씩이어도 모호하므로 Pool
+    tables.classes[0].assistant_notion_ids = ["staff-minji"];
+    tables.classes[3].assistant_notion_ids = ["staff-sora"];
+    tables.classes[3].student_notion_ids.push("stu-jiho");
+    await say("이지호 숙제 확인해줘", { intentClass: "action", route: "task", taskType: "숙제확인", students: ["이지호"], instruction: "숙제 확인" });
+    expect(tables.tasks[1].staff_notion_ids).toEqual([]);
+  });
+
+  it("E/F. 행정 업무: 담당자 미지정 → 행정 Pool(근무 중 직원 있어도), 명시 → 직접 할당", async () => {
+    const e = await say("이지호 어머니께 전화해줘", { intentClass: "action", route: "task", taskType: "학부모연락", students: ["이지호"], instruction: "어머니께 전화" });
+    expect(tables.tasks[0]).toMatchObject({ staff_notion_ids: [], pool: true });
+    expect(e.outcomes[0].message).toContain("행정 업무풀(가능한 직원이 '내가 할게요'로 가져가기)");
+    await say("민지에게 이지호 어머니께 전화 맡겨", { intentClass: "action", route: "task", taskType: "학부모연락", students: ["이지호"], instruction: "어머니께 전화", ownerName: "민지" });
+    expect(tables.tasks[1].staff_notion_ids).toEqual(["staff-minji"]);
+  });
+
+  it("G/H. 교재편집: 담당자 미지정 → 교재편집 Pool, 명시 → 직접 할당", async () => {
+    await say("거성중2 정답지 수정해줘", { intentClass: "action", route: "task", taskType: "교재편집", instruction: "거성중2 정답지 수정" });
+    expect(tables.tasks[0]).toMatchObject({ staff_notion_ids: [], pool: true });
+    await say("소라에게 거성중2 정답지 수정 맡겨", { intentClass: "action", route: "task", taskType: "교재편집", instruction: "거성중2 정답지 수정", ownerName: "소라" });
+    expect(tables.tasks[1].staff_notion_ids).toEqual(["staff-sora"]);
+  });
+
+  it("I. 출력 업무에 미완료 선행 업무가 있으면 생성 시·Pool sweep 모두 자동배정 금지, 선행 완료 후 sweep에서 배정", async () => {
+    parseUnifiedInput.mockResolvedValueOnce([
+      intent({ intentClass: "action", route: "task", taskType: "교재편집", instruction: "워크북 수정" }),
+      intent({ intentClass: "action", route: "task", taskType: "출력", instruction: "워크북 10부 출력", afterPrevious: true }),
+    ]);
+    const { runUnifiedNlInput } = await import("@/lib/nl-input");
+    await runUnifiedNlInput("워크북 수정하고 10부 출력해줘", { staffName: "서도영", staffId: "staff-seo" });
+    const print = tables.tasks.find((t) => t.type === "출력")!;
+    const edit = tables.tasks.find((t) => t.type === "교재편집")!;
+    expect(print.staff_notion_ids).toEqual([]);
+    const notion = await import("@/lib/notion");
+    expect(await notion.autoAssignPoolTasks()).toEqual([]);
+    await notion.claimTask(edit.id, "staff-minji");
+    await notion.completeTaskEntry(edit.id, { outcome: "완료" });
+    const assigned = await notion.autoAssignPoolTasks();
+    expect(assigned.map((a) => a.typeLabel)).toEqual(["출력"]);
+    expect(print.staff_notion_ids).toHaveLength(1);
+  });
+
+  it("라우팅 순수 규칙: resolveTaskClass", async () => {
+    const { resolveTaskClass } = await import("@/lib/task-routing");
+    const classes = [
+      { id: "c1", studentIds: ["s1", "s2"], assistantIds: ["a1"] },
+      { id: "c2", studentIds: ["s2"], assistantIds: ["a2"] },
+    ];
+    expect(resolveTaskClass({ studentId: "s1" }, classes)?.id).toBe("c1");
+    expect(resolveTaskClass({ studentId: "s2" }, classes)).toBeNull();
+    expect(resolveTaskClass({ studentId: "s2", classIds: ["c2"] }, classes)?.id).toBe("c2");
+    expect(resolveTaskClass({ studentId: null, classIds: ["c1"] }, classes)?.id).toBe("c1");
+    expect(resolveTaskClass({ studentId: "s1", classIds: ["c2"] }, classes)).toBeNull();
   });
 });

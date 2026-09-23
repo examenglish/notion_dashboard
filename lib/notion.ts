@@ -7365,7 +7365,14 @@ export async function createTasks(
               // 시간 없는 "오늘" 업무는 지금 근무 중인지로 판단한다 — 빈 시간은
               // isStaffWorkingAt에서 "항상 근무"로 취급돼, 퇴근/휴무 조교에게도
               // 배정되던 문제를 막는다. 그런 사람이 없으면 조교 업무풀에 남는다.
-              { type: input.type, studentId: input.studentId, date: input.date, time: input.time || (input.date === today ? nowTime : "") },
+              {
+                type: input.type,
+                studentId: input.studentId,
+                date: input.date,
+                time: input.time || (input.date === today ? nowTime : ""),
+                classIds: input.classIds,
+                hasPendingDependency: (input.dependsOn ?? []).length > 0,
+              },
               { staff: candidates, classes: classInfos }
             );
       const ownerId = route.assigned ? route.staffId : null;
@@ -7377,6 +7384,8 @@ export async function createTasks(
       const workflow: TaskWorkflow = {
         ...(input.createdBy ? { createdBy: input.createdBy } : {}),
         ...(input.sourceRecordId ? { sourceRecordId: input.sourceRecordId } : {}),
+        // 선후관계는 생성 시점에 함께 기록한다(생성 후 따로 쓰면 그 사이 가져가기가 가능해짐).
+        ...(input.dependsOn && input.dependsOn.length > 0 ? { dependsOn: input.dependsOn } : {}),
         ...(poolFlag ? { pooledAt: nowIso } : {}),
         ...(route.assigned
           ? { assignedVia: direct ? "direct" : "auto", assignedAt: nowIso, assignReason: route.reason }
@@ -7608,6 +7617,9 @@ export async function claimTask(taskId: string, staffId: string): Promise<{ ok: 
     if ((row.staff_notion_ids as string[] | null)?.length) {
       return { ok: false, message: "이미 다른 직원이 가져간 업무입니다." };
     }
+    // 선행 업무가 끝나기 전에는 가져갈 수 없다(서버에서 차단 — 화면 버튼과 무관).
+    const waiting = await pendingDependencies(row);
+    if (waiting.length > 0) return { ok: false, message: `먼저 끝나야 하는 업무가 있습니다: ${waiting.join(", ")}` };
     const staffPgId = await pgResolveRelationId("STAFF", staffId);
     // 담당자가 "여전히 비어있고 미완료일 때만" 한 번의 PATCH로 가져간다 — 동시에 두 명이
     // 눌러도 DB에서 한 명만 성공한다(바뀐 행 0개면 다른 사람이 먼저 가져간 것).
@@ -7651,6 +7663,13 @@ async function pendingDependencies(row: Record<string, unknown>): Promise<string
     if (dep && pgNotArchived(dep) && !dep.complete) waiting.push(String(dep.title ?? dep.type ?? "선행 업무"));
   }
   return waiting;
+}
+
+// 업무 id로 아직 안 끝난 선행 업무 이름들(완료 API 등 라우트에서 쓰는 서버 측 차단용).
+export async function pendingDependenciesForTask(taskId: string): Promise<string[]> {
+  if (getDbProvider() !== "postgres") return [];
+  const row = await pgGetByNotionId("TODO", taskId);
+  return row ? pendingDependencies(row) : [];
 }
 
 // 같은 입력에서 "A 하고 B"처럼 순서가 있는 업무 — B.workflow.dependsOn에 A를 기록한다.
@@ -7746,7 +7765,10 @@ export async function autoAssignPoolTasks(): Promise<{ id: string; typeLabel: st
     if (!type) continue;
     const studentId = (row.student_notion_ids as string[] | null)?.[0] ?? null;
     // 근무 여부는 "지금" 기준 — 과거 마감시각으로 판단하면 이미 퇴근한 사람을 고르게 된다.
-    const route = routeTask({ type, studentId, date: today, time: now }, { staff: candidates, classes: classInfos });
+    const route = routeTask(
+      { type, studentId, date: today, time: now, classIds: ((row.class_notion_ids as string[] | null) ?? []).filter(Boolean) },
+      { staff: candidates, classes: classInfos }
+    );
     if (!route.assigned) continue;
     const id = (row.notion_id as string | null) ?? (row.id as string);
     // 선행 업무가 안 끝난 업무는 아직 사람에게 보내지 않는다.

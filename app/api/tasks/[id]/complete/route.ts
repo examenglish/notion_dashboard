@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { completeTaskEntry, getTask, hasPriorFailure } from "@/lib/notion";
+import { completeTaskEntry, getTask, hasPriorFailure, pendingDependenciesForTask } from "@/lib/notion";
 import { classifyFeedback } from "@/lib/tasks";
 import { readStaffId } from "@/lib/session";
 import { postSlackMessage } from "@/lib/slack";
@@ -19,6 +19,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const task = await getTask(params.id);
   if (!task) return NextResponse.json({ ok: false, message: "업무를 찾을 수 없습니다." }, { status: 404 });
+  // 선행 업무(workflow.dependsOn)가 끝나기 전에는 완료 처리할 수 없다.
+  const waiting = await pendingDependenciesForTask(params.id);
+  if (waiting.length > 0) {
+    return NextResponse.json({ ok: false, message: `먼저 끝나야 하는 업무가 있습니다: ${waiting.join(", ")}` }, { status: 409 });
+  }
 
   // 같은 학생·같은 업무유형에서 실패가 반복되면(섹션11) 직원이 긴급 표시를
   // 안 했어도 자동으로 URGENT로 올라가도록, 이전 이력을 확인한다.

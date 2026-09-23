@@ -91,10 +91,10 @@ const POOL_BY_TYPE: Record<TaskType, TaskPool> = {
 export function taskPoolOf(type: TaskType | null | undefined): TaskPool {
   return type ? POOL_BY_TYPE[type] ?? "admin" : "admin";
 }
-// 자동배정 금지 Pool: 직원별 처리 가능 업무(capability) 정보가 없어서, 전문 작업(교재편집)은
-// 아무 조교에게나 배정하지 않고 Pool에 남겨 가능한 직원이 가져가게 한다.
+// 자동배정 금지 Pool: 직원별 처리 가능 업무(capability) 정보가 없어서, 교재편집·행정은
+// 아무 직원에게나 배정하지 않고 Pool에 남겨 가능한 직원이 가져가게 한다(담당자 명시는 직접 할당).
 export function isAutoAssignablePool(pool: TaskPool): boolean {
-  return pool !== "material";
+  return pool !== "material" && pool !== "admin";
 }
 export function isPoolableType(type: TaskType): boolean {
   return POOLABLE_TASK_TYPES.includes(type);

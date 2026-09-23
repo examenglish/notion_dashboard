@@ -121,7 +121,7 @@ function TaskRow({
         {task.note && <p className="muted" style={{ margin: "2px 0 0", fontSize: 13 }}>{task.note}</p>}
         <RefLinks task={task} />
       </div>
-      {!task.done && (
+      {!task.done && !task.blocked && (
         <div style={{ display: "flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>
           {onStart && task.status !== "진행중" && (
             <button type="button" className="secondary" disabled={busy} onClick={onStart}>
@@ -429,8 +429,8 @@ export default function TaskBoardClient({
                     <br />
                     <RefLinks task={t} />
                   </div>
-                  <button type="button" disabled={claiming === t.id} onClick={() => claim(t.id)}>
-                    {claiming === t.id ? "처리 중..." : "내가 할게요"}
+                  <button type="button" disabled={claiming === t.id || !!t.blocked} onClick={() => claim(t.id)}>
+                    {t.blocked ? "선행 업무 대기" : claiming === t.id ? "처리 중..." : "내가 할게요"}
                   </button>
                 </li>
               ))}
