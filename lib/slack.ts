@@ -1,25 +1,11 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import "server-only";
-import {
-  DB,
-  getRichText,
-  notion,
-  searchStudents,
-} from "./notion";
+import { searchStudents } from "./notion";
 import { SLASH_COMMANDS, runNaturalLanguageCommand } from "./nl-input";
-import { dualWriteEntity } from "./supabaseRepo";
+import { pgInsertRow, pgPatchById, pgQueryRaw, pgResolveRelationId } from "./supabaseRepo";
 
 const FIVE_MINUTES_SECONDS = 5 * 60;
-const NOTION_RICH_TEXT_LIMIT = 2000;
 const replayCache = new Map<string, number>();
-
-function notionRichText(content: string) {
-  const chunks = [];
-  for (let offset = 0; offset < content.length; offset += NOTION_RICH_TEXT_LIMIT) {
-    chunks.push({ text: { content: content.slice(offset, offset + NOTION_RICH_TEXT_LIMIT) } });
-  }
-  return chunks.length > 0 ? chunks : [{ text: { content: "" } }];
-}
 
 export type SlackEnvelope = {
   type?: string;
@@ -172,27 +158,29 @@ async function getSlackMetadata(channel: string, messageTs: string, userId: stri
   };
 }
 
-async function findRecordByMessageTs(messageTs: string) {
-  const result: any = await notion.dataSources.query({
-    data_source_id: DB.SLACK_RECORDS,
-    filter: { property: "MessageTS", rich_text: { equals: messageTs } },
-    page_size: 1,
-  });
-  return result.results[0] as any | undefined;
+// Slack 기록 정본은 Supabase slack_records(현재 배포 지점 branch_id로만 읽고 쓴다). Slack 식별자는
+// source_payload.slack에 둔다. Notion 시절에 만들어진 행(source_payload.properties.MessageTS)도 찾아서
+// 수정/삭제가 이어지게 한다.
+type SlackRecordRow = Record<string, unknown> & { id: string; source_payload?: { slack?: { eventIds?: string[] } } & Record<string, unknown> };
+const enc = encodeURIComponent;
+
+async function findRecordByMessageTs(channel: string, messageTs: string): Promise<SlackRecordRow | undefined> {
+  const rows = await pgQueryRaw(
+    "SLACK_RECORDS",
+    `source_payload->slack->>messageTs=eq.${enc(messageTs)}&source_payload->slack->>channelId=eq.${enc(channel)}&limit=1`
+  );
+  if (rows[0]) return rows[0] as SlackRecordRow;
+  const legacy = await pgQueryRaw("SLACK_RECORDS", `source_payload->properties->MessageTS->rich_text->0->>plain_text=eq.${enc(messageTs)}&limit=1`);
+  return legacy[0] as SlackRecordRow | undefined;
 }
 
 async function eventAlreadyHandled(eventId: string): Promise<boolean> {
-  const result: any = await notion.dataSources.query({
-    data_source_id: DB.SLACK_RECORDS,
-    filter: { property: "처리EventID", rich_text: { contains: eventId } },
-    page_size: 1,
-  });
-  return result.results.length > 0;
+  const rows = await pgQueryRaw("SLACK_RECORDS", `source_payload->slack->eventIds=cs.${enc(JSON.stringify([eventId]))}&limit=1`);
+  return rows.length > 0;
 }
 
-function eventIdsWith(page: any, eventId: string): string {
-  const existing = getRichText(page, "처리EventID").split(",").filter(Boolean);
-  return Array.from(new Set([...existing, eventId])).slice(-50).join(",");
+function eventIdsWith(row: SlackRecordRow | undefined, eventId: string): string[] {
+  return Array.from(new Set([...(row?.source_payload?.slack?.eventIds ?? []), eventId])).slice(-50);
 }
 
 async function resolveStudent(text: string) {
@@ -252,17 +240,16 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
   const channel = event.channel ?? "";
   const normalized = normalizeEvent(event);
   if (!normalized.messageTs) return;
-  const existing = await findRecordByMessageTs(normalized.messageTs);
+  const existing = await findRecordByMessageTs(channel, normalized.messageTs);
+  const slackPayload = (userId: string) => ({
+    ...(existing?.source_payload ?? {}),
+    slack: { teamId: envelope.team_id ?? "", channelId: channel, messageTs: normalized.messageTs, userId, eventIds: eventIdsWith(existing, eventId) },
+  });
 
   if (normalized.action === "삭제") {
     if (!existing) return;
-    await notion.pages.update({
-      page_id: existing.id,
-      properties: {
-        상태: { select: { name: "삭제" } },
-        처리EventID: { rich_text: [{ text: { content: eventIdsWith(existing, eventId) } }] },
-      } as any,
-    });
+    const prevUser = String((existing.source_payload?.slack as { userId?: string } | undefined)?.userId ?? "");
+    await pgPatchById("SLACK_RECORDS", existing.id, { status: "삭제", source_payload: slackPayload(prevUser) });
     return;
   }
 
@@ -270,29 +257,23 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
   const userId = normalized.message.user ?? event.user ?? "";
   const metadata = await getSlackMetadata(channel, normalized.messageTs, userId);
   const titleName = resolved.parsedName || "미연결 기록";
-  const commonProperties: any = {
-    제목: { title: [{ text: { content: `${titleName} Slack 기록` } }] },
-    학생: { relation: resolved.studentId ? [{ id: resolved.studentId }] : [] },
-    학생명: { rich_text: notionRichText(resolved.parsedName) },
-    원문: { rich_text: notionRichText(normalized.text) },
-    Slack작성자: { rich_text: [{ text: { content: metadata.author } }] },
-    작성자ID: { rich_text: [{ text: { content: userId } }] },
-    작성시각: { date: { start: messageDate(normalized.messageTs) } },
-    원문링크: metadata.permalink ? { url: metadata.permalink } : { url: null },
-    상태: { select: { name: normalized.action } },
-    연결상태: { select: { name: resolved.linkStatus } },
-    TeamID: { rich_text: [{ text: { content: envelope.team_id ?? "" } }] },
-    ChannelID: { rich_text: [{ text: { content: channel } }] },
-    MessageTS: { rich_text: [{ text: { content: normalized.messageTs } }] },
-    처리EventID: { rich_text: [{ text: { content: existing ? eventIdsWith(existing, eventId) : eventId } }] },
+  const row = {
+    title: `${titleName} Slack 기록`,
+    student_notion_ids: resolved.studentId ? [resolved.studentId] : [],
+    student_id: resolved.studentId ? await pgResolveRelationId("STUDENT", resolved.studentId) : null,
+    written_at: messageDate(normalized.messageTs),
+    original: normalized.text,
+    author: metadata.author,
+    permalink: metadata.permalink || null,
+    status: normalized.action,
+    link_status: resolved.linkStatus,
+    source_payload: { ...slackPayload(userId), studentName: resolved.parsedName },
   };
 
   if (existing) {
-    const updated = await notion.pages.update({ page_id: existing.id, properties: commonProperties });
-    await dualWriteEntity("SLACK_RECORDS", updated);
+    await pgPatchById("SLACK_RECORDS", existing.id, row);
   } else {
-    const created = await notion.pages.create({ parent: { data_source_id: DB.SLACK_RECORDS } as any, properties: commonProperties });
-    await dualWriteEntity("SLACK_RECORDS", created);
+    await pgInsertRow("SLACK_RECORDS", row);
   }
   await addSlackReaction(channel, normalized.messageTs, resolved.studentId ? "white_check_mark" : "warning");
 
