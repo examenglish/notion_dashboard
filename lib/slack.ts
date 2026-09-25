@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import "server-only";
 import { searchStudents } from "./notion";
-import { SLASH_COMMANDS, runNaturalLanguageCommand } from "./nl-input";
+import { SLASH_COMMANDS, runNaturalLanguageCommand, runUnifiedNlInput } from "./nl-input";
 import { pgInsertRow, pgPatchById, pgQueryRaw, pgResolveRelationId } from "./supabaseRepo";
 
 const FIVE_MINUTES_SECONDS = 5 * 60;
@@ -275,7 +275,8 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
   } else {
     await pgInsertRow("SLACK_RECORDS", row);
   }
-  await addSlackReaction(channel, normalized.messageTs, resolved.studentId ? "white_check_mark" : "warning");
+  // [학생: 이름] 태그 메시지는 기존대로 학생 연결 결과를 반응으로 알린다.
+  if (resolved.parsedName) await addSlackReaction(channel, normalized.messageTs, resolved.studentId ? "white_check_mark" : "warning");
 
   // 새 메시지에만(수정본 재처리는 안 함) "!보강 이름 시간"처럼 인식되는
   // 태그가 맨 앞에 붙어 있으면, 자연어 입력 박스와 같은 파이프라인으로
@@ -309,6 +310,31 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
         console.error("Slack 자연어 명령 처리 실패", eventId, error instanceof Error ? error.name : "unknown_error");
         await addSlackReaction(channel, normalized.messageTs, "x");
       }
+    } else if (!resolved.parsedName) {
+      // 태그 없는 자유 문장("김민수 단어 재시험")은 EXAM AI 입력창과 같은 runUnifiedNlInput으로
+      // 처리한다(학생 기록 → student_learning_records, 이 배포 지점 학생만). 되묻기가 필요하면 ❓만 남긴다
+      // (Slack에서는 이어서 답할 화면이 없으므로 저장하지 않음). 메시지 수정·삭제는 다시 처리하지 않는다.
+      try {
+        const staff = await staffForSlackUser(userId, metadata.author);
+        const result = await runUnifiedNlInput(normalized.text, { staffName: staff?.name ?? metadata.author, staffId: staff?.id, role: staff?.role });
+        if (result.tasks.length > 0) notifyTaskAssignments(result.tasks);
+        const statuses = result.outcomes.map((o) => o.status);
+        console.log("Slack 자연어 기록 결과", eventId, statuses.join(","));
+        const reaction = statuses.includes("실패") ? "x" : statuses.includes("확인필요") ? "question" : statuses.length ? "white_check_mark" : null;
+        if (reaction) await addSlackReaction(channel, normalized.messageTs, reaction);
+      } catch (error) {
+        console.error("Slack 자연어 기록 처리 실패", eventId, error instanceof Error ? error.name : "unknown_error");
+        await addSlackReaction(channel, normalized.messageTs, "x");
+      }
     }
   }
+}
+
+// Slack 작성자 → 이 지점 직원(staff.source_payload.slackUserId 우선, 없으면 Slack 표시 이름과 같은 이름).
+async function staffForSlackUser(userId: string, displayName: string): Promise<{ id: string; name: string; role?: string } | null> {
+  const rows = await pgQueryRaw("STAFF", "resigned=is.false").catch(() => []);
+  const row =
+    rows.find((r) => userId && (r.source_payload as { slackUserId?: string } | null)?.slackUserId === userId) ??
+    rows.find((r) => String(r.name ?? "").trim() === displayName.trim());
+  return row ? { id: String(row.notion_id ?? row.id), name: String(row.name ?? ""), role: (row.role as string | null) ?? undefined } : null;
 }

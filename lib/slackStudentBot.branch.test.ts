@@ -9,6 +9,8 @@ vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ unstable_cache: (fn: any) => fn, revalidateTag: vi.fn() }));
 const { pagesCreate, waitUntil } = vi.hoisted(() => ({ pagesCreate: vi.fn(), waitUntil: vi.fn() })); // pagesCreate: Notion 쓰기 0건 확인용
 vi.mock("@vercel/functions", () => ({ waitUntil }));
+const { parseUnifiedInput } = vi.hoisted(() => ({ parseUnifiedInput: vi.fn() }));
+vi.mock("@/lib/anthropic", async (orig) => ({ ...(await orig<typeof import("@/lib/anthropic")>()), parseUnifiedInput }));
 vi.mock("@notionhq/client", () => ({
   Client: vi.fn().mockImplementation(function Client() {
     return {
@@ -21,6 +23,7 @@ vi.mock("@notionhq/client", () => ({
 type Row = Record<string, any>;
 let students: Row[];
 let slackRecords: Row[];
+let learningRecords: Row[];
 // PostgREST jsonb 경로 필터(source_payload->slack->>messageTs=eq.X, ...->eventIds=cs.[..])를 흉내 낸다.
 function jsonPath(row: Row, key: string): unknown {
   const parts = key.split(/->>?/);
@@ -38,6 +41,11 @@ function fakeFetch() {
       return new Response(JSON.stringify(code === "sajik" ? [{ id: "b-sajik" }] : code === "geumjeong" ? [{ id: "b-gj" }] : []), { status: 200 });
     }
     const method = (init?.method ?? "GET").toUpperCase();
+    if (table === "student_learning_records" && method === "POST") {
+      const rows = JSON.parse(init.body).map((r: Row) => ({ id: `lr-${learningRecords.length + 1}`, ...r }));
+      learningRecords.push(...rows);
+      return new Response(JSON.stringify(rows), { status: 201 });
+    }
     if (table === "slack_records" && method === "POST") {
       const rows = JSON.parse(init.body).map((r: Row) => ({ id: `sr-${slackRecords.length + 1}`, ...r }));
       slackRecords.push(...rows);
@@ -129,6 +137,8 @@ const linkedStudentIds = () => slackRecords.map((r) => r.student_notion_ids);
 beforeEach(() => {
   pagesCreate.mockReset().mockResolvedValue({ id: "slack-record", properties: {} });
   slackRecords = [];
+  learningRecords = [];
+  parseUnifiedInput.mockReset().mockResolvedValue([]);
   waitUntil.mockReset();
   students = [
     { id: "s-sajik-kim", notion_id: "s-sajik-kim", branch_id: "b-sajik", name: "김민수", status: "재원", class_notion_ids: [] },
@@ -218,5 +228,21 @@ describe("Slack 학생기록봇 지점 격리", () => {
     await post(slackEdit("sajik", "1700000000.000001", "[학생: 김민수] 본문 암기 미완", "EvLegacy"));
     expect(slackRecords).toHaveLength(1);
     expect(slackRecords[0]).toMatchObject({ id: "legacy-1", status: "수정", student_id: "s-sajik-kim", notion_id: "n-legacy" });
+  });
+
+  it("태그 없는 자연어('김민수 단어 재시험')는 EXAM AI 학생기록으로 이 지점 학생에만 저장된다", async () => {
+    deploy("geumjeong");
+    parseUnifiedInput.mockResolvedValue([
+      { route: "student_record", students: ["김민수"], instruction: "", recordType: "vocab", assessmentName: "단어시험", retestRequired: true },
+    ]);
+    await post(slackRequest("geumjeong", { text: "김민수 단어 재시험" }));
+    expect(learningRecords).toHaveLength(1);
+    expect(learningRecords[0]).toMatchObject({ branch_id: "b-gj", student_notion_ids: ["s-gj-kim"], record_type: "vocab", raw_text: "김민수 단어 재시험" });
+    expect(slackRecords).toHaveLength(1); // 원문 Slack 기록도 남는다
+
+    // 금정에 없는 이름(사직 학생 이서준)은 사직 학생으로 저장하지 않는다
+    parseUnifiedInput.mockResolvedValue([{ route: "student_record", students: ["이서준"], instruction: "", recordType: "homework", completed: false }]);
+    await post(slackRequest("geumjeong", { text: "이서준 숙제 안함" }));
+    expect(learningRecords).toHaveLength(1);
   });
 });
