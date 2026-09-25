@@ -257,3 +257,5 @@
   /* 모바일 헤더는 좁다 — 전체 보기는 입력창 아래 바로가기에 있다 */
   .director-landing .landing-action-outline { display: none; }
 }
+.director-landing button.home-task { width: 100%; border: 0; background: transparent; text-align: left; font: inherit; cursor: pointer; border-radius: 0; }
+.home-notice { margin: 0; padding: 8px 12px; border-radius: 10px; background: #e7f5eb; color: #185a3d; font-size: 13px; }

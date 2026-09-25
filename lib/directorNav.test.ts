@@ -21,7 +21,7 @@ describe("원장 화면 정보구조(역할별 메뉴)", () => {
 
   it("조교 메뉴는 짧게 — 내 업무·학생·보강/재시·기록·자료, 리포트·운영·등록 없음", () => {
     const groups = navForRole("조교");
-    expect(groups.map((g) => g.label)).toEqual(["내 업무", "학생", "보강 · 재시", "기록 입력", "자료 · 출력"]);
+    expect(groups.map((g) => g.label)).toEqual(["내 업무", "학생", "보강 · 재시험", "기록 입력", "자료 · 출력"]);
     expect(hrefs("조교")).not.toContain("/director/reports");
     expect(hrefs("조교")).not.toContain("/director/input?tab=ops");
     expect(hrefs("조교")).not.toContain("/director/input?tab=students");

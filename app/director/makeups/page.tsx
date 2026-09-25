@@ -5,9 +5,10 @@ import { todayKST, formatDateLabel } from "@/lib/date";
 import { listScheduleTasks, type ScheduleBuckets, type ScheduleTaskRow } from "@/lib/directorViews";
 import DirectorSidebar from "@/components/director/DirectorSidebar";
 import DirectorTopbar from "@/components/director/DirectorTopbar";
+import ScheduleRowActions from "@/components/director/ScheduleRowActions";
 
-// 보강·재시 일정(읽기 전용) — Slack·자연어 입력창·일정 등록 폼으로 만든 보강/재시 업무를 한곳에서 본다.
-// 새 저장 구조 없이 기존 업무 데이터만 읽는다. 시간 확정·변경은 기존 "보강·재시 확정 현황" 카드에서.
+// 보강·재시 일정 — Slack·자연어 입력창·일정 등록 폼으로 만든 보강/재시 업무를 한곳에서 본다.
+// 새 저장 구조 없이 기존 업무 데이터를 읽고, 시간 변경·완료는 기존 /api/schedule-entry(대시보드 카드와 같은 API)로.
 const VIEWS: { key: keyof ScheduleBuckets; label: string; empty: string }[] = [
   { key: "today", label: "오늘", empty: "오늘 예정된 {type}이 없습니다." },
   { key: "upcoming", label: "예정", empty: "앞으로 예정된 {type}이 없습니다. Slack이나 입력창에 “임서영 토요일 1시30분 보강”처럼 남기면 여기에 나타납니다." },
@@ -99,7 +100,7 @@ export default async function DirectorMakeupsPage({ searchParams }: { searchPara
                   ) : (
                     <ul className="divide-y divide-border">
                       {rows.map((r) => (
-                        <li key={r.id} className="flex items-center gap-3 px-4 py-3">
+                        <li key={r.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
                           <div className="w-24 shrink-0">
                             <div className="text-sm font-semibold text-foreground">{dateText(r.date)}</div>
                             <div className="text-xs text-muted-foreground">{r.time || "시간 미정"}</div>
@@ -119,6 +120,7 @@ export default async function DirectorMakeupsPage({ searchParams }: { searchPara
                               학생 보기
                             </Link>
                           )}
+                          <ScheduleRowActions id={r.id} date={r.date} time={r.time} done={r.done} />
                         </li>
                       ))}
                     </ul>
@@ -126,7 +128,7 @@ export default async function DirectorMakeupsPage({ searchParams }: { searchPara
                 </div>
 
                 <p className="mt-3 text-xs text-muted-foreground">
-                  시간 확정·변경은 <Link href="/director/dashboard">오늘 대시보드</Link>의 “보강·재시 확정 현황”에서 할 수 있습니다.
+                  담당자 변경·삭제는 <Link href="/director/dashboard">오늘 대시보드</Link>의 “보강·재시 확정 현황”에서 할 수 있습니다.
                 </p>
               </>
             )}

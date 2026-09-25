@@ -42,6 +42,7 @@ export const DIRECTOR_NAV: DirectorNavGroup[] = [
     desc: "보강·재시 일정과 수업·코칭 기록 입력.",
     links: [
       { href: "/director/makeups", label: "보강 · 재시", desc: "예정·오늘·지난 미완료·완료 보강과 재시험 일정(Slack·입력창에서 등록한 것 포함)" },
+      { href: "/director/checks", label: "확인 필요 학생", desc: "최근 2주 학생 기록의 재시험 필요·숙제 미완료·암기 미완료" },
       { href: "/director/input?tab=records", label: "수업 · 코칭 기록", desc: "반 진도, 과제, 단어시험, 코칭 기록 입력" },
       { href: "/director/input?tab=schedule", label: "일정 등록", desc: "보강·재시·상담 등 일정을 폼으로 등록" },
     ],
@@ -95,7 +96,7 @@ const link = (href: string): DirectorNavLink => {
 const ASSISTANT_NAV: DirectorNavGroup[] = [
   { key: "tasks", label: "내 업무", desc: "나에게 배정된 업무와 업무풀", links: [{ ...link("/director/tasks"), label: "내 업무" }] },
   { key: "students", label: "학생", desc: "학생 찾기와 학생별 기록·시험대비", links: [link("/director/students"), link("/director/exam-prep")] },
-  { key: "classes", label: "보강 · 재시", desc: "오늘·예정 보강과 재시험", links: [link("/director/makeups")] },
+  { key: "classes", label: "보강 · 재시험", desc: "오늘·예정 보강, 재시험·숙제·암기 확인 필요 학생", links: [link("/director/makeups"), link("/director/checks")] },
   { key: "records", label: "기록 입력", desc: "수업·코칭 기록", links: [link("/director/input?tab=records")] },
   { key: "files", label: "자료 · 출력", desc: "보관 파일과 매뉴얼", links: [link("/director/files"), link("/director/manuals")] },
 ];
@@ -109,7 +110,7 @@ const ADMIN_NAV: DirectorNavGroup[] = [
     key: "classes",
     label: "보강 · 일정",
     desc: "보강·재시 일정과 일정 등록",
-    links: [link("/director/makeups"), link("/director/input?tab=schedule")],
+    links: [link("/director/makeups"), link("/director/input?tab=schedule"), link("/director/checks")],
   },
   { key: "reports", label: "리포트", desc: "학부모 발송용 리포트", links: [link("/director/reports")] },
   { key: "files", label: "자료 · 출력", desc: "보관 파일과 매뉴얼", links: [link("/director/files"), link("/director/manuals")] },

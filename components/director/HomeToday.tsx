@@ -1,8 +1,10 @@
 import Link from "next/link";
-import { getTodaySchedule, listMyTasks, listReviewInbox, getMakeupScheduleStatus, type TaskRecord } from "@/lib/notion";
+import { getTodaySchedule, listMyTasks, listReviewInbox, getMakeupScheduleStatus, listStaff, type TaskRecord } from "@/lib/notion";
+import { listCheckQueues } from "@/lib/directorViews";
 import HomeRecentWork from "./HomeRecentWork";
+import HomeTaskList from "./HomeTaskList";
 
-// 첫 화면(자연어 입력창 아래) — 역할별 "지금 할 일". 읽기만 하고, 처리는 기존 화면(업무 보드·보강·학생)에서 한다.
+// 첫 화면(자연어 입력창 아래) — 역할별 "지금 할 일". 업무는 그 자리에서 기존 업무 상세로 처리하고, 나머지는 기존 화면으로 연결한다.
 //  원장: 학원 전체에서 오늘 볼 것 + 확인이 필요한 것
 //  행정: 오늘 처리할 것 + 빠진 것(미확정 보강·재시, 오늘 문의)
 //  조교·강사: 내 업무(급한 것·시간 임박 순), 없으면 오늘 확인 가능한 보강·재시
@@ -24,12 +26,16 @@ function taskBadge(t: TaskRecord, today: string): { text: string; tone: string }
 
 export default async function HomeToday({ role, staffId, staffName, today }: Props) {
   const isWorker = role === "조교" || role === "강사";
-  const [schedule, myTasks, review, makeups] = await Promise.all([
+  const [schedule, myTasks, review, makeups, checks, staff] = await Promise.all([
     getTodaySchedule(today, staffId || undefined).catch(() => null),
     isWorker && staffId ? listMyTasks(staffId).catch(() => null) : Promise.resolve(null),
     role === "원장" || role === "행정" ? listReviewInbox().catch(() => null) : Promise.resolve(null),
     role === "원장" || role === "행정" ? getMakeupScheduleStatus({}).catch(() => null) : Promise.resolve(null),
+    listCheckQueues(today).catch(() => null),
+    isWorker ? listStaff().catch(() => null) : Promise.resolve(null),
   ]);
+  const weekday = "일월화수목금토"[new Date(`${today}T00:00:00Z`).getUTCDay()];
+  const shift = staff?.find((s) => s.id === staffId)?.workHours?.[weekday];
 
   const todayMakeups = (schedule?.makeupClasses ?? []).filter((m) => !m.done);
   const todayRetests = (schedule?.retests ?? []).filter((m) => !m.done);
@@ -42,6 +48,11 @@ export default async function HomeToday({ role, staffId, staffName, today }: Pro
     counts.push({ label: role === "원장" ? "원장 확인 대기" : "검토 대기 업무", value: (review ?? []).length, href: "/director/tasks" });
   }
   if (role === "행정") counts.push({ label: "오늘 문의·행정", value: (schedule?.inquiries ?? []).length, href: "/director/dashboard" });
+  if (checks && role !== "행정") {
+    counts.push({ label: "재시험 필요", value: checks.retest.length, href: "/director/checks?tab=retest" });
+    counts.push({ label: "숙제 미완료", value: checks.homework.length, href: "/director/checks?tab=homework" });
+    if (isWorker) counts.push({ label: "암기 미완료", value: checks.memorization.length, href: "/director/checks?tab=memorization" });
+  }
 
   const openTasks = (myTasks ?? []).filter((t) => !t.done).sort((a, b) => byPriority(a, b, today));
   const todayTasks = (myTasks ?? []).filter((t) => t.date === today);
@@ -52,7 +63,10 @@ export default async function HomeToday({ role, staffId, staffName, today }: Pro
       {isWorker && (
         <div className="home-today-block">
           <div className="home-today-head">
-            <h2>지금 할 일</h2>
+            <h2>
+              지금 할 일
+              {shift && <span className="home-today-meta"> · 오늘 근무 {shift.start}–{shift.end}</span>}
+            </h2>
             {myTasks && (
               <span className="home-today-meta">
                 오늘 완료 {doneToday} / {todayTasks.length} · 남은 업무 {openTasks.length}
@@ -63,40 +77,23 @@ export default async function HomeToday({ role, staffId, staffName, today }: Pro
             <p className="home-today-empty">업무를 불러오지 못했습니다. <Link href="/director/tasks">내 업무 열기</Link></p>
           ) : openTasks.length === 0 ? (
             <div className="home-today-empty">
-              <p>{staffName} 선생님께 지금 배정된 업무가 없습니다. 오늘 확인할 수 있는 항목입니다.</p>
+              <p>{staffName} 선생님께 지금 배정된 업무가 없습니다. 아래 “오늘 확인할 것”에서 재시험·숙제·보강을 확인해 주세요.</p>
             </div>
           ) : (
-            <ol className="home-task-list">
-              {openTasks.slice(0, 5).map((t, i) => {
+            <HomeTaskList
+              role={role}
+              more={Math.max(0, openTasks.length - 5)}
+              tasks={openTasks.slice(0, 5).map((t) => {
                 const b = taskBadge(t, today);
-                return (
-                  <li key={t.id}>
-                    <Link href="/director/tasks" className="home-task">
-                      <span className="home-task-order">{i === 0 ? "먼저" : i === 1 ? "다음" : ""}</span>
-                      <span className="home-task-body">
-                        <span className="home-task-title">
-                          {t.studentName ? `${t.studentName} · ` : ""}
-                          {t.title || t.typeLabel}
-                        </span>
-                        <span className="home-task-sub">
-                          {t.typeLabel}
-                          {t.className ? ` · ${t.className}` : ""}
-                          {t.note ? ` · ${t.note}` : ""}
-                        </span>
-                      </span>
-                      <span className={`home-task-when ${b.tone}`}>{b.text}</span>
-                    </Link>
-                  </li>
-                );
+                return {
+                  id: t.id,
+                  title: `${t.studentName && t.studentName !== "-" ? `${t.studentName} · ` : ""}${t.title || t.typeLabel}`,
+                  sub: `${t.typeLabel}${t.className ? ` · ${t.className}` : ""}${t.note ? ` · ${t.note}` : ""}`,
+                  when: b.text,
+                  tone: b.tone,
+                };
               })}
-              {openTasks.length > 5 && (
-                <li>
-                  <Link href="/director/tasks" className="home-more">
-                    남은 업무 {openTasks.length - 5}건 더 보기
-                  </Link>
-                </li>
-              )}
-            </ol>
+            />
           )}
         </div>
       )}
@@ -142,6 +139,7 @@ export default async function HomeToday({ role, staffId, staffName, today }: Pro
               ["내 업무", "/director/tasks"],
               ["학생 찾기", "/director/students"],
               ["보강 · 재시", "/director/makeups"],
+              ["확인 필요 학생", "/director/checks"],
               ["기록 입력", "/director/input?tab=records"],
               ["파일 찾기", "/director/files"],
             ]
