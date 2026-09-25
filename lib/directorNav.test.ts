@@ -9,8 +9,9 @@ describe("원장 화면 정보구조(역할별 메뉴)", () => {
   it("모든 메뉴는 실제로 있는 화면만 가리킨다", () => {
     for (const g of DIRECTOR_NAV)
       for (const l of g.links) {
-        const route = l.href.split("?")[0].replace(/^\//, "");
-        expect(existsSync(path.resolve(__dirname, "..", "app", route, "page.tsx")), l.href).toBe(true);
+        const route = l.href.split("?")[0].replace(/^\/director\//, "");
+        // 콘솔 화면은 사이드바를 공유하는 라우트 그룹 app/director/(console) 아래에 있다
+        expect(existsSync(path.resolve(__dirname, "..", "app", "director", "(console)", route, "page.tsx")), l.href).toBe(true);
       }
   });
 

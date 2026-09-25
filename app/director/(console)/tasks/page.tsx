@@ -3,7 +3,6 @@ import { getSession } from "@/lib/auth";
 import { todayKST, formatDateLabel } from "@/lib/date";
 import { listMyTasks, listPoolTasks, listReviewInbox, getBasicChecklist, listStaff, autoAssignPoolTasks, type TaskRecord } from "@/lib/notion";
 import { notifyTaskAssignments } from "@/lib/slack";
-import DirectorSidebar from "@/components/director/DirectorSidebar";
 import DirectorTopbar from "@/components/director/DirectorTopbar";
 import TaskBoardClient from "@/components/director/TaskBoardClient";
 import AdminSetupButton from "@/components/AdminSetupButton";
@@ -58,9 +57,7 @@ export default async function DirectorTasksPage() {
   const me = staffList.find((s) => s.id === session.staffId) ?? null;
 
   return (
-    <div className="director-shell flex h-screen bg-background text-foreground">
-      <DirectorSidebar branchName={branchName} role={session.role ?? ""} />
-      <div className="flex min-w-0 flex-1 flex-col">
+    <>
         <DirectorTopbar
           staffName={session.name}
           role={session.role ?? ""}
@@ -94,7 +91,6 @@ export default async function DirectorTasksPage() {
             />
           )}
         </main>
-      </div>
-    </div>
+    </>
   );
 }

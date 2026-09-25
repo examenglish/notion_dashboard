@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { todayKST, formatDateLabel } from "@/lib/date";
 import { listCheckQueues, type CheckQueues } from "@/lib/directorViews";
-import DirectorSidebar from "@/components/director/DirectorSidebar";
 import DirectorTopbar from "@/components/director/DirectorTopbar";
 
 // 확인 필요 학생 — 최근 2주 학생 기록에서 재시험 필요·숙제 미완료·암기 미완료를 학생별 작업 목록으로(읽기 전용).
@@ -32,9 +31,7 @@ export default async function DirectorChecksPage({ searchParams }: { searchParam
   const items = queues ? queues[tab.key] : [];
 
   return (
-    <div className="director-shell flex h-screen bg-background text-foreground">
-      <DirectorSidebar branchName={branchName} role={session.role ?? ""} />
-      <div className="flex min-w-0 flex-1 flex-col">
+    <>
         <DirectorTopbar
           staffName={session.name}
           role={session.role ?? ""}
@@ -96,7 +93,6 @@ export default async function DirectorChecksPage({ searchParams }: { searchParam
             )}
           </div>
         </main>
-      </div>
-    </div>
+    </>
   );
 }

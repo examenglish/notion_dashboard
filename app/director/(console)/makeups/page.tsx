@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { todayKST, formatDateLabel } from "@/lib/date";
 import { listScheduleTasks, type ScheduleBuckets, type ScheduleTaskRow } from "@/lib/directorViews";
-import DirectorSidebar from "@/components/director/DirectorSidebar";
 import DirectorTopbar from "@/components/director/DirectorTopbar";
 import ScheduleRowActions from "@/components/director/ScheduleRowActions";
 
@@ -47,9 +46,7 @@ export default async function DirectorMakeupsPage({ searchParams }: { searchPara
   const href = (t: string, v: string) => `/director/makeups?type=${encodeURIComponent(t)}&view=${v}`;
 
   return (
-    <div className="director-shell flex h-screen bg-background text-foreground">
-      <DirectorSidebar branchName={branchName} role={session.role ?? ""} />
-      <div className="flex min-w-0 flex-1 flex-col">
+    <>
         <DirectorTopbar
           staffName={session.name}
           role={session.role ?? ""}
@@ -134,7 +131,6 @@ export default async function DirectorMakeupsPage({ searchParams }: { searchPara
             )}
           </div>
         </main>
-      </div>
-    </div>
+    </>
   );
 }

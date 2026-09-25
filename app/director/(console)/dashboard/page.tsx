@@ -9,7 +9,6 @@ import {
   getClinicRecordsByDate,
   getUrgentCounselingRequests,
 } from "@/lib/notion";
-import DirectorSidebar from "@/components/director/DirectorSidebar";
 import DirectorTopbar from "@/components/director/DirectorTopbar";
 import DirectorDashboardClient from "@/components/director/DirectorDashboardClient";
 
@@ -108,9 +107,7 @@ export default async function DirectorDashboardPage() {
   const scheduleTotal = scheduleFlat.length;
 
   return (
-    <div className="director-shell flex h-screen bg-background text-foreground">
-      <DirectorSidebar branchName={branchName} role={session.role ?? ""} />
-      <div className="flex min-w-0 flex-1 flex-col">
+    <>
         <DirectorTopbar
           staffName={session.name}
           role={session.role ?? ""}
@@ -140,7 +137,6 @@ export default async function DirectorDashboardPage() {
             counselingGapStudents={counselingGapStudents}
           />
         </main>
-      </div>
-    </div>
+    </>
   );
 }

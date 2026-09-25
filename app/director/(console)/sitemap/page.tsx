@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { todayKST, formatDateLabel } from "@/lib/date";
 import { DIRECTOR_HOME, navForRole } from "@/lib/directorNav";
-import DirectorSidebar from "@/components/director/DirectorSidebar";
 import DirectorTopbar from "@/components/director/DirectorTopbar";
 
 // 전체 보기 — 이 계정이 쓸 수 있는 화면 전체를 카테고리별로. 사이드바(자주 쓰는 것)와 달리 설명까지 모두 펼쳐 보여준다.
@@ -18,9 +17,7 @@ export default async function DirectorSitemapPage() {
   const groups = navForRole(role);
 
   return (
-    <div className="director-shell flex h-screen bg-background text-foreground">
-      <DirectorSidebar branchName={branchName} role={role} />
-      <div className="flex min-w-0 flex-1 flex-col">
+    <>
         <DirectorTopbar
           staffName={session.name}
           role={role}
@@ -80,7 +77,6 @@ export default async function DirectorSitemapPage() {
             </section>
           </div>
         </main>
-      </div>
-    </div>
+    </>
   );
 }

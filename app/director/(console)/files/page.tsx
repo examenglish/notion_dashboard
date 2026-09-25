@@ -2,7 +2,6 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { todayKST, formatDateLabel } from "@/lib/date";
 import { fileDateRange, searchFileArchives, type FileHit } from "@/lib/fileArchive";
-import DirectorSidebar from "@/components/director/DirectorSidebar";
 import DirectorTopbar from "@/components/director/DirectorTopbar";
 import FileResults from "@/components/FileResults";
 
@@ -37,9 +36,7 @@ export default async function DirectorFilesPage({ searchParams }: { searchParams
   }
 
   return (
-    <div className="director-shell flex h-screen bg-background text-foreground">
-      <DirectorSidebar branchName={branchName} role={session.role ?? ""} />
-      <div className="flex min-w-0 flex-1 flex-col">
+    <>
         <DirectorTopbar
           staffName={session.name}
           role={session.role ?? ""}
@@ -81,7 +78,6 @@ export default async function DirectorFilesPage({ searchParams }: { searchParams
             )}
           </div>
         </main>
-      </div>
-    </div>
+    </>
   );
 }
