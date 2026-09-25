@@ -42,7 +42,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "workspace_not_allowed" }, { status: 403 });
   }
 
-  const allowedChannels = (process.env.SLACK_STUDENT_LOG_CHANNEL_ID ?? "")
+  // 기존 기록 채널(SLACK_STUDENT_LOG_CHANNEL_ID)은 그대로 두고, 추가 채널은 SLACK_STUDENT_LOG_EXTRA_CHANNEL_IDS에.
+  const allowedChannels = `${process.env.SLACK_STUDENT_LOG_CHANNEL_ID ?? ""},${process.env.SLACK_STUDENT_LOG_EXTRA_CHANNEL_IDS ?? ""}`
     .split(",")
     .map((id) => id.trim())
     .filter(Boolean);
