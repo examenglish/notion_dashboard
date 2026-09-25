@@ -115,7 +115,8 @@ export async function addSlackReaction(
   name: "white_check_mark" | "warning" | "x" | "clipboard" | "question"
 ) {
   if (!channel || !messageTs) return;
-  await slackApi("reactions.add", { channel, timestamp: messageTs, name });
+  const ok = await slackApi("reactions.add", { channel, timestamp: messageTs, name });
+  console.log("[slack-events] reaction", name, ok ? "ok" : "failed");
 }
 
 // AI 업무운영 시스템의 첫 아웃바운드 발신(섹션15) — 이 파일은 지금까지 인바운드
@@ -235,12 +236,16 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
   const event = envelope.event;
   const eventId = envelope.event_id;
   if (!event || !eventId || shouldIgnoreSlackEvent(event)) return;
-  if (await eventAlreadyHandled(eventId)) return;
+  if (await eventAlreadyHandled(eventId)) {
+    console.log("[slack-events] already handled", eventId);
+    return;
+  }
 
   const channel = event.channel ?? "";
   const normalized = normalizeEvent(event);
   if (!normalized.messageTs) return;
   const existing = await findRecordByMessageTs(channel, normalized.messageTs);
+  console.log("[slack-events] stage: lookup done", eventId, normalized.action, existing ? "existing" : "new");
   const slackPayload = (userId: string) => ({
     ...(existing?.source_payload ?? {}),
     slack: { teamId: envelope.team_id ?? "", channelId: channel, messageTs: normalized.messageTs, userId, eventIds: eventIdsWith(existing, eventId) },
@@ -275,6 +280,7 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
   } else {
     await pgInsertRow("SLACK_RECORDS", row);
   }
+  console.log("[slack-events] stage: slack_record saved", eventId, "tag:", !!resolved.parsedName, "author_resolved:", metadata.author !== userId);
   // [학생: 이름] 태그 메시지는 기존대로 학생 연결 결과를 반응으로 알린다.
   if (resolved.parsedName) await addSlackReaction(channel, normalized.messageTs, resolved.studentId ? "white_check_mark" : "warning");
 
@@ -316,14 +322,15 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
       // (Slack에서는 이어서 답할 화면이 없으므로 저장하지 않음). 메시지 수정·삭제는 다시 처리하지 않는다.
       try {
         const staff = await staffForSlackUser(userId, metadata.author);
+        console.log("[slack-events] stage: nl start", eventId, "staff_mapped:", !!staff);
         const result = await runUnifiedNlInput(normalized.text, { staffName: staff?.name ?? metadata.author, staffId: staff?.id, role: staff?.role });
         if (result.tasks.length > 0) notifyTaskAssignments(result.tasks);
         const statuses = result.outcomes.map((o) => o.status);
-        console.log("Slack 자연어 기록 결과", eventId, statuses.join(","));
+        console.log("Slack 자연어 기록 결과", eventId, statuses.join(","), result.outcomes.map((o) => o.route).join(","));
         const reaction = statuses.includes("실패") ? "x" : statuses.includes("확인필요") ? "question" : statuses.length ? "white_check_mark" : null;
         if (reaction) await addSlackReaction(channel, normalized.messageTs, reaction);
       } catch (error) {
-        console.error("Slack 자연어 기록 처리 실패", eventId, error instanceof Error ? error.name : "unknown_error");
+        console.error("Slack 자연어 기록 처리 실패", eventId, error instanceof Error ? `${error.name}: ${error.message.slice(0, 300)}` : "unknown_error");
         await addSlackReaction(channel, normalized.messageTs, "x");
       }
     }
