@@ -24,6 +24,7 @@ type Row = Record<string, any>;
 let students: Row[];
 let slackRecords: Row[];
 let learningRecords: Row[];
+let otherInserts: { table: string; row: Row }[];
 // PostgREST jsonb 경로 필터(source_payload->slack->>messageTs=eq.X, ...->eventIds=cs.[..])를 흉내 낸다.
 function jsonPath(row: Row, key: string): unknown {
   const parts = key.split(/->>?/);
@@ -44,6 +45,11 @@ function fakeFetch() {
     if (table === "student_learning_records" && method === "POST") {
       const rows = JSON.parse(init.body).map((r: Row) => ({ id: `lr-${learningRecords.length + 1}`, ...r }));
       learningRecords.push(...rows);
+      return new Response(JSON.stringify(rows), { status: 201 });
+    }
+    if (method === "POST" && table !== "slack_records") {
+      const rows = JSON.parse(init.body).map((r: Row, i: number) => ({ id: `${table}-${otherInserts.length + i + 1}`, ...r }));
+      otherInserts.push(...rows.map((row: Row) => ({ table, row })));
       return new Response(JSON.stringify(rows), { status: 201 });
     }
     if (table === "slack_records" && method === "POST") {
@@ -138,6 +144,7 @@ beforeEach(() => {
   pagesCreate.mockReset().mockResolvedValue({ id: "slack-record", properties: {} });
   slackRecords = [];
   learningRecords = [];
+  otherInserts = [];
   parseUnifiedInput.mockReset().mockResolvedValue([]);
   waitUntil.mockReset();
   students = [
@@ -244,5 +251,18 @@ describe("Slack 학생기록봇 지점 격리", () => {
     parseUnifiedInput.mockResolvedValue([{ route: "student_record", students: ["이서준"], instruction: "", recordType: "homework", completed: false }]);
     await post(slackRequest("geumjeong", { text: "이서준 숙제 안함" }));
     expect(learningRecords).toHaveLength(1);
+  });
+
+  it("'임서영 토요일 1시30분 보강'(행동 동사 없음)도 Slack에서는 확인 없이 이 지점 학생 보강 일정으로 저장된다", async () => {
+    deploy("sajik");
+    students.push({ id: "s-sajik-lim", notion_id: "s-sajik-lim", branch_id: "b-sajik", name: "임서영", status: "재원", class_notion_ids: [] });
+    parseUnifiedInput.mockResolvedValue([
+      { route: "schedule", intentClass: "action", students: ["임서영"], instruction: "", scheduleType: "보강", date: "2026-09-26", time: "13:30" },
+    ]);
+    await post(slackRequest("sajik", { text: "임서영 토요일 1시30분 보강" }));
+    const saved = otherInserts.filter((x) => x.table === "tasks");
+    expect(saved).toHaveLength(1);
+    expect(saved[0].row).toMatchObject({ branch_id: "b-sajik", type: "보강" });
+    expect(JSON.stringify(saved[0].row)).toContain("s-sajik-lim");
   });
 });

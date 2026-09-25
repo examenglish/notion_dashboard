@@ -1267,7 +1267,7 @@ function toQuery(i: UnifiedIntent, text: string): UnifiedIntent {
 export function enforceIntentBoundaries(
   intents: UnifiedIntent[],
   text: string,
-  opts: { actionConfirmed?: boolean } = {}
+  opts: { actionConfirmed?: boolean; scheduleConfirmed?: boolean } = {}
 ): UnifiedIntent[] {
   const sig = writeGuardSignals(text);
   const correctionStudents = new Set(
@@ -1308,7 +1308,8 @@ export function enforceIntentBoundaries(
       if (!ok) return toClarify(i, `"${text}"을(를) 행정실 ${t}(으)로 전달하지 않았습니다. 행정실에 전달할 내용이면 조금 더 구체적으로 알려주세요.`);
     }
     // 6) 업무/일정: 명시적 행동 동사가 없으면 저장 전에 "등록할까요?" 확인(축약 명령형 보호)
-    if ((i.route === "task" || i.route === "schedule") && !sig.action && !opts.actionConfirmed) {
+    //    (Slack 학생기록 채널은 되물을 화면이 없으므로 일정만 확인 없이 저장 — scheduleConfirmed)
+    if ((i.route === "task" || i.route === "schedule") && !sig.action && !opts.actionConfirmed && !(opts.scheduleConfirmed && i.route === "schedule")) {
       i = { ...i, needsActionConfirm: true };
     }
     // 학생 기록의 후속 업무도 원문 행동 요청이 있어야(AI의 actionRequested만 믿지 않음)
@@ -2500,7 +2501,7 @@ function resolveNamesForIntent(
 
 export async function runUnifiedNlInput(
   text: string,
-  opts: { staffName?: string; staffId?: string; role?: string; context?: ClassContext | null; historyToken?: string | null } = {}
+  opts: { staffName?: string; staffId?: string; role?: string; context?: ClassContext | null; historyToken?: string | null; scheduleConfirmed?: boolean } = {}
 ): Promise<{
   ok: boolean;
   outcomes: UnifiedOutcome[];
@@ -2543,7 +2544,7 @@ export async function runUnifiedNlInput(
   if (intents.length === 0) {
     return { ok: false, outcomes: [{ route: "clarify", label: text, status: "확인필요", message: "요청을 이해하지 못했습니다. 다시 입력해 주세요." }], tasks: [] };
   }
-  intents = enforceIntentBoundaries(intents, text);
+  intents = enforceIntentBoundaries(intents, text, { scheduleConfirmed: opts.scheduleConfirmed });
   return processIntents(intents, text, opts, roster);
 }
 

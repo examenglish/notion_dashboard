@@ -323,7 +323,12 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
       try {
         const staff = await staffForSlackUser(userId, metadata.author);
         console.log("[slack-events] stage: nl start", eventId, "staff_mapped:", !!staff);
-        const result = await runUnifiedNlInput(normalized.text, { staffName: staff?.name ?? metadata.author, staffId: staff?.id, role: staff?.role });
+        const result = await runUnifiedNlInput(normalized.text, {
+          staffName: staff?.name ?? metadata.author,
+          staffId: staff?.id,
+          role: staff?.role,
+          scheduleConfirmed: true, // Slack에는 "등록할까요?"에 답할 화면이 없다 — 보강 등 일정은 바로 저장
+        });
         if (result.tasks.length > 0) notifyTaskAssignments(result.tasks);
         const statuses = result.outcomes.map((o) => o.status);
         console.log("Slack 자연어 기록 결과", eventId, statuses.join(","), result.outcomes.map((o) => o.route).join(","));
