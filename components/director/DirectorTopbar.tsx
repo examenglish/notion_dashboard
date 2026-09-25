@@ -3,8 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Search, Loader2, Sparkles } from "lucide-react";
+import { Search, Loader2, Sparkles, Menu } from "lucide-react";
 import DirectorUserMenu from "./DirectorUserMenu";
+import DirectorBreadcrumb from "./DirectorBreadcrumb";
+import { OPEN_DRAWER_EVENT } from "./DirectorSidebar";
 import type { StudentRow } from "@/components/StudentTable";
 
 export default function DirectorTopbar({
@@ -76,10 +78,19 @@ export default function DirectorTopbar({
   }
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border bg-background px-6">
-      <div className="text-sm font-semibold text-foreground">{dateLabel}</div>
+    <>
+    <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-3 md:gap-4 md:px-6">
+      <button
+        type="button"
+        aria-label="메뉴 열기"
+        onClick={() => window.dispatchEvent(new Event(OPEN_DRAWER_EVENT))}
+        className="shrink-0 rounded-md bg-transparent p-2 text-foreground hover:bg-muted md:hidden"
+      >
+        <Menu className="size-5" />
+      </button>
+      <div className="hidden text-sm font-semibold text-foreground sm:block">{dateLabel}</div>
 
-      <div ref={boxRef} className="relative ml-4 flex-1 max-w-sm">
+      <div ref={boxRef} className="relative min-w-0 flex-1 max-w-sm md:ml-4">
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <input
           type="search"
@@ -124,7 +135,7 @@ export default function DirectorTopbar({
       </div>
 
       {greetingTitle && (
-        <div className="ml-4 min-w-0 flex-1 truncate text-sm">
+        <div className="ml-4 hidden min-w-0 flex-1 truncate text-sm lg:block">
           <span className="font-semibold text-foreground">{greetingTitle}</span>
           {greetingText && <span className="text-muted-foreground"> · {greetingText}</span>}
         </div>
@@ -135,10 +146,12 @@ export default function DirectorTopbar({
         className="flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground no-underline hover:bg-muted/60"
       >
         <Sparkles className="size-3.5" />
-        이그잼 AI
+        <span className="hidden sm:inline">이그잼 AI</span>
       </Link>
 
       <DirectorUserMenu staffName={staffName} role={role} branchName={branchName ?? ""} />
     </header>
+    <DirectorBreadcrumb />
+    </>
   );
 }

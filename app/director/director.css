@@ -70,3 +70,8 @@
    plain <button> under /director instead sets its own bg-* utility class
    (0,1,0), which unconditionally outranks the (0,0,1) global rule — same
    fix as the input[type] note above, applied per-component. */
+
+/* 모바일 하단 빠른 메뉴(조교·강사)가 본문 끝을 가리지 않게 */
+@media (max-width: 767px) {
+  .director-shell:has(.director-bottom-nav) main { padding-bottom: 88px; }
+}

@@ -4,7 +4,10 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import AiUnifiedInput from "@/components/AiUnifiedInput";
+import { Suspense } from "react";
 import DirectorUserMenu from "@/components/director/DirectorUserMenu";
+import HomeToday from "@/components/director/HomeToday";
+import { todayKST } from "@/lib/date";
 import "./landing.css";
 export default async function DirectorLandingPage() {
   const session = await getSession();
@@ -20,6 +23,9 @@ export default async function DirectorLandingPage() {
           <Image src="/logo.png" alt="이그잼영어학원" width={843} height={157} priority />
         </Link>
         <nav className="landing-actions" aria-label="계정 메뉴">
+          <Button asChild className="landing-action landing-action-outline">
+            <Link href="/director/sitemap">전체 보기</Link>
+          </Button>
           <Button asChild className="landing-action landing-action-primary">
             <Link href="/director/dashboard">대시보드로 가기</Link>
           </Button>
@@ -40,6 +46,10 @@ export default async function DirectorLandingPage() {
             <p className="landing-promise-ko">학원에서 시작된, 우리만의 AI.</p>
           </div>
           <AiUnifiedInput role={session.role} figma />
+          {/* 입력창은 바로 뜨고, 오늘 할 일은 이어서 채워진다 */}
+          <Suspense fallback={<p className="home-today-loading">오늘 할 일을 불러오는 중…</p>}>
+            <HomeToday role={session.role} staffId={session.staffId} staffName={session.name} today={todayKST()} />
+          </Suspense>
         </div>
       </main>
 

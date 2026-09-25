@@ -105,7 +105,10 @@ export default function StudentHistoryModal({
   scoreData,
   onClose,
   onChanged,
+  initialSection,
 }: {
+  // 학생 화면의 문맥 메뉴(보강/상담 등)에서 열 때 그 구역으로 바로 스크롤한다.
+  initialSection?: string;
   studentId: string;
   student: StudentBasic;
   staffName: string | null;
@@ -145,6 +148,10 @@ export default function StudentHistoryModal({
     loadHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentId]);
+
+  useEffect(() => {
+    if (!loading && initialSection) document.getElementById(`history-${initialSection}`)?.scrollIntoView({ block: "start" });
+  }, [loading, initialSection]);
 
   useEffect(() => {
     setMemo(student.memo);
@@ -354,7 +361,7 @@ export default function StudentHistoryModal({
           {!loading && !history && <p className="muted" style={{ marginTop: 16 }}>기록을 불러오지 못했습니다.</p>}
           {!loading && history && (
             <>
-              <h3 style={{ marginTop: 16 }}>시험대비 현황</h3>
+              <h3 id="history-examprep" style={{ marginTop: 16 }}>시험대비 현황</h3>
               {!history.examPrep ? (
                 <p className="muted">등록된 시험대비 시트가 없습니다.</p>
               ) : (
@@ -423,7 +430,7 @@ export default function StudentHistoryModal({
                 </div>
               )}
 
-              <h3 style={{ marginTop: 20 }}>진도 / 과제 기록</h3>
+              <h3 id="history-progress" style={{ marginTop: 20 }}>진도 / 과제 기록</h3>
               {history.progress.length === 0 ? (
                 <p className="muted">기록이 없습니다.</p>
               ) : (
@@ -443,7 +450,7 @@ export default function StudentHistoryModal({
                 </ul>
               )}
 
-              <h3 style={{ marginTop: 20 }}>보강 이력</h3>
+              <h3 id="history-makeup" style={{ marginTop: 20 }}>보강 이력</h3>
               {history.makeup.length === 0 ? (
                 <p className="muted">보강 이력이 없습니다.</p>
               ) : (
@@ -527,7 +534,7 @@ export default function StudentHistoryModal({
                 </ul>
               )}
 
-              <h3 style={{ marginTop: 20 }}>상담 기록</h3>
+              <h3 id="history-counseling" style={{ marginTop: 20 }}>상담 기록</h3>
               {history.counseling.length === 0 ? (
                 <p className="muted">상담 기록이 없습니다.</p>
               ) : (
@@ -578,7 +585,7 @@ export default function StudentHistoryModal({
                 </ul>
               )}
 
-              <h3 style={{ marginTop: 20 }}>Slack 학생기록</h3>
+              <h3 id="history-slack" style={{ marginTop: 20 }}>Slack 학생기록</h3>
               {history.slack.length === 0 ? (
                 <p className="muted">Slack에서 연결된 학생기록이 없습니다.</p>
               ) : (
@@ -645,7 +652,7 @@ export default function StudentHistoryModal({
                 </ul>
               )}
 
-              <h3 style={{ marginTop: 20 }}>클리닉 기록</h3>
+              <h3 id="history-clinic" style={{ marginTop: 20 }}>클리닉 기록</h3>
               {history.clinic.length === 0 ? (
                 <p className="muted">클리닉 기록이 없습니다.</p>
               ) : (

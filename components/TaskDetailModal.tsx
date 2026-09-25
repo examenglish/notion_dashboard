@@ -10,6 +10,7 @@ type TaskRecord = {
   typeLabel: string;
   title: string;
   studentName: string;
+  studentId?: string | null;
   ownerName: string;
   date: string | null;
   time: string;
@@ -147,6 +148,13 @@ export default function TaskDetailModal({
               {task.className && <span className="muted">({task.className})</span>}{" "}
               {task.urgent && <span className="badge badge-urgent">긴급</span>}
               {task.pool && !task.ownerName && <span className="badge">공용업무풀</span>}
+              {/* 업무 중에 학생 기록·보강·시험대비를 바로 확인(학생 메뉴로 돌아가 다시 찾지 않게) */}
+              {task.studentId && task.studentName && task.studentName !== "-" && (
+                <>
+                  {" "}
+                  <a href={`/director/students?id=${encodeURIComponent(task.studentId)}&q=${encodeURIComponent(task.studentName)}`}>학생 기록 보기</a>
+                </>
+              )}
             </p>
             <p className="muted" style={{ marginTop: 4 }}>
               담당: {task.ownerName || "미배정"} · {task.date ?? "-"} {task.time}

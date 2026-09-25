@@ -216,3 +216,44 @@
   .landing-footer { min-height: 100px; padding: 20px 22px; flex-direction: column; align-items: flex-start; gap: 12px; }
   .landing-footer > div { gap: 14px; }
 }
+
+/* 입력창 아래 "오늘 할 일" — 첫 화면의 입력창을 약화시키지 않게 낮은 밀도·타이포 중심 */
+.home-today { width: min(760px, 100%); margin-top: 28px; display: flex; flex-direction: column; gap: 22px; text-align: left; }
+.home-today-block { display: flex; flex-direction: column; gap: 10px; }
+.home-today-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.home-today-head h2 { margin: 0; font-size: 15px; font-weight: 700; color: var(--landing-ink); }
+.home-today-meta { font-size: 12px; color: var(--landing-muted); text-decoration: none; }
+.home-today-empty { margin: 0; font-size: 13px; color: var(--landing-muted); line-height: 20px; }
+.home-task-list, .home-makeups, .home-recent { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.home-task-list li + li, .home-makeups li + li, .home-recent li + li { border-top: 1px solid var(--landing-line); }
+.home-task { display: flex; align-items: center; gap: 12px; padding: 12px 4px; min-height: 52px; color: var(--landing-ink); text-decoration: none; }
+.home-task:hover { background: #fbf4e6; }
+.home-task-order { width: 30px; flex: none; font-size: 11px; font-weight: 700; color: var(--landing-amber); }
+.home-task-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.home-task-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-task-sub { font-size: 12px; color: var(--landing-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-task-when { flex: none; font-size: 12px; font-weight: 600; }
+.home-more { display: block; padding: 10px 4px; font-size: 12px; color: var(--landing-muted); text-decoration: none; }
+.home-counts { display: flex; flex-wrap: wrap; gap: 8px; }
+.home-count { flex: 1 1 120px; display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border-radius: 12px; background: var(--landing-surface); color: var(--landing-ink); text-decoration: none; }
+.home-count:hover { background: #f5ebd6; }
+.home-count-value { font-size: 20px; font-weight: 700; line-height: 24px; }
+.home-count-label { font-size: 12px; color: var(--landing-muted); }
+.home-makeups li { display: flex; align-items: center; gap: 10px; padding: 8px 4px; font-size: 13px; }
+.home-makeup-time { width: 64px; flex: none; font-weight: 700; }
+.home-makeups li .home-today-meta { margin-left: auto; }
+.home-recent a { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 4px; min-height: 44px; color: var(--landing-ink); text-decoration: none; }
+.home-recent a:hover { background: #fbf4e6; }
+.home-shortcuts { display: flex; flex-wrap: wrap; gap: 8px; }
+.home-shortcut { padding: 9px 14px; border-radius: 999px; border: 1px solid var(--landing-line); background: var(--landing-surface); color: var(--landing-ink); font-size: 13px; font-weight: 600; text-decoration: none; }
+.home-shortcut:hover { background: #f5ebd6; }
+.home-shortcut-all { color: var(--landing-muted); }
+.home-today-loading { margin-top: 28px; font-size: 13px; color: var(--landing-muted); }
+@media (max-width: 700px) {
+  .home-today { margin-top: 20px; gap: 18px; }
+  .home-count { flex-basis: calc(50% - 4px); }
+}
+@media (max-width: 700px) {
+  /* 모바일 헤더는 좁다 — 전체 보기는 입력창 아래 바로가기에 있다 */
+  .director-landing .landing-action-outline { display: none; }
+}

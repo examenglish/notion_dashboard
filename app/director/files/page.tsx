@@ -65,7 +65,17 @@ export default async function DirectorFilesPage({ searchParams }: { searchParams
             {unavailable ? (
               <p className="muted">파일 보관함을 아직 사용할 수 없습니다(관리자 설정이 필요합니다).</p>
             ) : files.length === 0 ? (
-              <p className="muted">조건에 맞는 파일이 없습니다.</p>
+              q || range ? (
+                <div>
+                  <p className="muted">조건에 맞는 파일이 없습니다. 파일명의 일부 단어만 넣어 보세요(예: “이사벨 추가”).</p>
+                  <p style={{ marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    {q.includes(" ") && <a href={`/director/files?q=${encodeURIComponent(q.split(/\s+/)[0])}`}>“{q.split(/\s+/)[0]}”만으로 검색</a>}
+                    <a href="/director/files">최근 파일 보기</a>
+                  </p>
+                </div>
+              ) : (
+                <p className="muted">아직 보관된 파일이 없습니다. Slack 채널에 파일을 올리면 자동으로 보관되어 여기에 나타납니다.</p>
+              )
             ) : (
               <FileResults files={files} />
             )}
