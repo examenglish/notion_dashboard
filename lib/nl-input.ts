@@ -121,6 +121,13 @@ export function matchToDoListShortcut(text: string): string | null {
   return m ? m[1].trim() : null;
 }
 
+// "/진도 중2A 3과 본문, 과제 워크북 10~12" — 반 진도 입력으로 확정. AI는 반/진도/과제/교시
+// 추출만 맡고, 분류 결과와 무관하게 class_progress로만 저장된다(runUnifiedNlInput forceRoute).
+export function matchProgressShortcut(text: string): string | null {
+  const m = text.match(/^\/\s*진도(?:입력)?(?:\s+([\s\S]*))?$/);
+  return m ? (m[1] ?? "").trim() : null;
+}
+
 function candidateLabel(s: StudentInfo, classNameById: Map<string, string>): string {
   const classNames = (s.classIds ?? []).map((id) => classNameById.get(id)).filter((n): n is string => !!n);
   const classLabel = classNames.length > 0 ? classNames.join("·") : "반 미배정";
@@ -2501,7 +2508,7 @@ function resolveNamesForIntent(
 
 export async function runUnifiedNlInput(
   text: string,
-  opts: { staffName?: string; staffId?: string; role?: string; context?: ClassContext | null; historyToken?: string | null; scheduleConfirmed?: boolean } = {}
+  opts: { staffName?: string; staffId?: string; role?: string; context?: ClassContext | null; historyToken?: string | null; scheduleConfirmed?: boolean; forceRoute?: "class_progress" } = {}
 ): Promise<{
   ok: boolean;
   outcomes: UnifiedOutcome[];
@@ -2525,7 +2532,7 @@ export async function runUnifiedNlInput(
   mark("unified:before_llm");
   try {
     intents = await parseUnifiedInput(
-      text,
+      opts.forceRoute === "class_progress" ? `[반 진도/과제 기록] ${text}` : text,
       {
         today,
         weekday,
@@ -2544,8 +2551,28 @@ export async function runUnifiedNlInput(
   if (intents.length === 0) {
     return { ok: false, outcomes: [{ route: "clarify", label: text, status: "확인필요", message: "요청을 이해하지 못했습니다. 다시 입력해 주세요." }], tasks: [] };
   }
-  intents = enforceIntentBoundaries(intents, text, { scheduleConfirmed: opts.scheduleConfirmed });
+  intents =
+    opts.forceRoute === "class_progress"
+      ? forceClassProgressIntents(intents, text)
+      : enforceIntentBoundaries(intents, text, { scheduleConfirmed: opts.scheduleConfirmed });
   return processIntents(intents, text, opts, roster);
+}
+
+// "/진도" 강제 — AI가 다른 route로 분류해도 class_progress로만 처리한다. 진도 intent가
+// 있으면 그것만 남기고, 없으면 첫 intent의 반/날짜/교시를 살려 진도로 바꾼다(진도 내용이
+// 비면 원문을 그대로 쓴다). 수정/삭제는 원문에 정정 표현이 있을 때만 허용.
+function forceClassProgressIntents(intents: UnifiedIntent[], text: string): UnifiedIntent[] {
+  const progressOnly = intents.filter((i) => i.route === "class_progress");
+  const picked = progressOnly.length > 0 ? progressOnly : [intents[0]];
+  const allowEdit = SIG_CORR.test(text) || SIG_CONTRAST.test(text);
+  return picked.map((i) => ({
+    ...i,
+    intentClass: "record",
+    route: "class_progress",
+    progress: i.progress?.trim() || (i.homework?.trim() ? "" : i.instruction?.trim() || text),
+    editMode: allowEdit && (i.editMode === "replace" || i.editMode === "delete") ? i.editMode : "append",
+    needsActionConfirm: false,
+  }));
 }
 
 // 경계 검사를 통과한 intent들을 실제로 처리한다(저장/조회). runUnifiedNlInput과,

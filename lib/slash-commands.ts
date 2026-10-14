@@ -5,6 +5,7 @@
 export type SlashCommandInfo = { cmd: string; description: string; example: string };
 
 export const SLASH_COMMAND_LIST: SlashCommandInfo[] = [
+  { cmd: "진도", description: "반 진도·과제 입력", example: "/진도 중2A 3과 본문, 과제 워크북 10~12" },
   { cmd: "보강", description: "보강 일정 등록", example: "/보강 박서재 내일 5시" },
   { cmd: "재시", description: "재시험 일정 등록", example: "/재시 김민수 오늘 4시" },
   { cmd: "신입생상담", description: "신입생 상담 일정 등록", example: "/신입생상담 이서현 토요일 10시" },

@@ -9,6 +9,7 @@ import {
   continuePendingInput,
   parseSlashCommand,
   matchToDoListShortcut,
+  matchProgressShortcut,
   type PendingAction,
   type ClassContext,
   EXPLICIT_NEW_STUDENT,
@@ -138,11 +139,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, mode: "legacy", message: `개인 할일에 저장했습니다: ${todoContent}` });
     }
 
+    const progressText = matchProgressShortcut(text);
     const { isSlashCommand, rest: slashRest, forceTool, forcedScheduleType, forcedInboxType } = parseSlashCommand(text);
 
     // 슬래시 명령(/보강 등)은 처음부터 그 카테고리가 확정된 것이므로 업무
     // 생성을 시도할 이유가 없다 — 곧바로 기존 파이프라인으로.
-    if (isSlashCommand || forceLegacy) {
+    if (progressText === "") {
+      return NextResponse.json({ ok: false, message: "/진도 뒤에 반 이름과 진도를 적어주세요. 예) /진도 중2A 3과 본문, 과제 워크북 10~12" });
+    }
+    if (progressText === null && (isSlashCommand || forceLegacy)) {
       return await runLegacy(slashRest, forceTool, forcedScheduleType, forcedInboxType);
     }
 
@@ -157,7 +162,7 @@ export async function POST(req: NextRequest) {
     // 입력 이력 조회 결과 번호 토큰 — 서버 서명(HMAC) + 조회한 직원 id가 들어 있어, 현재
     // 세션 직원과 다르거나 위·변조되면 runUnifiedNlInput이 무시한다.
     const historyToken = typeof body?.history === "string" ? body.history : null;
-    const result = await runUnifiedNlInput(text, { staffName, staffId: staffId || undefined, role: readStaffRole(req) || undefined, context, historyToken });
+    const result = await runUnifiedNlInput(progressText ?? text, { forceRoute: progressText !== null ? "class_progress" : undefined, staffName, staffId: staffId || undefined, role: readStaffRole(req) || undefined, context, historyToken });
     mark("route:after_unified");
     if (result.tasks.length > 0) notifyTaskAssignments(result.tasks);
     const summary =
