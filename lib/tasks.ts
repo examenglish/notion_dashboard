@@ -188,6 +188,9 @@ export type TaskWorkflow = {
   assignedAt?: string;
   assignReason?: string;
   pooledAt?: string;
+  // 담당자가 퇴사/비활성 처리돼 업무에서 빠진 경우(그 직원 id와 시각)
+  releasedFrom?: string;
+  releasedAt?: string;
   startedAt?: string;
   startedBy?: string;
   completedAt?: string;

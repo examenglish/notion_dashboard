@@ -407,13 +407,80 @@ export async function setStaffResigned(staffId: string, resigned: boolean) {
     fireAndForget("notion:setStaffResigned", () =>
       notion.pages.update({ page_id: staffId, properties: { 퇴사: { checkbox: resigned } } as any })
     );
-    return;
+  } else {
+    const updated = await notion.pages.update({
+      page_id: staffId,
+      properties: { 퇴사: { checkbox: resigned } } as any,
+    });
+    await dualWriteEntity("STAFF", updated);
   }
-  const updated = await notion.pages.update({
-    page_id: staffId,
-    properties: { 퇴사: { checkbox: resigned } } as any,
-  });
-  await dualWriteEntity("STAFF", updated);
+  if (resigned) await releaseResignedStaffAssignments(staffId);
+}
+
+// 퇴사/비활성 직원에게 걸려 있던 "앞으로의 배정"을 푼다. 지난 기록(완료 업무,
+// 클리닉 기록 등)은 그대로 둔다.
+//  - 반별 담당조교: 남겨두면 배정 화면에 계속 담당으로 남고(배정 폼 체크 목록엔
+//    재직자만 떠서 해제할 방법도 없음), 조교 "내 담당반"에도 계속 잡힌다.
+//  - 미완료 업무: 담당자에서 빼고, 담당자가 비면 업무풀로 돌려 autoAssignPoolTasks/
+//    직접 가져가기로 재직자에게 다시 가게 한다.
+// 계정 상태는 이미 바뀌었으므로 여기 실패는 로그만 남기고 퇴사 처리 자체를
+// 실패로 돌리지 않는다.
+async function releaseResignedStaffAssignments(staffId: string) {
+  try {
+    const classes = await listClasses();
+    for (const c of classes) {
+      if (!c.assistantIds.includes(staffId)) continue;
+      await assignClassAssistants(c.id, c.assistantIds.filter((id) => id !== staffId));
+    }
+  } catch (err) {
+    console.error("releaseResignedStaffAssignments: classes failed", staffId, err);
+  }
+  if (getDbProvider() !== "postgres") return;
+  try {
+    const openTasks = await pgQueryRaw(
+      "TODO",
+      `staff_notion_ids=cs.${encodeURIComponent(`{${staffId}}`)}&complete=not.is.true`
+    );
+    for (const row of openTasks) {
+      const id = (row.notion_id as string | null) ?? (row.id as string);
+      const rest = ((row.staff_notion_ids as string[] | null) ?? []).filter((x) => x !== staffId);
+      await pgPatchByNotionId("TODO", id, {
+        staff_notion_ids: rest,
+        staff_id: rest[0] ? await pgResolveRelationId("STAFF", rest[0]) : null,
+        complete: false,
+        ...(rest.length === 0 ? { pool: true } : {}),
+        source_payload: mergeWorkflow(row, {
+          releasedFrom: staffId,
+          releasedAt: new Date().toISOString(),
+          ...(rest.length === 0 ? { pooledAt: new Date().toISOString() } : {}),
+        }),
+      });
+      if (row.notion_id) {
+        const notionId = row.notion_id as string;
+        fireAndForget("notion:releaseResignedStaffTask", () =>
+          notion.pages.update({
+            page_id: notionId,
+            properties: {
+              담당자: { relation: rest.map((x) => ({ id: x })) },
+              ...(rest.length === 0 ? { 업무풀: { checkbox: true } } : {}),
+            } as any,
+          })
+        );
+      }
+    }
+  } catch (err) {
+    console.error("releaseResignedStaffAssignments: tasks failed", staffId, err);
+  }
+}
+
+// 퇴사자까지 포함한 직원 id→이름/활성 여부 — 과거 배정(반 담당조교 등)에 남은
+// id를 이름으로 보여줄 때 쓴다. listStaff()는 재직자만 돌려주므로 이걸 쓴다.
+export async function listAllStaffBrief(): Promise<{ id: string; name: string; active: boolean }[]> {
+  if (getDbProvider() === "postgres") {
+    return (await listStaffAccounts()).map(({ id, name, active }) => ({ id, name, active }));
+  }
+  const all = await getCachedStaffList();
+  return all.map((s) => ({ id: s.id, name: s.name, active: !s.resigned }));
 }
 
 export async function updateStaffPin(staffId: string, newPin: string) {

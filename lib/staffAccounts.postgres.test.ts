@@ -35,7 +35,11 @@ function matchClause(clause: string, row: Row): boolean {
     if (v === "true" || v === "false") return cell === (v === "true");
     return String(cell ?? "") === v;
   }
-  if (op === "is") return raw === "null" ? cell === null || cell === undefined : false;
+  if (op === "is") {
+    if (raw === "null") return cell === null || cell === undefined;
+    if (raw === "true" || raw === "false") return cell === (raw === "true");
+    return false;
+  }
   if (op === "cs") return Array.isArray(cell) && cell.includes(v.replace(/^\{|\}$/g, ""));
   return false;
 }
@@ -95,7 +99,10 @@ beforeEach(async () => {
       { id: "st-gj", notion_id: "st-gj", branch_id: "b-gj", name: "금정조교", role: "조교", pin_hash: h, resigned: false, must_change_password: false },
     ],
     classes: [{ id: "c1", notion_id: "c1", branch_id: "b-sajik", name: "고2 이사벨A", assistant_notion_ids: ["st-minji"], student_notion_ids: [] }],
-    tasks: [{ id: "t1", notion_id: null, branch_id: "b-sajik", type: "암기확인", staff_notion_ids: ["st-minji"], complete: false }],
+    tasks: [
+      { id: "t1", notion_id: null, branch_id: "b-sajik", type: "암기확인", staff_notion_ids: ["st-minji"], complete: false },
+      { id: "t2", notion_id: null, branch_id: "b-sajik", type: "암기확인", staff_notion_ids: ["st-minji"], complete: true },
+    ],
   };
   vi.stubGlobal("fetch", fakeSupabase());
   process.env.SUPABASE_URL = "https://fake.supabase.co";
@@ -245,14 +252,15 @@ describe("원장 직원 계정 관리", () => {
     expect(JSON.stringify(notionCalls)).not.toContain("4321");
   });
 
-  it("재설정·비활성화 후에도 직원 식별자와 반 담당조교·업무 담당자 연결이 그대로", async () => {
+  it("비활성화 시 반 담당조교·미완료 업무에서는 빠지고(업무풀로), 완료 업무 기록과 직원 식별자는 그대로", async () => {
     await resetAs(DIRECTOR, "st-minji");
     const { PATCH } = await import("@/app/api/staff/[id]/route");
     await PATCH(req("/api/staff/st-minji", "PATCH", DIRECTOR, { resigned: true }), { params: { id: "st-minji" } });
     await PATCH(req("/api/staff/st-minji", "PATCH", DIRECTOR, { resigned: false }), { params: { id: "st-minji" } });
     expect(staff("st-minji")).toMatchObject({ id: "st-minji", notion_id: "st-minji", role: "조교", work_schedule: "월=14:00-22:00" });
-    expect(tables.classes[0].assistant_notion_ids).toEqual(["st-minji"]);
-    expect(tables.tasks[0].staff_notion_ids).toEqual(["st-minji"]);
+    expect(tables.classes[0].assistant_notion_ids).toEqual([]);
+    expect(tables.tasks[0]).toMatchObject({ staff_notion_ids: [], staff_id: null, pool: true, complete: false });
+    expect(tables.tasks[1].staff_notion_ids).toEqual(["st-minji"]);
   });
 });
 

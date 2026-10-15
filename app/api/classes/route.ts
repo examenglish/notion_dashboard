@@ -1,12 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClass, findClassByName, listClasses } from "@/lib/notion";
+import { createClass, findClassByName, listClasses, listAllStaffBrief } from "@/lib/notion";
 import { serializeWorkHours, type WorkHours, type DayTeachers } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+// ?withAssistants=1이면 담당조교 이름/재직 여부를 함께 준다 — 퇴사자는
+// /api/staff(재직자만)에 없어서 화면에 id가 그대로 뜨던 문제 방지.
+export async function GET(req: NextRequest) {
   const classes = await listClasses();
-  return NextResponse.json(classes);
+  if (req.nextUrl.searchParams.get("withAssistants") !== "1") return NextResponse.json(classes);
+  const staff = new Map((await listAllStaffBrief()).map((s) => [s.id, s]));
+  return NextResponse.json(
+    classes.map((c) => ({
+      ...c,
+      assistants: c.assistantIds.map((id) => ({ id, name: staff.get(id)?.name ?? "(삭제된 직원)", active: staff.get(id)?.active ?? false })),
+    }))
+  );
 }
 
 // dayHours가 오면(요일별 시간 폼) 요일/시간을 그 안에서 뽑아 쓰고, 없으면

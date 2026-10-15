@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { stripClassSuffix } from "@/lib/format";
 
-type ClassOption = { id: string; name: string; assistantIds: string[] };
+type AssistantRef = { id: string; name: string; active: boolean };
+type ClassOption = { id: string; name: string; assistantIds: string[]; assistants?: AssistantRef[] };
 type StaffOption = { id: string; name: string; role: string | null };
 
 function confirmSave() {
@@ -21,7 +22,7 @@ export default function ClassAssistantAssignForm() {
   const [done, setDone] = useState(false);
 
   useEffect(() => {
-    fetch("/api/classes")
+    fetch("/api/classes?withAssistants=1")
       .then((r) => r.json())
       .then((list: ClassOption[]) => {
         setClasses(list);
@@ -40,6 +41,10 @@ export default function ClassAssistantAssignForm() {
   }, [classId]);
 
   const assistants = staff.filter((s) => s.role === "조교");
+  // 퇴사/비활성 처리 전에 배정돼 남아 있는 사람 — 재직자 목록엔 없으므로 따로
+  // 보여줘야 체크 해제(배정 삭제)할 수 있다.
+  const currentClass = classes.find((c) => c.id === classId);
+  const leftovers = (currentClass?.assistants ?? []).filter((a) => !assistants.some((s) => s.id === a.id));
 
   function toggle(id: string) {
     setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
@@ -55,14 +60,25 @@ export default function ClassAssistantAssignForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ assistantIds: selected }),
       });
-      setClasses((cur) => cur.map((c) => (c.id === classId ? { ...c, assistantIds: selected } : c)));
+      setClasses((cur) =>
+        cur.map((c) =>
+          c.id === classId
+            ? { ...c, assistantIds: selected, assistants: selected.map((id) => ({ id, name: assistantName(id), active: !leftovers.some((l) => l.id === id) })) }
+            : c
+        )
+      );
       setDone(true);
     } finally {
       setSaving(false);
     }
   }
 
-  const assistantName = (id: string) => staff.find((s) => s.id === id)?.name ?? id;
+  const assistantName = (id: string) =>
+    staff.find((s) => s.id === id)?.name ?? classes.flatMap((c) => c.assistants ?? []).find((a) => a.id === id)?.name ?? "(알 수 없는 직원)";
+  const assistantLabel = (c: ClassOption, id: string) => {
+    const ref = c.assistants?.find((a) => a.id === id);
+    return ref && !ref.active ? `${ref.name}(퇴사)` : assistantName(id);
+  };
 
   return (
     <div className="card">
@@ -90,7 +106,7 @@ export default function ClassAssistantAssignForm() {
                     <td>{stripClassSuffix(c.name)}</td>
                     <td>
                       {c.assistantIds.length > 0 ? (
-                        c.assistantIds.map(assistantName).join(", ")
+                        c.assistantIds.map((id) => assistantLabel(c, id)).join(", ")
                       ) : (
                         <span className="muted">미배정</span>
                       )}
@@ -113,7 +129,7 @@ export default function ClassAssistantAssignForm() {
       </select>
 
       <label style={{ marginTop: 12 }}>담당 조교 (복수 선택 가능)</label>
-      {assistants.length === 0 ? (
+      {assistants.length === 0 && leftovers.length === 0 ? (
         <p className="muted">등록된 조교가 없습니다.</p>
       ) : (
         <div className="class-checkbox-grid">
@@ -121,6 +137,12 @@ export default function ClassAssistantAssignForm() {
             <label key={a.id} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, margin: 0 }}>
               <input type="checkbox" checked={selected.includes(a.id)} onChange={() => toggle(a.id)} />
               {a.name}
+            </label>
+          ))}
+          {leftovers.map((a) => (
+            <label key={a.id} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, margin: 0 }} className="muted">
+              <input type="checkbox" checked={selected.includes(a.id)} onChange={() => toggle(a.id)} />
+              {a.name}(퇴사)
             </label>
           ))}
         </div>
