@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import "server-only";
 import { searchStudents } from "./notion";
 import { SLASH_COMMANDS, runNaturalLanguageCommand, runUnifiedNlInput } from "./nl-input";
+import { pgListNlRosterStudents } from "./supabasePgRead";
 import { pgInsertRow, pgPatchById, pgQueryRaw, pgResolveRelationId } from "./supabaseRepo";
 
 const FIVE_MINUTES_SECONDS = 5 * 60;
@@ -230,6 +231,32 @@ export function shouldIgnoreSlackEvent(event: SlackMessageEvent): boolean {
     !!normalized.message.bot_id ||
     normalized.message.subtype === "bot_message"
   );
+}
+
+// 학생기록 채널이 아닌 채널(봇이 초대된 팀 채널 등)은 이 지점 재원생 이름이 들어간 메시지만 기록한다.
+// 명단은 1분 캐시(채널 메시지마다 학생 전체 조회를 반복하지 않도록).
+let rosterNamesCache: { names: string[]; expiresAt: number } | null = null;
+async function rosterStudentNames(): Promise<string[]> {
+  if (rosterNamesCache && rosterNamesCache.expiresAt > Date.now()) return rosterNamesCache.names;
+  const students = await pgListNlRosterStudents();
+  const names = Array.from(
+    new Set(
+      students
+        .filter((s) => s.status !== "퇴원" && s.status !== "휴원")
+        .map((s) => s.name.trim().replace(/\d+$/, ""))
+        .filter((name) => name.length >= 2)
+    )
+  );
+  rosterNamesCache = { names, expiresAt: Date.now() + 60_000 };
+  return names;
+}
+
+export async function mentionsRosterStudent(event: SlackMessageEvent): Promise<boolean> {
+  const text = normalizeEvent(event).text;
+  if (!text.trim()) return false;
+  if (parseStudentName(text)) return true;
+  const names = await rosterStudentNames();
+  return names.some((name) => text.includes(name));
 }
 
 export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> {

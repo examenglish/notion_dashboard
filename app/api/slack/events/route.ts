@@ -2,6 +2,7 @@ import { waitUntil } from "@vercel/functions";
 import { NextRequest, NextResponse } from "next/server";
 import {
   addSlackReaction,
+  mentionsRosterStudent,
   processSlackEvent,
   reserveSlackEvent,
   shouldIgnoreSlackEvent,
@@ -59,12 +60,14 @@ export async function POST(req: NextRequest) {
     allowed_channels: allowedChannels.length,
     channel_allowed: allowedChannels.includes(event?.channel ?? ""),
   };
-  if (!event || !allowedChannels.includes(event.channel ?? "")) {
-    console.log("[slack-events] ignored: channel not allowed", JSON.stringify(diag));
-    return NextResponse.json({ ok: true, ignored: true });
-  }
+  if (!event) return NextResponse.json({ ok: true, ignored: true });
   if (shouldIgnoreSlackEvent(event)) {
     console.log("[slack-events] ignored: filter", JSON.stringify(diag));
+    return NextResponse.json({ ok: true, ignored: true });
+  }
+  // 학생기록 채널은 모든 메시지, 그 밖에 봇이 들어간 채널은 이 지점 학생 이름이 나온 메시지만 기록한다.
+  if (!diag.channel_allowed && !(await mentionsRosterStudent(event).catch(() => false))) {
+    console.log("[slack-events] ignored: no student mention", JSON.stringify(diag));
     return NextResponse.json({ ok: true, ignored: true });
   }
   if (!envelope.event_id || !reserveSlackEvent(envelope.event_id)) {

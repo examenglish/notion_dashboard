@@ -98,14 +98,14 @@ function deploy(code: Code) {
 }
 
 let seq = 0;
-function slackRequest(code: Code, opts: { team?: string; secret?: string; eventId?: string; text?: string; channelType?: string } = {}) {
+function slackRequest(code: Code, opts: { team?: string; secret?: string; eventId?: string; text?: string; channelType?: string; channel?: string } = {}) {
   const b = BRANCHES[code];
   seq++;
   const body = JSON.stringify({
     type: "event_callback",
     team_id: opts.team ?? b.team,
     event_id: opts.eventId ?? `Ev${seq}`,
-    event: { type: "message", channel: b.channel, channel_type: opts.channelType ?? "group", user: "U1", ts: `1790000000.${String(seq).padStart(6, "0")}`, text: opts.text ?? "[학생: 김민수] 단어 재시험" },
+    event: { type: "message", channel: opts.channel ?? b.channel, channel_type: opts.channelType ?? "group", user: "U1", ts: `1790000000.${String(seq).padStart(6, "0")}`, text: opts.text ?? "[학생: 김민수] 단어 재시험" },
   });
   const ts = String(Math.floor(Date.now() / 1000));
   const sig = `v0=${createHmac("sha256", opts.secret ?? b.secret).update(`v0:${ts}:${body}`).digest("hex")}`;
@@ -182,6 +182,16 @@ describe("Slack 학생기록봇 지점 격리", () => {
     deploy("geumjeong");
     expect((await post(slackRequest("geumjeong", { channelType: "channel" }))).status).toBe(200);
     expect(linkedStudentIds()).toEqual([["s-gj-kim"]]);
+  });
+
+  it("학생기록 채널이 아닌 채널: 이 지점 학생 이름이 나온 메시지만 기록한다", async () => {
+    deploy("geumjeong");
+    await post(slackRequest("geumjeong", { channel: "C_TEAM", text: "오늘 회의 3시" }));
+    await post(slackRequest("geumjeong", { channel: "C_TEAM", text: "이서준 숙제 안함" })); // 사직 학생 → 금정에선 무시
+    expect(slackRecords).toHaveLength(0);
+    await post(slackRequest("geumjeong", { channel: "C_TEAM", text: "김민수 단어 재시" }));
+    expect(slackRecords).toHaveLength(1);
+    expect(slackRecords[0]).toMatchObject({ branch_id: "b-gj", original: "김민수 단어 재시" });
   });
 
   it("금정에 없는 학생 이름은 사직 학생으로 연결하지 않는다(미일치로만 남김)", async () => {
