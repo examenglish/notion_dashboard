@@ -223,7 +223,7 @@ export function shouldIgnoreSlackEvent(event: SlackMessageEvent): boolean {
   const allowedSubtype = !event.subtype || event.subtype === "message_changed" || event.subtype === "message_deleted";
   return (
     event.type !== "message" ||
-    event.channel_type !== "group" ||
+    (event.channel_type !== "group" && event.channel_type !== "channel") ||
     !allowedSubtype ||
     !!event.bot_id ||
     event.subtype === "bot_message" ||
