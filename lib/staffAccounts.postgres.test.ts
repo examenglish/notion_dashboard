@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
+vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ unstable_cache: (fn: any) => fn, revalidateTag: vi.fn() }));
 
 const { notionCalls, pageCookie } = vi.hoisted(() => ({ notionCalls: [] as any[], pageCookie: { value: "" } }));
@@ -97,8 +98,17 @@ beforeEach(async () => {
       { id: "st-minji", notion_id: "st-minji", branch_id: "b-sajik", name: "박민지", role: "조교", pin_hash: h, resigned: false, must_change_password: false, work_schedule: "월=14:00-22:00" },
       { id: "st-admin", notion_id: null, branch_id: "b-sajik", name: "이행정", role: "행정", pin_hash: h, resigned: false, must_change_password: false },
       { id: "st-gj", notion_id: "st-gj", branch_id: "b-gj", name: "금정조교", role: "조교", pin_hash: h, resigned: false, must_change_password: false },
+      { id: "st-sujin", notion_id: "st-sujin", branch_id: "b-sajik", name: "김수진", role: "조교", pin_hash: h, resigned: false, must_change_password: false },
     ],
-    classes: [{ id: "c1", notion_id: "c1", branch_id: "b-sajik", name: "고2 이사벨A", assistant_notion_ids: ["st-minji"], student_notion_ids: [] }],
+    classes: [
+      { id: "c1", notion_id: "c1", branch_id: "b-sajik", name: "고2 이사벨A", assistant_notion_ids: ["st-minji"], student_notion_ids: [] },
+      { id: "c2", notion_id: "c2", branch_id: "b-sajik", name: "고1B2", assistant_notion_ids: ["st-minji", "st-sujin"], student_notion_ids: [] },
+      { id: "c3", notion_id: "c3", branch_id: "b-sajik", name: "고2B3", assistant_notion_ids: ["st-sujin"], student_notion_ids: [] },
+      { id: "c-gj", notion_id: "c-gj", branch_id: "b-gj", name: "금정반", assistant_notion_ids: ["st-gj"], student_notion_ids: [] },
+    ],
+    clinic_records: [
+      { id: "cr1", notion_id: "cr1", branch_id: "b-sajik", record_date: "2026-09-01", content: "단어 테스트", assistant_notion_ids: ["st-minji"], student_notion_ids: ["stu-1"] },
+    ],
     tasks: [
       { id: "t1", notion_id: null, branch_id: "b-sajik", type: "암기확인", staff_notion_ids: ["st-minji"], complete: false },
       { id: "t2", notion_id: null, branch_id: "b-sajik", type: "암기확인", staff_notion_ids: ["st-minji"], complete: true },
@@ -129,6 +139,7 @@ function req(url: string, method: string, as: { id: string; role: string; name?:
 const DIRECTOR = { id: "st-dir", role: "원장", name: "서도영" };
 const ASSISTANT = { id: "st-minji", role: "조교", name: "박민지" };
 const ADMIN = { id: "st-admin", role: "행정", name: "이행정" };
+const ASSISTANT_SUJIN = { id: "st-sujin", role: "조교", name: "김수진" };
 const staff = (id: string) => tables.staff.find((s) => s.id === id)!;
 
 async function resetAs(as: typeof DIRECTOR | null, id: string, newPin = "5678", confirmPin = newPin) {
@@ -168,7 +179,7 @@ describe("원장 직원 계정 관리", () => {
     expect((await resetAs(DIRECTOR, "st-gj")).status).toBe(404);
     expect(staff("st-gj").pin_hash).toBe(before);
     const { PATCH } = await import("@/app/api/staff/[id]/route");
-    const res = await PATCH(req("/api/staff/st-gj", "PATCH", DIRECTOR, { resigned: true }), { params: { id: "st-gj" } });
+    const res = await PATCH(req("/api/staff/st-gj", "PATCH", DIRECTOR, { resigned: true, reason: "퇴사" }), { params: { id: "st-gj" } });
     expect(res.status).toBe(404);
     expect(staff("st-gj").resigned).toBe(false);
   });
@@ -185,8 +196,9 @@ describe("원장 직원 계정 관리", () => {
     const body = await res.json();
     const text = JSON.stringify(body);
     expect(text).not.toMatch(/pin_hash|scrypt\$|password|"hash"/i);
-    for (const a of body.accounts) expect(Object.keys(a).sort()).toEqual(["active", "id", "loginId", "mustChangePin", "name", "role"]);
+    for (const a of body.accounts) expect(Object.keys(a).sort()).toEqual(["active", "id", "lastStatusChange", "loginId", "mustChangePin", "name", "role"]);
     expect(body.accounts.map((a: any) => [a.name, a.role, a.loginId, a.active])).toEqual([
+      ["김수진", "조교", "김수진", true],
       ["박민지", "조교", "박민지", true],
       ["서도영", "원장", "서도영", true],
       ["이행정", "행정", "이행정", false],
@@ -206,17 +218,17 @@ describe("원장 직원 계정 관리", () => {
 
   it("비활성화: 원장만, 행정/조교 거부, 본인 계정 비활성화 거부, 비활성 계정은 로그인 차단 → 재활성화 후 로그인", async () => {
     const { PATCH } = await import("@/app/api/staff/[id]/route");
-    expect((await PATCH(req("/api/staff/st-minji", "PATCH", ADMIN, { resigned: true }), { params: { id: "st-minji" } })).status).toBe(403);
-    expect((await PATCH(req("/api/staff/st-minji", "PATCH", ASSISTANT, { resigned: true }), { params: { id: "st-minji" } })).status).toBe(403);
-    expect((await PATCH(req("/api/staff/st-dir", "PATCH", DIRECTOR, { resigned: true }), { params: { id: "st-dir" } })).status).toBe(400);
-    expect((await PATCH(req("/api/staff/st-minji", "PATCH", DIRECTOR, { resigned: true }), { params: { id: "st-minji" } })).status).toBe(200);
+    expect((await PATCH(req("/api/staff/st-minji", "PATCH", ADMIN, { resigned: true, reason: "퇴사" }), { params: { id: "st-minji" } })).status).toBe(403);
+    expect((await PATCH(req("/api/staff/st-minji", "PATCH", ASSISTANT, { resigned: true, reason: "퇴사" }), { params: { id: "st-minji" } })).status).toBe(403);
+    expect((await PATCH(req("/api/staff/st-dir", "PATCH", DIRECTOR, { resigned: true, reason: "퇴사" }), { params: { id: "st-dir" } })).status).toBe(400);
+    expect((await PATCH(req("/api/staff/st-minji", "PATCH", DIRECTOR, { resigned: true, reason: "퇴사" }), { params: { id: "st-minji" } })).status).toBe(200);
     expect(staff("st-minji").resigned).toBe(true);
 
     const login = await import("@/app/api/login/route");
     const blocked = await login.POST(req("/api/login", "POST", null, { name: "박민지", pin: "1234" }));
     expect(blocked.status).toBe(401);
 
-    await PATCH(req("/api/staff/st-minji", "PATCH", DIRECTOR, { resigned: false }), { params: { id: "st-minji" } });
+    await PATCH(req("/api/staff/st-minji", "PATCH", DIRECTOR, { resigned: false, reason: "복직" }), { params: { id: "st-minji" } });
     const ok = await login.POST(req("/api/login", "POST", null, { name: "박민지", pin: "1234" }));
     expect(ok.status).toBe(200);
   });
@@ -252,18 +264,140 @@ describe("원장 직원 계정 관리", () => {
     expect(JSON.stringify(notionCalls)).not.toContain("4321");
   });
 
-  it("비활성화 시 반 담당조교·미완료 업무에서는 빠지고(업무풀로), 완료 업무 기록과 직원 식별자는 그대로", async () => {
-    await resetAs(DIRECTOR, "st-minji");
+  it("변경 사유는 필수이고, 일시·처리 관리자·사유가 이력에 남는다", async () => {
     const { PATCH } = await import("@/app/api/staff/[id]/route");
-    await PATCH(req("/api/staff/st-minji", "PATCH", DIRECTOR, { resigned: true }), { params: { id: "st-minji" } });
-    await PATCH(req("/api/staff/st-minji", "PATCH", DIRECTOR, { resigned: false }), { params: { id: "st-minji" } });
-    expect(staff("st-minji")).toMatchObject({ id: "st-minji", notion_id: "st-minji", role: "조교", work_schedule: "월=14:00-22:00" });
-    expect(tables.classes[0].assistant_notion_ids).toEqual([]);
-    expect(tables.tasks[0]).toMatchObject({ staff_notion_ids: [], staff_id: null, pool: true, complete: false });
-    expect(tables.tasks[1].staff_notion_ids).toEqual(["st-minji"]);
+    const noReason = await PATCH(req("/api/staff/st-minji", "PATCH", DIRECTOR, { resigned: true }), { params: { id: "st-minji" } });
+    expect(noReason.status).toBe(400);
+    expect(staff("st-minji").resigned).toBe(false);
+
+    await PATCH(req("/api/staff/st-minji", "PATCH", DIRECTOR, { resigned: true, reason: "퇴사" }), { params: { id: "st-minji" } });
+    await PATCH(req("/api/staff/st-minji", "PATCH", DIRECTOR, { resigned: false, reason: "복직" }), { params: { id: "st-minji" } });
+    const history = staff("st-minji").source_payload.statusHistory;
+    expect(history).toHaveLength(2);
+    expect(history[0]).toMatchObject({ active: false, byId: "st-dir", byName: "서도영", reason: "퇴사" });
+    expect(history[1]).toMatchObject({ active: true, byId: "st-dir", byName: "서도영", reason: "복직" });
+    expect(Date.parse(history[0].at)).not.toBeNaN();
+
+    const { GET } = await import("@/app/api/staff/accounts/route");
+    const { accounts } = await (await GET(req("/api/staff/accounts", "GET", DIRECTOR))).json();
+    expect(accounts.find((a: any) => a.id === "st-minji").lastStatusChange).toMatchObject({ active: true, byName: "서도영", reason: "복직" });
   });
 });
 
+describe("퇴사·비활성 조교: 현재 운영과 과거 기록 분리", () => {
+  async function setResigned(id: string, resigned: boolean) {
+    const { PATCH } = await import("@/app/api/staff/[id]/route");
+    const res = await PATCH(req(`/api/staff/${id}`, "PATCH", DIRECTOR, { resigned, reason: resigned ? "퇴사" : "복직" }), { params: { id } });
+    expect(res.status).toBe(200);
+  }
+  async function currentClasses() {
+    const { GET } = await import("@/app/api/classes/route");
+    return (await (await GET()).json()) as { id: string; assistantIds: string[]; needsReassign: boolean }[];
+  }
+  const cls = (list: { id: string }[], id: string) => list.find((c) => c.id === id) as any;
+
+  it("1·2·7. 비활성화 즉시 현재 담당에서 제외, 비활성만 남은 반은 재배정 필요, 재직자와 함께면 재직자만, 다른 반 영향 없음", async () => {
+    const before = await currentClasses();
+    expect(cls(before, "c1")).toMatchObject({ assistantIds: ["st-minji"], needsReassign: false });
+
+    await setResigned("st-minji", true);
+    const after = await currentClasses();
+    expect(cls(after, "c1")).toMatchObject({ assistantIds: [], needsReassign: true });
+    expect(cls(after, "c2")).toMatchObject({ assistantIds: ["st-sujin"], needsReassign: false });
+    expect(cls(after, "c3")).toMatchObject({ assistantIds: ["st-sujin"], needsReassign: false });
+    // 응답에 비활성 직원 id가 현재 담당자로 섞이지 않는다
+    expect(JSON.stringify(after.map((c: any) => c.assistantIds))).not.toContain("st-minji");
+    // 비활성화는 DB의 과거 담당 관계를 지우지 않는다
+    expect(tables.classes.find((c) => c.id === "c1")!.assistant_notion_ids).toEqual(["st-minji"]);
+    expect(tables.classes.find((c) => c.id === "c2")!.assistant_notion_ids).toEqual(["st-minji", "st-sujin"]);
+    // 업무(완료·미완료)는 임의로 재배정하지 않는다
+    expect(tables.tasks.map((t) => t.staff_notion_ids)).toEqual([["st-minji"], ["st-minji"]]);
+  });
+
+  it("1. 조교 화면 '내 담당반'과 업무 자동배정 후보에서도 비활성 조교 제외(API·조회 단계)", async () => {
+    await setResigned("st-minji", true);
+    const notion = await import("@/lib/notion");
+    const classes = await notion.listClasses();
+    expect(classes.filter((c) => c.assistantIds.includes("st-minji"))).toEqual([]);
+    const staffIds = (await notion.listStaff()).map((s) => s.id);
+    expect(staffIds).not.toContain("st-minji");
+    expect(staffIds).toContain("st-sujin");
+  });
+
+  it("신규 배정은 재직 조교만(서버 검증), 원장/행정만 가능, 다른 지점 반·직원은 불가", async () => {
+    await setResigned("st-minji", true);
+    const { PATCH } = await import("@/app/api/classes/[id]/assistants/route");
+    const call = (as: any, id: string, assistantIds: string[]) =>
+      PATCH(req(`/api/classes/${id}/assistants`, "PATCH", as, { assistantIds }), { params: { id } });
+
+    expect((await call(DIRECTOR, "c3", ["st-sujin", "st-minji"])).status).toBe(400); // 비활성
+    expect((await call(DIRECTOR, "c3", ["st-gj"])).status).toBe(400); // 다른 지점 직원
+    expect((await call(DIRECTOR, "c3", ["st-dir"])).status).toBe(400); // 조교 아님
+    expect((await call(ASSISTANT_SUJIN, "c3", ["st-sujin"])).status).toBe(403); // 조교는 배정 변경 불가
+    expect((await call(DIRECTOR, "c-gj", ["st-sujin"])).status).toBe(404); // 다른 지점 반
+    expect(tables.classes.find((c) => c.id === "c3")!.assistant_notion_ids).toEqual(["st-sujin"]);
+    expect(tables.classes.find((c) => c.id === "c-gj")!.assistant_notion_ids).toEqual(["st-gj"]);
+
+    // 재배정: 비활성 조교는 현재 배정에서 빠지고 종료 이력(처리자 포함)으로 남는다
+    expect((await call(ADMIN, "c1", ["st-sujin"])).status).toBe(200);
+    const c1 = tables.classes.find((c) => c.id === "c1")!;
+    expect(c1.assistant_notion_ids).toEqual(["st-sujin"]);
+    expect(c1.source_payload.assistantHistory).toEqual([
+      expect.objectContaining({ staffId: "st-minji", reason: "manual_change", endedById: "st-admin", endedByName: "이행정" }),
+    ]);
+    expect(cls(await currentClasses(), "c1")).toMatchObject({ assistantIds: ["st-sujin"], needsReassign: false });
+  });
+
+  it("3. 과거 클리닉 기록의 작성 조교 이름은 비활성화 후에도 그대로", async () => {
+    await setResigned("st-minji", true);
+    const { pgStaffNameMap } = await import("@/lib/supabasePgRead");
+    expect((await pgStaffNameMap()).get(tables.clinic_records[0].assistant_notion_ids[0])).toBe("박민지");
+    expect(tables.clinic_records[0].assistant_notion_ids).toEqual(["st-minji"]);
+  });
+
+  it("5. 재활성화해도 과거 반 배정은 자동 복원되지 않고, 종료 이력으로 남는다", async () => {
+    await setResigned("st-minji", true);
+    await setResigned("st-minji", false);
+    const after = await currentClasses();
+    expect(cls(after, "c1")).toMatchObject({ assistantIds: [], needsReassign: false });
+    expect(cls(after, "c2")).toMatchObject({ assistantIds: ["st-sujin"] });
+    const c1 = tables.classes.find((c) => c.id === "c1")!;
+    const c2 = tables.classes.find((c) => c.id === "c2")!;
+    expect(c1.assistant_notion_ids).toEqual([]);
+    expect(c2.assistant_notion_ids).toEqual(["st-sujin"]);
+    for (const c of [c1, c2]) {
+      expect(c.source_payload.assistantHistory).toEqual([
+        expect.objectContaining({ staffId: "st-minji", reason: "ended_before_reactivation", endedById: "st-dir" }),
+      ]);
+    }
+    // 재직 조교 배정과 다른 지점 반은 그대로
+    expect(tables.classes.find((c) => c.id === "c3")!.assistant_notion_ids).toEqual(["st-sujin"]);
+    expect(tables.classes.find((c) => c.id === "c-gj")!.assistant_notion_ids).toEqual(["st-gj"]);
+    // 업무 기록은 그대로
+    expect(tables.tasks.map((t) => t.staff_notion_ids)).toEqual([["st-minji"], ["st-minji"]]);
+  });
+
+  it("6. 사직점에서 비활성화해도 금정점 직원·반은 영향 없음, 금정 직원은 사직에서 비활성화 불가", async () => {
+    await setResigned("st-minji", true);
+    const { PATCH } = await import("@/app/api/staff/[id]/route");
+    expect((await PATCH(req("/api/staff/st-gj", "PATCH", DIRECTOR, { resigned: true, reason: "퇴사" }), { params: { id: "st-gj" } })).status).toBe(404);
+    expect(staff("st-gj").resigned).toBe(false);
+    expect(tables.classes.find((c) => c.id === "c-gj")!.assistant_notion_ids).toEqual(["st-gj"]);
+    expect((await currentClasses()).map((c) => c.id)).not.toContain("c-gj");
+  });
+
+  it("보강·재시 일정: 미완료 업무의 비활성 담당자는 재배정 필요 표시, 완료 기록은 당시 이름 그대로", async () => {
+    tables.tasks = [
+      { id: "m1", notion_id: "m1", branch_id: "b-sajik", type: "보강", title: "보강 - 학생", staff_notion_ids: ["st-minji"], student_notion_ids: [], due_date: "2099-01-01", complete: false },
+      { id: "m2", notion_id: "m2", branch_id: "b-sajik", type: "보강", title: "보강 - 학생", staff_notion_ids: ["st-minji"], student_notion_ids: [], due_date: "2026-01-01", complete: true },
+    ];
+    await setResigned("st-minji", true);
+    const { listScheduleTasks } = await import("@/lib/directorViews");
+    const b = (await listScheduleTasks("보강", "2026-10-15"))!;
+    expect(b.upcoming[0].owner).toBe("박민지(비활성 · 재배정 필요)");
+    expect(b.done[0].owner).toBe("박민지");
+  });
+});
 
 describe("비활성화/재설정 시 기존 세션 즉시 차단(서명 쿠키 유지 + 서버 활성 확인)", () => {
   async function loginCookie(name: string, pin = "1234"): Promise<string> {
@@ -280,7 +414,7 @@ describe("비활성화/재설정 시 기존 세션 즉시 차단(서명 쿠키 �
   const passed = (res: Response) => res.headers.get("x-middleware-next") === "1";
   async function setResigned(id: string, resigned: boolean) {
     const { PATCH } = await import("@/app/api/staff/[id]/route");
-    const res = await PATCH(req(`/api/staff/${id}`, "PATCH", DIRECTOR, { resigned }), { params: { id } });
+    const res = await PATCH(req(`/api/staff/${id}`, "PATCH", DIRECTOR, { resigned, reason: resigned ? "퇴사" : "복직" }), { params: { id } });
     expect(res.status).toBe(200);
   }
 
@@ -343,7 +477,7 @@ describe("비활성화/재설정 시 기존 세션 즉시 차단(서명 쿠키 �
 
   it("원장 본인 계정 비활성화 방지 유지", async () => {
     const { PATCH } = await import("@/app/api/staff/[id]/route");
-    const res = await PATCH(req("/api/staff/st-dir", "PATCH", DIRECTOR, { resigned: true }), { params: { id: "st-dir" } });
+    const res = await PATCH(req("/api/staff/st-dir", "PATCH", DIRECTOR, { resigned: true, reason: "퇴사" }), { params: { id: "st-dir" } });
     expect(res.status).toBe(400);
     expect(staff("st-dir").resigned).toBe(false);
   });

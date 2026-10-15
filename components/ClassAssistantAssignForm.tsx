@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { stripClassSuffix } from "@/lib/format";
 
-type AssistantRef = { id: string; name: string; active: boolean };
-type ClassOption = { id: string; name: string; assistantIds: string[]; assistants?: AssistantRef[] };
+// assistantIds는 재직 조교만(서버 listClasses가 거름). needsReassign은 비활성 조교만
+// 남아 재직 담당자가 없는 반.
+type ClassOption = { id: string; name: string; assistantIds: string[]; needsReassign?: boolean };
 type StaffOption = { id: string; name: string; role: string | null };
 
 function confirmSave() {
@@ -20,9 +21,10 @@ export default function ClassAssistantAssignForm() {
   const [selected, setSelected] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/classes?withAssistants=1")
+    fetch("/api/classes")
       .then((r) => r.json())
       .then((list: ClassOption[]) => {
         setClasses(list);
@@ -41,10 +43,6 @@ export default function ClassAssistantAssignForm() {
   }, [classId]);
 
   const assistants = staff.filter((s) => s.role === "조교");
-  // 퇴사/비활성 처리 전에 배정돼 남아 있는 사람 — 재직자 목록엔 없으므로 따로
-  // 보여줘야 체크 해제(배정 삭제)할 수 있다.
-  const currentClass = classes.find((c) => c.id === classId);
-  const leftovers = (currentClass?.assistants ?? []).filter((a) => !assistants.some((s) => s.id === a.id));
 
   function toggle(id: string) {
     setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
@@ -54,31 +52,27 @@ export default function ClassAssistantAssignForm() {
     if (!confirmSave()) return;
     setSaving(true);
     setDone(false);
+    setError(null);
     try {
-      await fetch(`/api/classes/${classId}/assistants`, {
+      const res = await fetch(`/api/classes/${classId}/assistants`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ assistantIds: selected }),
       });
-      setClasses((cur) =>
-        cur.map((c) =>
-          c.id === classId
-            ? { ...c, assistantIds: selected, assistants: selected.map((id) => ({ id, name: assistantName(id), active: !leftovers.some((l) => l.id === id) })) }
-            : c
-        )
-      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error ?? "저장에 실패했습니다.");
+        return;
+      }
+      setClasses((cur) => cur.map((c) => (c.id === classId ? { ...c, assistantIds: selected, needsReassign: false } : c)));
       setDone(true);
     } finally {
       setSaving(false);
     }
   }
 
-  const assistantName = (id: string) =>
-    staff.find((s) => s.id === id)?.name ?? classes.flatMap((c) => c.assistants ?? []).find((a) => a.id === id)?.name ?? "(알 수 없는 직원)";
-  const assistantLabel = (c: ClassOption, id: string) => {
-    const ref = c.assistants?.find((a) => a.id === id);
-    return ref && !ref.active ? `${ref.name}(퇴사)` : assistantName(id);
-  };
+  // 내부 id를 화면에 그대로 내보내지 않는다(직원 목록을 아직 못 불러온 순간 등).
+  const assistantName = (id: string) => staff.find((s) => s.id === id)?.name ?? "…";
 
   return (
     <div className="card">
@@ -106,7 +100,9 @@ export default function ClassAssistantAssignForm() {
                     <td>{stripClassSuffix(c.name)}</td>
                     <td>
                       {c.assistantIds.length > 0 ? (
-                        c.assistantIds.map((id) => assistantLabel(c, id)).join(", ")
+                        c.assistantIds.map(assistantName).join(", ")
+                      ) : c.needsReassign ? (
+                        <span className="error-text">미배정 (재배정 필요)</span>
                       ) : (
                         <span className="muted">미배정</span>
                       )}
@@ -129,7 +125,7 @@ export default function ClassAssistantAssignForm() {
       </select>
 
       <label style={{ marginTop: 12 }}>담당 조교 (복수 선택 가능)</label>
-      {assistants.length === 0 && leftovers.length === 0 ? (
+      {assistants.length === 0 ? (
         <p className="muted">등록된 조교가 없습니다.</p>
       ) : (
         <div className="class-checkbox-grid">
@@ -139,15 +135,10 @@ export default function ClassAssistantAssignForm() {
               {a.name}
             </label>
           ))}
-          {leftovers.map((a) => (
-            <label key={a.id} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, margin: 0 }} className="muted">
-              <input type="checkbox" checked={selected.includes(a.id)} onChange={() => toggle(a.id)} />
-              {a.name}(퇴사)
-            </label>
-          ))}
         </div>
       )}
 
+      {error && <p className="error-text">{error}</p>}
       {done && <p className="success-box" style={{ marginTop: 12 }}>저장됐습니다.</p>}
 
       <div style={{ marginTop: 16 }}>

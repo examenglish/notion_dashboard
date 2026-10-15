@@ -2,7 +2,13 @@
 
 import { useEffect, useState } from "react";
 
-type Account = { id: string; name: string; role: string | null; loginId: string; active: boolean; mustChangePin: boolean };
+type StatusChange = { active: boolean; at: string; byName: string | null; reason: string };
+type Account = { id: string; name: string; role: string | null; loginId: string; active: boolean; mustChangePin: boolean; lastStatusChange: StatusChange | null };
+
+function formatChange(c: StatusChange) {
+  const at = new Date(c.at).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "short", timeStyle: "short" });
+  return `${c.active ? "활성화" : "비활성화"} · ${at}${c.byName ? ` · ${c.byName}` : ""}${c.reason ? ` · ${c.reason}` : ""}`;
+}
 
 // 원장 전용 직원 계정 관리 — 기존 비밀번호를 보여주지 않고 새 비밀번호로만 재설정한다.
 // 권한은 서버(/api/staff/accounts, /api/staff/[id]/password, /api/staff/[id])가 다시 확인한다.
@@ -53,14 +59,23 @@ export default function StaffAccountTable() {
 
   async function toggleActive(a: Account) {
     const next = !a.active;
-    if (!window.confirm(next ? `${a.name}님 계정을 다시 활성화할까요?` : `${a.name}님 계정을 비활성화할까요?\n로그인과 새 배정에서 제외되고, 작성한 기록은 그대로 남습니다.`)) return;
+    const reason = window.prompt(
+      next
+        ? `${a.name}님 계정을 다시 활성화합니다.\n이전 반 배정은 자동으로 복원되지 않으니 필요하면 다시 배정해 주세요.\n\n변경 사유를 입력하세요.`
+        : `${a.name}님 계정을 비활성화합니다.\n로그인과 현재 담당·새 배정에서 제외되고, 작성한 기록은 그대로 남습니다.\n\n변경 사유를 입력하세요(예: 퇴사, 휴직).`
+    );
+    if (reason === null) return;
+    if (!reason.trim()) {
+      setNotice("변경 사유를 입력해야 합니다.");
+      return;
+    }
     setBusy(a.id);
     setNotice(null);
     try {
       const res = await fetch(`/api/staff/${encodeURIComponent(a.id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resigned: !next }),
+        body: JSON.stringify({ resigned: !next, reason: reason.trim() }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) setNotice(d.error ?? "처리에 실패했습니다.");
@@ -98,6 +113,7 @@ export default function StaffAccountTable() {
                   <td>
                     {a.active ? <span className="badge badge-success">활성</span> : <span className="badge">비활성</span>}
                     {a.active && a.mustChangePin && <span className="muted" style={{ fontSize: 12 }}> · 비번 변경 대기</span>}
+                    {a.lastStatusChange && <div className="muted" style={{ fontSize: 12 }}>{formatChange(a.lastStatusChange)}</div>}
                   </td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button type="button" className="secondary" disabled={busy === a.id} onClick={() => { setResetFor(a); setNewPin(""); setConfirmPin(""); setNotice(null); }}>

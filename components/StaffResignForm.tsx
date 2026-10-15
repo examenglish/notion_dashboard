@@ -5,7 +5,7 @@ import StaffPicker from "./StaffPicker";
 
 function confirmResign(name: string) {
   return window.confirm(
-    `${name}님을 퇴사 처리하시겠습니까?\n\n로그인과 새 배정 목록에서 제외되며, 그동안 작성한 기록은 지워지지 않고 그대로 남습니다.`
+    `${name}님을 퇴사 처리하시겠습니까?\n\n로그인과 현재 담당·새 배정 목록에서 제외되며(담당이던 반은 "재배정 필요"로 표시), 그동안 작성한 기록은 지워지지 않고 그대로 남습니다.`
   );
 }
 
@@ -15,6 +15,7 @@ function confirmResign(name: string) {
 // setStaffResigned 주석 참고).
 export default function StaffResignForm() {
   const [name, setName] = useState("");
+  const [reason, setReason] = useState("퇴사");
   const [allStaff, setAllStaff] = useState<{ id: string; name: string }[]>([]);
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState<string | null>(null);
@@ -33,6 +34,10 @@ export default function StaffResignForm() {
       setError("이름이 목록에 없습니다. 검색 결과에서 선택해주세요.");
       return;
     }
+    if (!reason.trim()) {
+      setError("변경 사유를 입력해주세요.");
+      return;
+    }
     if (!confirmResign(staff.name)) return;
     setSaving(true);
     setError(null);
@@ -41,7 +46,7 @@ export default function StaffResignForm() {
       const res = await fetch(`/api/staff/${staff.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resigned: true }),
+        body: JSON.stringify({ resigned: true, reason: reason.trim() }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -66,6 +71,9 @@ export default function StaffResignForm() {
       </p>
 
       <StaffPicker value={name} onChange={setName} label="퇴사 처리할 직원" />
+
+      <label htmlFor="resignReason">변경 사유</label>
+      <input id="resignReason" value={reason} maxLength={200} onChange={(e) => setReason(e.target.value)} placeholder="예: 퇴사, 휴직" />
 
       {error && <p className="error-text">{error}</p>}
       {done && <p className="success-box" style={{ marginTop: 12 }}>{done}</p>}

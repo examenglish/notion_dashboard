@@ -545,8 +545,10 @@ export async function retryDualWriteFailures(limit = 50): Promise<{ retried: num
     // upsert해 현재 담당자/완료상태/source_payload.workflow(진행 이력)를 오래된
     // Notion 값으로 덮어쓴다 — 자동 재시도하지 않고 수동 검토로 남긴다(해결 표시 안 함).
     // STAFF도 같다 — 재동기화가 source_payload를 덮어쓰면 계정 비활성화/재설정의 세션 무효화
-    // 시각(source_payload.auth)이 사라져 옛 세션이 되살아날 수 있다.
-    if ((row.entity === "TODO" || row.entity === "STAFF") && getDbProvider() === "postgres") {
+    // 시각(source_payload.auth)과 활성/비활성 이력(statusHistory)이 사라져 옛 세션이 되살아날 수 있다.
+    // CLASS도 같다 — 담당조교 현재 배정과 배정 종료 이력(source_payload.assistantHistory)을
+    // 오래된 Notion 값으로 덮어써 끝난 배정이 되살아날 수 있다.
+    if ((row.entity === "TODO" || row.entity === "STAFF" || row.entity === "CLASS") && getDbProvider() === "postgres") {
       stillFailing++;
       continue;
     }

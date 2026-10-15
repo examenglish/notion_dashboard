@@ -346,7 +346,11 @@ export async function findStaffByNameAndPin(name: string, pin: string) {
 
 // 원장 직원 계정 관리 — 로그인 ID는 이름(로그인이 이름+PIN, 이름 중복은 생성 시 차단).
 // 퇴사자(비활성)까지 포함하고, pin_hash 등 인증 정보는 절대 돌려주지 않는다.
-export type StaffAccount = { id: string; name: string; role: string | null; loginId: string; active: boolean; mustChangePin: boolean };
+export type StaffAccount = { id: string; name: string; role: string | null; loginId: string; active: boolean; mustChangePin: boolean; lastStatusChange: StaffStatusChange | null };
+function lastStatusChange(sourcePayload: unknown): StaffStatusChange | null {
+  const history = (sourcePayload as { statusHistory?: StaffStatusChange[] } | null)?.statusHistory;
+  return Array.isArray(history) && history.length > 0 ? history[history.length - 1] : null;
+}
 export async function listStaffAccounts(): Promise<StaffAccount[]> {
   if (getDbProvider() !== "postgres") return [];
   const rows = await pgQueryRaw("STAFF", "id=not.is.null");
@@ -358,6 +362,7 @@ export async function listStaffAccounts(): Promise<StaffAccount[]> {
       loginId: String(r.name ?? ""),
       active: !r.resigned,
       mustChangePin: !!r.must_change_password,
+      lastStatusChange: lastStatusChange(r.source_payload),
     }))
     .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, "ko"));
 }
@@ -392,18 +397,33 @@ export async function resetStaffPin(staffId: string, newPin: string): Promise<vo
 // 작성한 기록을 그대로 유지하려면 페이지는 살려두고 로그인/목록에서만 걸러야 한다.
 // 이 시각 이전에 발급된 세션 쿠키를 무효화(lib/sessionGuard.ts). 새 컬럼 없이
 // staff.source_payload.auth.sessionsValidAfter에 병합 저장한다.
-async function staffSessionCutoffPayload(staffId: string): Promise<Record<string, unknown>> {
+async function staffSessionCutoffPayload(staffId: string, statusEntry?: StaffStatusChange): Promise<Record<string, unknown>> {
   const row = await pgGetByNotionId("STAFF", staffId);
   const payload = ((row?.source_payload as Record<string, unknown> | null) ?? {}) as Record<string, unknown>;
   const auth = ((payload.auth as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>;
-  return { ...payload, auth: { ...auth, sessionsValidAfter: Date.now() } };
+  const merged: Record<string, unknown> = { ...payload, auth: { ...auth, sessionsValidAfter: Date.now() } };
+  if (statusEntry) {
+    const history = Array.isArray(payload.statusHistory) ? (payload.statusHistory as StaffStatusChange[]) : [];
+    merged.statusHistory = [...history, statusEntry];
+  }
+  return merged;
 }
 
-export async function setStaffResigned(staffId: string, resigned: boolean) {
+// 계정 활성/비활성 변경 이력 — staff.source_payload.statusHistory에 쌓는다(새 컬럼 없음).
+export type StaffStatusChange = { active: boolean; at: string; byId: string | null; byName: string | null; reason: string };
+export type StaffActor = { id: string | null; name: string | null };
+
+// 비활성화는 계정 상태만 바꾼다 — 반 담당조교 relation, 업무 담당자, 클리닉 기록 등
+// 기존 데이터는 그대로 두고, 현재 운영 조회(listClasses/listStaff/routeTask)에서
+// 비활성 직원을 걸러 "재배정 필요"로 보이게 한다. 재활성화 때는 그 직원에게 아직
+// 남아 있는 반 배정을 이력(source_payload.assistantHistory)으로 옮겨 끝낸다 —
+// 재활성화만으로 옛 반 배정이 자동으로 되살아나면 안 되기 때문.
+export async function setStaffResigned(staffId: string, resigned: boolean, actor: StaffActor = { id: null, name: null }, reason = "") {
   revalidateTag(STAFF_CACHE_TAG);
+  const entry: StaffStatusChange = { active: !resigned, at: new Date().toISOString(), byId: actor.id, byName: actor.name, reason };
   if (getDbProvider() === "postgres") {
     // 비활성화는 기존 세션을 즉시 끊고, 재활성화도 옛 세션을 되살리지 않는다(새로 로그인).
-    await pgPatchByNotionId("STAFF", staffId, { resigned, source_payload: await staffSessionCutoffPayload(staffId) });
+    await pgPatchByNotionId("STAFF", staffId, { resigned, source_payload: await staffSessionCutoffPayload(staffId, entry) });
     fireAndForget("notion:setStaffResigned", () =>
       notion.pages.update({ page_id: staffId, properties: { 퇴사: { checkbox: resigned } } as any })
     );
@@ -414,73 +434,16 @@ export async function setStaffResigned(staffId: string, resigned: boolean) {
     });
     await dualWriteEntity("STAFF", updated);
   }
-  if (resigned) await releaseResignedStaffAssignments(staffId);
+  if (!resigned) await endStaffClassAssignments(staffId, "ended_before_reactivation", actor);
 }
 
-// 퇴사/비활성 직원에게 걸려 있던 "앞으로의 배정"을 푼다. 지난 기록(완료 업무,
-// 클리닉 기록 등)은 그대로 둔다.
-//  - 반별 담당조교: 남겨두면 배정 화면에 계속 담당으로 남고(배정 폼 체크 목록엔
-//    재직자만 떠서 해제할 방법도 없음), 조교 "내 담당반"에도 계속 잡힌다.
-//  - 미완료 업무: 담당자에서 빼고, 담당자가 비면 업무풀로 돌려 autoAssignPoolTasks/
-//    직접 가져가기로 재직자에게 다시 가게 한다.
-// 계정 상태는 이미 바뀌었으므로 여기 실패는 로그만 남기고 퇴사 처리 자체를
-// 실패로 돌리지 않는다.
-async function releaseResignedStaffAssignments(staffId: string) {
-  try {
-    const classes = await listClasses();
-    for (const c of classes) {
-      if (!c.assistantIds.includes(staffId)) continue;
-      await assignClassAssistants(c.id, c.assistantIds.filter((id) => id !== staffId));
-    }
-  } catch (err) {
-    console.error("releaseResignedStaffAssignments: classes failed", staffId, err);
+// 이 직원이 아직 들고 있는 반 담당조교 배정을 끝낸다(현재 배정에서 빼고 이력에 남김).
+async function endStaffClassAssignments(staffId: string, reason: ClassAssistantEndReason, actor: StaffActor) {
+  const classes = await listClassesRaw();
+  for (const c of classes) {
+    if (!c.assistantIds.includes(staffId)) continue;
+    await assignClassAssistants(c.id, c.assistantIds.filter((id) => id !== staffId), actor, reason);
   }
-  if (getDbProvider() !== "postgres") return;
-  try {
-    const openTasks = await pgQueryRaw(
-      "TODO",
-      `staff_notion_ids=cs.${encodeURIComponent(`{${staffId}}`)}&complete=not.is.true`
-    );
-    for (const row of openTasks) {
-      const id = (row.notion_id as string | null) ?? (row.id as string);
-      const rest = ((row.staff_notion_ids as string[] | null) ?? []).filter((x) => x !== staffId);
-      await pgPatchByNotionId("TODO", id, {
-        staff_notion_ids: rest,
-        staff_id: rest[0] ? await pgResolveRelationId("STAFF", rest[0]) : null,
-        complete: false,
-        ...(rest.length === 0 ? { pool: true } : {}),
-        source_payload: mergeWorkflow(row, {
-          releasedFrom: staffId,
-          releasedAt: new Date().toISOString(),
-          ...(rest.length === 0 ? { pooledAt: new Date().toISOString() } : {}),
-        }),
-      });
-      if (row.notion_id) {
-        const notionId = row.notion_id as string;
-        fireAndForget("notion:releaseResignedStaffTask", () =>
-          notion.pages.update({
-            page_id: notionId,
-            properties: {
-              담당자: { relation: rest.map((x) => ({ id: x })) },
-              ...(rest.length === 0 ? { 업무풀: { checkbox: true } } : {}),
-            } as any,
-          })
-        );
-      }
-    }
-  } catch (err) {
-    console.error("releaseResignedStaffAssignments: tasks failed", staffId, err);
-  }
-}
-
-// 퇴사자까지 포함한 직원 id→이름/활성 여부 — 과거 배정(반 담당조교 등)에 남은
-// id를 이름으로 보여줄 때 쓴다. listStaff()는 재직자만 돌려주므로 이걸 쓴다.
-export async function listAllStaffBrief(): Promise<{ id: string; name: string; active: boolean }[]> {
-  if (getDbProvider() === "postgres") {
-    return (await listStaffAccounts()).map(({ id, name, active }) => ({ id, name, active }));
-  }
-  const all = await getCachedStaffList();
-  return all.map((s) => ({ id: s.id, name: s.name, active: !s.resigned }));
 }
 
 export async function updateStaffPin(staffId: string, newPin: string) {
@@ -592,7 +555,7 @@ export async function createStaff(name: string, role: "강사" | "조교" | "행
   return created.id;
 }
 
-export async function listClasses() {
+async function listClassesRaw() {
   if (getDbProvider() === "postgres") {
     const rows = await pgListClassesRaw();
     return rows.map((r) => ({
@@ -606,6 +569,7 @@ export async function listClasses() {
       type: r.type,
       studentIds: r.studentIds,
       assistantIds: r.assistantIds,
+      assistantHistory: r.assistantHistory as ClassAssistantHistoryEntry[],
     }));
   }
   const results = await queryAllPages({ data_source_id: DB.CLASS });
@@ -623,25 +587,65 @@ export async function listClasses() {
     type: (getSelect(p, "구분") as string | null) ?? "정규",
     studentIds: getRelationIds(p, "소속학생"),
     assistantIds: getRelationIds(p, "담당조교"),
+    assistantHistory: [] as ClassAssistantHistoryEntry[],
   }));
 }
+
+// 현재 운영용 반 목록 — assistantIds에는 재직(활성) 직원만 담는다. 비활성 직원은
+// DB relation에는 남아 있어도(과거 담당 관계 보존) 현재 담당자가 아니므로
+// inactiveAssistantIds로 따로 주고, 재직 담당자가 아무도 없으면 needsReassign.
+// 담당 조교를 쓰는 모든 곳(배정 화면, 조교 "내 담당반", 업무 자동배정)이 이걸 거친다.
+export async function listClasses() {
+  const [classes, active] = await Promise.all([listClassesRaw(), listStaff()]);
+  const activeIds = new Set(active.map((s) => s.id));
+  return classes.map(({ assistantHistory: _history, ...c }) => {
+    const assistantIds = c.assistantIds.filter((id) => activeIds.has(id));
+    const inactiveAssistantIds = c.assistantIds.filter((id) => !activeIds.has(id));
+    return { ...c, assistantIds, inactiveAssistantIds, needsReassign: assistantIds.length === 0 && inactiveAssistantIds.length > 0 };
+  });
+}
+
+// 반 담당조교 배정이 끝난 이력 — classes.source_payload.assistantHistory(새 컬럼 없음).
+// 현재 배정(assistant_notion_ids)에서 빠지는 순간 여기 남겨, 과거 담당 관계를 지우지 않는다.
+export type ClassAssistantEndReason = "manual_change" | "ended_before_reactivation";
+export type ClassAssistantHistoryEntry = { staffId: string; endedAt: string; endedById: string | null; endedByName: string | null; reason: ClassAssistantEndReason };
 
 // 반 단위로 조교를 배정 — 개별 학생을 매번 검색해서 고르는 대신, 원장/행정이
 // "이 조교는 이 반을 담당한다"를 미리 설정해두면 조교 쪽에서 그 반 명단을
 // 한 번에 불러올 수 있다.
-export async function assignClassAssistants(classId: string, assistantIds: string[]) {
+export async function assignClassAssistants(
+  classId: string,
+  assistantIds: string[],
+  actor: StaffActor = { id: null, name: null },
+  reason: ClassAssistantEndReason = "manual_change"
+) {
   if (getDbProvider() === "postgres") {
-    await pgPatchByNotionId("CLASS", classId, { assistant_notion_ids: assistantIds });
+    // pgGetByNotionId/pgPatchByNotionId는 이 배포 지점(branch_id)으로만 찾는다 — 다른 지점 반이면 없음.
+    const row = await pgGetByNotionId("CLASS", classId);
+    if (!row) return false;
+    const prev = ((row?.assistant_notion_ids as string[] | null) ?? []);
+    const payload = ((row?.source_payload as Record<string, unknown> | null) ?? {}) as Record<string, unknown>;
+    const endedAt = new Date().toISOString();
+    const ended: ClassAssistantHistoryEntry[] = prev
+      .filter((id) => !assistantIds.includes(id))
+      .map((staffId) => ({ staffId, endedAt, endedById: actor.id, endedByName: actor.name, reason }));
+    const patch: Record<string, unknown> = { assistant_notion_ids: assistantIds };
+    if (ended.length > 0) {
+      const history = Array.isArray(payload.assistantHistory) ? (payload.assistantHistory as ClassAssistantHistoryEntry[]) : [];
+      patch.source_payload = { ...payload, assistantHistory: [...history, ...ended] };
+    }
+    await pgPatchByNotionId("CLASS", classId, patch);
     fireAndForget("notion:assignClassAssistants", () =>
       notion.pages.update({ page_id: classId, properties: { 담당조교: { relation: assistantIds.map((id) => ({ id })) } } as any })
     );
-    return;
+    return true;
   }
   const updated = await notion.pages.update({
     page_id: classId,
     properties: { 담당조교: { relation: assistantIds.map((id) => ({ id })) } } as any,
   });
   await dualWriteEntity("CLASS", updated);
+  return true;
 }
 
 export async function createClass(input: {

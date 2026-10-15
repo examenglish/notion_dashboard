@@ -93,6 +93,7 @@ export async function pgListClassesRaw() {
     type: (r.category as string | null) ?? "정규",
     studentIds: (r.student_notion_ids as string[]) ?? [],
     assistantIds: (r.assistant_notion_ids as string[]) ?? [],
+    assistantHistory: (((r.source_payload as { assistantHistory?: unknown[] } | null)?.assistantHistory ?? []) as unknown[]),
   }));
 }
 
@@ -106,6 +107,13 @@ export async function pgListStaff() {
 export async function pgStudentNameMap(): Promise<Map<string, string>> {
   const rows = await pgFetch("students", "select=id,notion_id,name");
   return new Map(rows.map((r) => [displayId(r), r.name]));
+}
+
+// 퇴사자 포함 id → {이름, 재직 여부}. 현재 운영 화면에서 미완료 업무의 담당자가
+// 비활성인지 표시할 때 쓴다(과거 기록 이름 표시는 pgStaffNameMap 그대로).
+export async function pgStaffBriefMap(): Promise<Map<string, { name: string; active: boolean }>> {
+  const rows = await pgFetch("staff", "select=id,notion_id,name,resigned");
+  return new Map(rows.map((r) => [displayId(r), { name: r.name, active: !r.resigned }]));
 }
 
 export async function pgStaffNameMap(): Promise<Map<string, string>> {

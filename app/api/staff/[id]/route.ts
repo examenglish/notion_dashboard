@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateStaffSchedule, setStaffResigned, getStaffInBranch } from "@/lib/notion";
-import { readStaffRole, readStaffId } from "@/lib/session";
+import { readStaffRole, readStaffId, readStaffName } from "@/lib/session";
 import type { WorkHours } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -24,8 +24,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (body.resigned && target.id === readStaffId(req)) {
       return NextResponse.json({ error: "본인 계정은 비활성화할 수 없습니다." }, { status: 400 });
     }
+    // 변경 사유는 이력(staff.source_payload.statusHistory)에 일시·처리자와 함께 남긴다.
+    const reason = typeof body?.reason === "string" ? body.reason.trim().slice(0, 200) : "";
+    if (!reason) {
+      return NextResponse.json({ error: "변경 사유를 입력해주세요." }, { status: 400 });
+    }
     try {
-      await setStaffResigned(params.id, body.resigned);
+      await setStaffResigned(params.id, body.resigned, { id: readStaffId(req) || null, name: readStaffName(req) || null }, reason);
       return NextResponse.json({ ok: true });
     } catch (err) {
       console.error("setStaffResigned failed", params.id, err);
