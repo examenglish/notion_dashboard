@@ -1,3 +1,4 @@
+import { noStoreFetch } from "@/lib/noStoreFetch";
 import { Client } from "@notionhq/client";
 import { unstable_cache, revalidateTag } from "next/cache";
 import { todayKST, daysUntilKST, nowTimeKST } from "./date";
@@ -111,7 +112,7 @@ if (typeof window !== "undefined") {
   throw new Error("lib/notion.ts must only be used on the server");
 }
 
-export const notion = new Client({ auth: process.env.NOTION_TOKEN });
+export const notion = new Client({ auth: process.env.NOTION_TOKEN, fetch: noStoreFetch as any });
 
 export const DB = {
   CLASS: process.env.NOTION_DB_CLASS!,

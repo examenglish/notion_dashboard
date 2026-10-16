@@ -1,6 +1,7 @@
 // Notion(정본) <-> Supabase(미러) 실시간 대조 도구. dual-write(lib/supabaseRepo.ts)가
 // 계속 정상 동작하는지 운영 중에 주기적으로 확인하고, 실패 큐(dual_write_failures)를
 // 재처리하는 영구 운영 도구다 — 마이그레이션 1회성 러너와 달리 계속 남아있는다.
+import { noStoreFetch } from "@/lib/noStoreFetch";
 import { notion, DB, listClasses, listStaff, listPoolTasks, listManuals, searchStudents, getRichText } from "./notion";
 import { SOURCES, OPTIONAL_SOURCES, TABLE, makeT, payload, rel } from "@/supabase/scripts/migrate_notion_to_supabase.mjs";
 import { dualWriteEntity, branchCode, pgGetByNotionId, pgPatchByNotionId, getDbProvider } from "./supabaseRepo";
@@ -94,7 +95,7 @@ function headers(env: Env) {
 }
 
 async function resolveBranchId(env: Env, code: string): Promise<string | null> {
-  const r = await fetch(`${env.url}/rest/v1/branches?select=id&code=eq.${encodeURIComponent(code)}`, { headers: headers(env) });
+  const r = await noStoreFetch(`${env.url}/rest/v1/branches?select=id&code=eq.${encodeURIComponent(code)}`, { headers: headers(env) });
   if (!r.ok) return null;
   const rows = (await r.json()) as { id: string }[];
   return rows[0]?.id ?? null;
@@ -114,7 +115,7 @@ async function notionAllPages(dataSourceId: string): Promise<any[]> {
 async function supabaseAllRows(env: Env, table: string, branchId: string): Promise<any[]> {
   const out: any[] = [];
   for (let offset = 0; ; offset += 1000) {
-    const r = await fetch(`${env.url}/rest/v1/${table}?select=*&branch_id=eq.${branchId}`, {
+    const r = await noStoreFetch(`${env.url}/rest/v1/${table}?select=*&branch_id=eq.${branchId}`, {
       headers: { ...headers(env), Range: `${offset}-${offset + 999}` },
     });
     if (!r.ok) throw new Error(`Supabase read ${table} failed (${r.status})`);
@@ -166,7 +167,7 @@ async function reconcileSource(env: Env, branchId: string, entity: string, dbIdE
     async function resolveIds(table: string, ids: string[]): Promise<Map<string, string>> {
       const uniq = [...new Set(ids)];
       if (!uniq.length) return new Map();
-      const r = await fetch(`${env.url}/rest/v1/${table}?select=id,notion_id&notion_id=in.(${uniq.map(encodeURIComponent).join(",")})&branch_id=eq.${branchId}`, { headers: headers(env) });
+      const r = await noStoreFetch(`${env.url}/rest/v1/${table}?select=id,notion_id&notion_id=in.(${uniq.map(encodeURIComponent).join(",")})&branch_id=eq.${branchId}`, { headers: headers(env) });
       if (!r.ok) return new Map();
       const rows = (await r.json()) as { id: string; notion_id: string }[];
       return new Map(rows.map((r2) => [r2.notion_id, r2.id]));
@@ -442,7 +443,7 @@ export async function writeSmokeTest() {
   });
   await dualWriteEntity("TODO", created);
 
-  const check = await fetch(`${env.url}/rest/v1/tasks?notion_id=eq.${created.id}&select=*`, { headers: headers(env) });
+  const check = await noStoreFetch(`${env.url}/rest/v1/tasks?notion_id=eq.${created.id}&select=*`, { headers: headers(env) });
   const rows = (await check.json()) as any[];
   const row = rows[0] ?? null;
   const verified = !!row && row.branch_id === branchId && row.notion_id === created.id;
@@ -526,7 +527,7 @@ export async function retryDualWriteFailures(limit = 50): Promise<{ retried: num
   const branchId = await resolveBranchId(env, branch);
   if (!branchId) return { retried: 0, resolved: 0, stillFailing: 0 };
 
-  const r = await fetch(
+  const r = await noStoreFetch(
     `${env.url}/rest/v1/dual_write_failures?select=*&branch_id=eq.${branchId}&resolved=eq.false&order=created_at.asc&limit=${limit}`,
     { headers: headers(env) },
   );
@@ -555,14 +556,14 @@ export async function retryDualWriteFailures(limit = 50): Promise<{ retried: num
     try {
       const page = await notion.pages.retrieve({ page_id: row.notion_id });
       await dualWriteEntity(row.entity as any, page);
-      await fetch(`${env.url}/rest/v1/dual_write_failures?id=eq.${row.id}`, {
+      await noStoreFetch(`${env.url}/rest/v1/dual_write_failures?id=eq.${row.id}`, {
         method: "PATCH",
         headers: { ...headers(env), "Content-Type": "application/json", Prefer: "return=minimal" },
         body: JSON.stringify({ resolved: true }),
       });
       resolved++;
     } catch {
-      await fetch(`${env.url}/rest/v1/dual_write_failures?id=eq.${row.id}`, {
+      await noStoreFetch(`${env.url}/rest/v1/dual_write_failures?id=eq.${row.id}`, {
         method: "PATCH",
         headers: { ...headers(env), "Content-Type": "application/json", Prefer: "return=minimal" },
         body: JSON.stringify({ attempts: 999, last_attempted_at: new Date().toISOString() }),

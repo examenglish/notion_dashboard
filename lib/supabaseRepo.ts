@@ -11,6 +11,7 @@
 //    않는다 — 기존 동작을 절대 바꾸지 않는다.
 //  - 실패는 버리지 않는다: 1회 재시도 후에도 실패하면 dual_write_failures에
 //    기록해 나중에 재처리(reconciliation)할 수 있게 한다.
+import { noStoreFetch } from "@/lib/noStoreFetch";
 import { TABLE, targets, makeT, payload, rel } from "@/supabase/scripts/migrate_notion_to_supabase.mjs";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -71,7 +72,7 @@ async function resolveBranchId(): Promise<string | null> {
   if (!branchIdPromise) {
     branchIdPromise = (async () => {
       try {
-        const r = await fetch(`${env.url}/rest/v1/branches?select=id&code=eq.${encodeURIComponent(code)}`, {
+        const r = await noStoreFetch(`${env.url}/rest/v1/branches?select=id&code=eq.${encodeURIComponent(code)}`, {
           headers: authHeaders(env.key),
         });
         if (!r.ok) return null;
@@ -104,7 +105,7 @@ async function resolveRelationIds(table: string, rawIds: string[], branchId: str
   if (!ids.length) return map;
   const idSet = new Set(ids);
   const inList = ids.map((id) => encodeURIComponent(id)).join(",");
-  const r = await fetch(
+  const r = await noStoreFetch(
     `${url}/rest/v1/${table}?select=id,notion_id&branch_id=eq.${branchId}&or=(notion_id.in.(${inList}),id.in.(${inList}))`,
     { headers: authHeaders(key) }
   );
@@ -124,7 +125,7 @@ function eitherIdFilter(id: string): string {
 }
 
 async function upsertRow(table: string, row: Record<string, unknown>, env: { url: string; key: string }): Promise<void> {
-  const r = await fetch(`${env.url}/rest/v1/${table}?on_conflict=branch_id,notion_id`, {
+  const r = await noStoreFetch(`${env.url}/rest/v1/${table}?on_conflict=branch_id,notion_id`, {
     method: "POST",
     headers: { ...authHeaders(env.key), "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
     body: JSON.stringify([row]),
@@ -146,7 +147,7 @@ async function recordFailure(entity: string, notionId: string | null | undefined
     const env = supabaseEnv();
     const branchId = await resolveBranchId();
     if (!env || !branchId) return;
-    await fetch(`${env.url}/rest/v1/dual_write_failures`, {
+    await noStoreFetch(`${env.url}/rest/v1/dual_write_failures`, {
       method: "POST",
       headers: { ...authHeaders(env.key), "Content-Type": "application/json", Prefer: "return=minimal" },
       body: JSON.stringify([{ branch_id: branchId, entity, notion_id: notionId ?? null, error: message.slice(0, 1000) }]),
@@ -242,7 +243,7 @@ export async function dualDeleteEntity(entityKey: EntityKey, notionId: string): 
     const env = supabaseEnv();
     const branchId = await resolveBranchId();
     if (!env || !branchId) return;
-    const r = await fetch(
+    const r = await noStoreFetch(
       `${env.url}/rest/v1/${TABLE[entityKey]}?notion_id=eq.${encodeURIComponent(notionId)}&branch_id=eq.${branchId}`,
       { method: "DELETE", headers: { ...authHeaders(env.key), Prefer: "return=minimal" } },
     );
@@ -290,7 +291,7 @@ async function requireEnvAndBranch(): Promise<{ env: { url: string; key: string 
 /** notion_id 또는 postgres id(uuid) 중 아무 쪽으로 넘어와도 안전하게 특정 행의 컬럼을 갱신한다. 정본 경로이므로 실패 시 throw한다. */
 export async function pgPatchByNotionId(entityKey: EntityKey, notionId: string, patch: Record<string, unknown>): Promise<void> {
   const { env, branchId } = await requireEnvAndBranch();
-  const r = await fetch(
+  const r = await noStoreFetch(
     `${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${eitherIdFilter(notionId)}`,
     { method: "PATCH", headers: { ...authHeaders(env.key), "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(patch) }
   );
@@ -307,7 +308,7 @@ export async function pgPatchByNotionId(entityKey: EntityKey, notionId: string, 
  */
 export async function pgPatchWhere(entityKey: EntityKey, notionId: string, extraFilter: string, patch: Record<string, unknown>): Promise<number> {
   const { env, branchId } = await requireEnvAndBranch();
-  const r = await fetch(
+  const r = await noStoreFetch(
     `${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${eitherIdFilter(notionId)}&${extraFilter}`,
     { method: "PATCH", headers: { ...authHeaders(env.key), "Content-Type": "application/json", Prefer: "return=representation" }, body: JSON.stringify(patch) }
   );
@@ -322,7 +323,7 @@ export async function pgPatchWhere(entityKey: EntityKey, notionId: string, extra
 /** id(uuid)로 특정 행의 컬럼을 직접 갱신한다(아직 notion_id가 없는, Postgres에서 생성된 신규 행용). */
 export async function pgPatchById(entityKey: EntityKey, id: string, patch: Record<string, unknown>): Promise<void> {
   const { env, branchId } = await requireEnvAndBranch();
-  const r = await fetch(
+  const r = await noStoreFetch(
     `${env.url}/rest/v1/${TABLE[entityKey]}?id=eq.${encodeURIComponent(id)}&branch_id=eq.${branchId}`,
     { method: "PATCH", headers: { ...authHeaders(env.key), "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(patch) }
   );
@@ -347,7 +348,7 @@ export function pgInsertPayload(entityKey: EntityKey, branchId: string, row: Rec
 
 export async function pgInsertRow(entityKey: EntityKey, row: Record<string, unknown>): Promise<{ id: string; notion_id: string | null }> {
   const { env, branchId } = await requireEnvAndBranch();
-  const r = await fetch(`${env.url}/rest/v1/${TABLE[entityKey]}`, {
+  const r = await noStoreFetch(`${env.url}/rest/v1/${TABLE[entityKey]}`, {
     method: "POST",
     headers: { ...authHeaders(env.key), "Content-Type": "application/json", Prefer: "return=representation" },
     body: JSON.stringify([pgInsertPayload(entityKey, branchId, row)]),
@@ -395,7 +396,7 @@ export async function pgResolveRelationIds(targetEntity: EntityKey, notionIds: s
 /** notion_id 또는 postgres id(uuid)로 행 하나를 통째로 읽는다(notion.pages.retrieve 대체용). 없으면 null. */
 export async function pgGetByNotionId(entityKey: EntityKey, notionId: string): Promise<Record<string, unknown> | null> {
   const { env, branchId } = await requireEnvAndBranch();
-  const r = await fetch(
+  const r = await noStoreFetch(
     `${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${eitherIdFilter(notionId)}&select=*`,
     { headers: authHeaders(env.key) }
   );
@@ -410,7 +411,7 @@ export async function pgQuery(entityKey: EntityKey, filters: Record<string, stri
   const qs = Object.entries(filters)
     .map(([k, v]) => `${k}=eq.${encodeURIComponent(v)}`)
     .join("&");
-  const r = await fetch(`${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${qs}&select=*`, {
+  const r = await noStoreFetch(`${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${qs}&select=*`, {
     headers: authHeaders(env.key),
   });
   if (!r.ok) throw new Error(`Postgres read ${entityKey} failed (${r.status})`);
@@ -420,7 +421,7 @@ export async function pgQuery(entityKey: EntityKey, filters: Record<string, stri
 /** eq 외의 PostgREST 연산자(cs 배열포함 등)가 필요할 때 — filterExpr은 호출부가 이미 인코딩까지 끝낸 쿼리스트링 조각이어야 한다. */
 export async function pgQueryRaw(entityKey: EntityKey, filterExpr: string): Promise<Record<string, unknown>[]> {
   const { env, branchId } = await requireEnvAndBranch();
-  const r = await fetch(`${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${filterExpr}&select=*`, {
+  const r = await noStoreFetch(`${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${filterExpr}&select=*`, {
     headers: authHeaders(env.key),
   });
   if (!r.ok) throw new Error(`Postgres read ${entityKey} failed (${r.status})`);
@@ -433,7 +434,7 @@ export async function pgQueryRaw(entityKey: EntityKey, filterExpr: string): Prom
  */
 export async function pgQueryBranchOrShared(entityKey: EntityKey, filterExpr: string): Promise<Record<string, unknown>[]> {
   const { env, branchId } = await requireEnvAndBranch();
-  const r = await fetch(
+  const r = await noStoreFetch(
     `${env.url}/rest/v1/${TABLE[entityKey]}?or=(branch_id.eq.${branchId},visibility.eq.shared)${filterExpr ? `&${filterExpr}` : ""}&select=*`,
     { headers: authHeaders(env.key) }
   );
@@ -451,7 +452,7 @@ export async function currentBranchId(): Promise<string> {
 /** 컬럼 하나를 정확히 일치(대소문자 구분)로 찾는다 — 동명이인 dedup 체크용(findStudentByName 등). */
 export async function pgFindByExactColumn(entityKey: EntityKey, column: string, value: string): Promise<Record<string, unknown> | null> {
   const { env, branchId } = await requireEnvAndBranch();
-  const r = await fetch(
+  const r = await noStoreFetch(
     `${env.url}/rest/v1/${TABLE[entityKey]}?${column}=eq.${encodeURIComponent(value)}&branch_id=eq.${branchId}&select=*&limit=1`,
     { headers: authHeaders(env.key) }
   );
@@ -469,7 +470,7 @@ export async function pgFindByExactColumn(entityKey: EntityKey, column: string, 
  */
 export async function pgArchiveByNotionId(entityKey: EntityKey, notionId: string): Promise<void> {
   const { env, branchId } = await requireEnvAndBranch();
-  const getRes = await fetch(
+  const getRes = await noStoreFetch(
     `${env.url}/rest/v1/${TABLE[entityKey]}?branch_id=eq.${branchId}&${eitherIdFilter(notionId)}&select=source_payload`,
     { headers: authHeaders(env.key) }
   );

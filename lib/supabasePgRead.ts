@@ -13,6 +13,7 @@
 // 화면 계열(누적 지표)에 쓰고 있던 것과 동일하게 맞춘다: 전체 일일기록
 // 중 "출결≠결석"이면 출석, "과제여부" 체크박스, "단어테스트결과=통과"
 // 비율 — 분모는 그 학생의 전체 일일기록 수(기간 제한 없음, "누적"이므로).
+import { noStoreFetch } from "@/lib/noStoreFetch";
 import { branchCode } from "./supabaseRepo";
 import { taskTypeFromLabel, TASK_TYPE_LABEL_LIST, classifyFeedback, isReviewOutcome, taskStatusOf, taskPoolOf, TASK_POOL_LABELS, type TaskWorkflow } from "./tasks";
 import { todayKST, isoDateKST } from "./date";
@@ -31,7 +32,7 @@ async function branchId(): Promise<string | null> {
   if (!env || !code) return null;
   if (!branchIdCache) {
     branchIdCache = (async () => {
-      const r = await fetch(`${env.url}/rest/v1/branches?select=id&code=eq.${encodeURIComponent(code)}`, {
+      const r = await noStoreFetch(`${env.url}/rest/v1/branches?select=id&code=eq.${encodeURIComponent(code)}`, {
         headers: { apikey: env.key, Authorization: `Bearer ${env.key}` },
       });
       if (!r.ok) return null;
@@ -50,7 +51,7 @@ async function pgFetch(table: string, query: string): Promise<any[]> {
   if (!env || !bid) throw new Error("Postgres read requested but Supabase/branch is not configured.");
   const out: any[] = [];
   for (let offset = 0; ; offset += 1000) {
-    const r = await fetch(`${env.url}/rest/v1/${table}?branch_id=eq.${bid}&${query}`, {
+    const r = await noStoreFetch(`${env.url}/rest/v1/${table}?branch_id=eq.${bid}&${query}`, {
       headers: { apikey: env.key, Authorization: `Bearer ${env.key}`, Range: `${offset}-${offset + 999}` },
     });
     if (!r.ok) throw new Error(`Supabase read ${table} failed (${r.status})`);

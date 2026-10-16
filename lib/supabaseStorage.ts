@@ -10,6 +10,7 @@
 // 애플리케이션 레벨에서 경로 접두사로 강제한다 — 이 앱은 client-side에서
 // anon key로 Storage에 직접 접근하지 않고 항상 이 서버 모듈만 거치므로
 // 충분하다).
+import { noStoreFetch } from "@/lib/noStoreFetch";
 import { randomUUID } from "crypto";
 import { branchCode } from "./supabaseRepo";
 
@@ -48,7 +49,7 @@ export async function uploadMaterialFileToStorage(filename: string, contentType:
   if (!env || !branch) throw new Error("Supabase Storage가 설정되지 않았습니다.");
   const path = `${branch}/materials/${randomUUID()}-${sanitizeFilename(filename)}`;
   const bytes = await data.arrayBuffer();
-  const r = await fetch(`${env.url}/storage/v1/object/${BUCKET}/${path}`, {
+  const r = await noStoreFetch(`${env.url}/storage/v1/object/${BUCKET}/${path}`, {
     method: "POST",
     headers: {
       apikey: env.key,
@@ -75,7 +76,7 @@ export async function createSignedMaterialFileUrl(path: string, expiresInSeconds
   } catch {
     return null; // 다른 지점 경로 — 조용히 실패(호출부는 파일 링크 없음으로 처리)
   }
-  const r = await fetch(`${env.url}/storage/v1/object/sign/${BUCKET}/${path}`, {
+  const r = await noStoreFetch(`${env.url}/storage/v1/object/sign/${BUCKET}/${path}`, {
     method: "POST",
     headers: { apikey: env.key, Authorization: `Bearer ${env.key}`, "Content-Type": "application/json" },
     body: JSON.stringify({ expiresIn: expiresInSeconds }),
