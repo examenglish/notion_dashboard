@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { formatBriefingText, type BriefingScoreEntry } from "@/lib/briefingFormat";
+import { formatBriefingText, type BriefingPeriodSection, type BriefingScoreEntry } from "@/lib/briefingFormat";
 import { stripClassSuffix } from "@/lib/format";
 
 type RosterStudent = { id: string; name: string };
@@ -22,6 +22,7 @@ function initialTexts(draft: {
   notice: string;
   roster: RosterStudent[];
   perStudent: PerStudentFlags;
+  periodSections?: BriefingPeriodSection[];
 }): Record<string, string> {
   const map: Record<string, string> = {};
   for (const s of draft.roster) {
@@ -39,6 +40,7 @@ function initialTexts(draft: {
       absent: flags.absent ?? false,
       individualNotice: flags.individualNotice,
       scores: flags.scores,
+      periodSections: draft.periodSections,
     });
   }
   return map;
@@ -60,6 +62,7 @@ export default function DailyBriefingPreviewModal({
     notice: string;
     roster: RosterStudent[];
     perStudent: PerStudentFlags;
+    periodSections?: BriefingPeriodSection[];
   };
   classes: ClassOption[];
   onClose: () => void;
@@ -163,6 +166,11 @@ export default function DailyBriefingPreviewModal({
             <p className="muted" style={{ marginTop: 8 }}>
               아직 저장 전인 오늘 입력 내용의 미리보기입니다. 내용을 직접 수정할 수 있고, 아래 "저장"을 눌러야 실제로 기록됩니다.
             </p>
+            {draft.periodSections && draft.periodSections.length > 1 && (
+              <p className="muted" style={{ marginTop: 4 }}>
+                {draft.periodSections.map((p) => p.period).join("·")} 통합 브리핑입니다 — 앞 교시에 저장된 진도/과제가 함께 들어갑니다.
+              </p>
+            )}
             <button type="button" className="secondary" onClick={copyAll}>
               {copiedId === "__all__" ? "전체 복사됨" : `전체 복사 (${draft.roster.length}명)`}
             </button>

@@ -3409,6 +3409,28 @@ export async function listClassProgressPeriods(classId: string, date: string): P
   return Array.from(new Set(rows.map((r) => r.period as string).filter(Boolean)));
 }
 
+// 그 반·그 날짜의 교시별 저장 기록(진도/과제 등) — 수업기록 화면에서 교시
+// 기록여부를 보여주고, 마지막 교시 브리핑에 앞 교시 내용을 통합하기 위해.
+export async function listClassProgressPeriodRecords(
+  classId: string,
+  date: string
+): Promise<{ period: string; progress: string; homework: string; nextAssignment: string; notice: string }[]> {
+  if (getDbProvider() !== "postgres") return [];
+  const classPgId = await pgResolveRelationId("CLASS", classId);
+  if (!classPgId) return [];
+  const rows = (await pgQueryRaw("CLASS_PROGRESS", `class_id=eq.${classPgId}&record_date=eq.${date}&period=not.is.null`)).filter(pgNotArchived);
+  return rows
+    .map((r) => ({
+      period: (r.period as string) ?? "",
+      progress: (r.progress_content as string) ?? "",
+      homework: (r.homework_content as string) ?? "",
+      nextAssignment: (r.next_test as string) ?? "",
+      notice: (r.notice as string) ?? "",
+    }))
+    .filter((r) => r.period)
+    .sort((a, b) => a.period.localeCompare(b.period));
+}
+
 // 수업기록 PATCH 권한 판단용 — 학생별 기록이 아직 하나도 없는 진도 행(EXAM AI로
 // 반 진도만 먼저 넣어둔 경우)은 덮어쓸 확정 출결이 없으므로 강사/조교도 이어서
 // 완성할 수 있게 한다. 판단이 안 되면(Notion 모드/조회 실패) 기존처럼 막는다.

@@ -3,6 +3,7 @@ import {
   createClassProgress,
   getClassProgressForEdit,
   getPlannedAbsentStudentIds,
+  listClassProgressPeriodRecords,
   classProgressHasStudentRecords,
   resolveOrCreateClass,
   updateClassProgress,
@@ -15,12 +16,13 @@ export async function GET(req: NextRequest) {
   const classId = req.nextUrl.searchParams.get("classId");
   const date = req.nextUrl.searchParams.get("date");
   const period = req.nextUrl.searchParams.get("period") || undefined;
-  if (!classId || !date) return NextResponse.json({ existing: null, plannedAbsentIds: [] });
-  const [existing, plannedAbsentIds] = await Promise.all([
+  if (!classId || !date) return NextResponse.json({ existing: null, plannedAbsentIds: [], periodRecords: [] });
+  const [existing, plannedAbsentIds, periodRecords] = await Promise.all([
     getClassProgressForEdit(classId, date, period),
     getPlannedAbsentStudentIds(date),
+    listClassProgressPeriodRecords(classId, date).catch(() => []),
   ]);
-  return NextResponse.json({ existing, plannedAbsentIds });
+  return NextResponse.json({ existing, plannedAbsentIds, periodRecords });
 }
 
 // 이미 저장된 진도 기록을 수정하는 것은 원장/행정만 허용한다 — 강사/조교가

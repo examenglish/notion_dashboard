@@ -28,6 +28,15 @@ function formatScoreLines(scores?: BriefingScoreEntry[]): string[] {
   return ["", "【테스트/과제 결과】", ...rows];
 }
 
+// 같은 반을 같은 날 교시로 나눠 기록할 때(1·2교시 또는 1·2·3교시) 앞 교시에
+// 이미 저장된 진도/과제를 함께 넘기면 마지막 교시 브리핑 하나로 통합한다.
+export type BriefingPeriodSection = { period: string; progress: string; homework: string; nextAssignment?: string; notice?: string };
+
+function periodLines(sections: BriefingPeriodSection[], key: "progress" | "homework"): string[] {
+  const rows = sections.filter((s) => s[key].trim()).map((s) => `${s.period}: ${s[key].trim()}`);
+  return rows.length ? rows : ["-"];
+}
+
 export function formatBriefingText(input: {
   date: string; // YYYY-MM-DD
   className: string;
@@ -41,20 +50,25 @@ export function formatBriefingText(input: {
   absent: boolean;
   individualNotice?: string;
   scores?: BriefingScoreEntry[];
+  periodSections?: BriefingPeriodSection[];
 }): string {
+  const merged = input.periodSections && input.periodSections.length > 1 ? input.periodSections : null;
   const [y, m, d] = input.date.split("-").map(Number);
   const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
   const lines = [
     `안녕하세요. 이그잼영어학원입니다. ${m}/${d}(${weekday}) ${input.className} ${input.studentName} 학생 데일리브리핑입니다.`,
     "",
     "【진도】",
-    input.progress || "-",
+    ...(merged ? periodLines(merged, "progress") : [input.progress || "-"]),
     "",
     "【과제】",
-    input.homework || "-",
+    ...(merged ? periodLines(merged, "homework") : [input.homework || "-"]),
   ];
-  if (input.nextAssignment) {
-    lines.push("", "【다음시간 테스트】", input.nextAssignment);
+  const nextAssignment = merged
+    ? merged.map((s) => s.nextAssignment?.trim()).filter(Boolean).join(" / ")
+    : input.nextAssignment;
+  if (nextAssignment) {
+    lines.push("", "【다음시간 테스트】", nextAssignment);
   }
   if (input.absent) {
     lines.push("", "출결: 결석");
@@ -66,7 +80,8 @@ export function formatBriefingText(input: {
     );
   }
   lines.push(...formatScoreLines(input.scores));
-  if (input.notice) lines.push(`전달사항: ${input.notice}`);
+  const notice = merged ? Array.from(new Set(merged.map((s) => s.notice?.trim()).filter(Boolean))).join(" / ") : input.notice;
+  if (notice) lines.push(`전달사항: ${notice}`);
   if (input.individualNotice) lines.push(`개별 안내사항: ${input.individualNotice}`);
   return lines.join("\n");
 }

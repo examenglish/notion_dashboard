@@ -113,7 +113,7 @@ async function slackApi<T>(method: string, body: Record<string, string>): Promis
 export async function addSlackReaction(
   channel: string,
   messageTs: string,
-  name: "white_check_mark" | "warning" | "x" | "clipboard" | "question"
+  name: "robot_face" | "warning" | "x" | "clipboard" | "question"
 ) {
   if (!channel || !messageTs) return;
   const ok = await slackApi("reactions.add", { channel, timestamp: messageTs, name });
@@ -309,7 +309,7 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
   }
   console.log("[slack-events] stage: slack_record saved", eventId, "tag:", !!resolved.parsedName, "author_resolved:", metadata.author !== userId);
   // [학생: 이름] 태그 메시지는 기존대로 학생 연결 결과를 반응으로 알린다.
-  if (resolved.parsedName) await addSlackReaction(channel, normalized.messageTs, resolved.studentId ? "white_check_mark" : "warning");
+  if (resolved.parsedName) await addSlackReaction(channel, normalized.messageTs, resolved.studentId ? "robot_face" : "warning");
 
   // 새 메시지에만(수정본 재처리는 안 함) "!보강 이름 시간"처럼 인식되는
   // 태그가 맨 앞에 붙어 있으면, 자연어 입력 박스와 같은 파이프라인으로
@@ -359,7 +359,7 @@ export async function processSlackEvent(envelope: SlackEnvelope): Promise<void> 
         if (result.tasks.length > 0) notifyTaskAssignments(result.tasks);
         const statuses = result.outcomes.map((o) => o.status);
         console.log("Slack 자연어 기록 결과", eventId, statuses.join(","), result.outcomes.map((o) => o.route).join(","));
-        const reaction = statuses.includes("실패") ? "x" : statuses.includes("확인필요") ? "question" : statuses.length ? "white_check_mark" : null;
+        const reaction = statuses.includes("실패") ? "x" : statuses.includes("확인필요") ? "question" : statuses.length ? "robot_face" : null;
         if (reaction) await addSlackReaction(channel, normalized.messageTs, reaction);
       } catch (error) {
         console.error("Slack 자연어 기록 처리 실패", eventId, error instanceof Error ? `${error.name}: ${error.message.slice(0, 300)}` : "unknown_error");

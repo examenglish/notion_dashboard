@@ -5,6 +5,9 @@ import { useSearchParams } from "next/navigation";
 import StudentPicker from "./StudentPicker";
 import StaffPicker from "./StaffPicker";
 import DailyBriefingPreviewModal from "./DailyBriefingPreviewModal";
+import type { BriefingPeriodSection } from "@/lib/briefingFormat";
+
+const PERIOD_OPTIONS = ["1교시", "2교시", "3교시"];
 import AssistantClinicForm from "./AssistantClinicForm";
 import AttendanceCheckForm from "./AttendanceCheckForm";
 import ClassAssistantAssignForm from "./ClassAssistantAssignForm";
@@ -71,6 +74,8 @@ function ClassRecordForm({
   const [manualClassName, setManualClassName] = useState("");
   const [date, setDate] = useState(initialDate ?? todayStr());
   const [period, setPeriod] = useState("");
+  // 같은 반·같은 날 교시별로 이미 저장된 기록 — 기록여부 표시와 통합 브리핑용.
+  const [periodRecords, setPeriodRecords] = useState<BriefingPeriodSection[]>([]);
   const [subjects, setSubjects] = useState<string[]>([]);
   const [progress, setProgress] = useState("");
   const [homework, setHomework] = useState("");
@@ -146,6 +151,7 @@ function ClassRecordForm({
   useEffect(() => {
     if (!classId || !date) {
       setExistingProgressId(null);
+      setPeriodRecords([]);
       return;
     }
     let cancelled = false;
@@ -153,8 +159,9 @@ function ClassRecordForm({
     Promise.all([
       fetch(`/api/class-record?classId=${classId}&date=${date}${periodQuery}`).then((r) => r.json()),
       fetch(`/api/students?classId=${classId}`).then((r) => r.json()),
-    ]).then(([data, rosterList]: [{ existing: any; plannedAbsentIds: string[] }, RosterStudent[]]) => {
+    ]).then(([data, rosterList]: [{ existing: any; plannedAbsentIds: string[]; periodRecords?: BriefingPeriodSection[] }, RosterStudent[]]) => {
       if (cancelled) return;
+      setPeriodRecords(data?.periodRecords ?? []);
       const rec = data?.existing;
       const plannedAbsentIds = data?.plannedAbsentIds ?? [];
       if (!rec) {
@@ -544,6 +551,19 @@ function ClassRecordForm({
               <option value="2교시">2교시</option>
               <option value="3교시">3교시</option>
             </select>
+            {(period || periodRecords.length > 0) && (() => {
+              const recorded = new Set(periodRecords.map((r) => r.period));
+              const others = periodRecords.filter((r) => r.period !== period).map((r) => r.period);
+              return (
+                <p className="muted" style={{ marginTop: 4, fontSize: 13 }}>
+                  기록여부:{" "}
+                  {PERIOD_OPTIONS.map((p) => `${p} ${recorded.has(p) ? "✅" : p === period ? "✏️작성중" : "⬜미기록"}`).join(" · ")}
+                  {period && others.length > 0 && (
+                    <> — 브리핑은 {[...others, period].sort().join("·")} 통합으로 만들어집니다.</>
+                  )}
+                </p>
+              );
+            })()}
 
             <fieldset disabled={isLocked} style={{ border: 0, padding: 0, margin: 0 }}>
             <label>수업과목</label>
@@ -811,6 +831,12 @@ function ClassRecordForm({
             notice,
             roster: fullRoster,
             perStudent,
+            periodSections: period
+              ? [
+                  ...periodRecords.filter((r) => r.period !== period),
+                  { period, progress, homework, nextAssignment, notice },
+                ].sort((a, b) => a.period.localeCompare(b.period))
+              : undefined,
           }}
           classes={classes}
           onClose={() => setShowPreview(false)}
