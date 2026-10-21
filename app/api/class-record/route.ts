@@ -4,6 +4,7 @@ import {
   getClassProgressForEdit,
   getPlannedAbsentStudentIds,
   listClassProgressPeriodRecords,
+  listClassRecordStatusByDate,
   classProgressHasStudentRecords,
   resolveOrCreateClass,
   updateClassProgress,
@@ -16,6 +17,8 @@ export async function GET(req: NextRequest) {
   const classId = req.nextUrl.searchParams.get("classId");
   const date = req.nextUrl.searchParams.get("date");
   const period = req.nextUrl.searchParams.get("period") || undefined;
+  // 반 없이 날짜만 오면 그 날 반별 기록여부(반 선택 목록 표시용)만 돌려준다.
+  if (!classId && date) return NextResponse.json({ recordStatus: await listClassRecordStatusByDate(date).catch(() => ({})) });
   if (!classId || !date) return NextResponse.json({ existing: null, plannedAbsentIds: [], periodRecords: [] });
   const [existing, plannedAbsentIds, periodRecords] = await Promise.all([
     getClassProgressForEdit(classId, date, period),

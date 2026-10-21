@@ -3431,6 +3431,23 @@ export async function listClassProgressPeriodRecords(
     .sort((a, b) => a.period.localeCompare(b.period));
 }
 
+// 날짜별 반 기록여부 — 수업기록 화면의 반 선택 목록에 "이미 기록됨(1·2교시)"을
+// 바로 보여주기 위해. classId → 저장된 교시 목록(교시 구분 없는 기록은 "").
+export async function listClassRecordStatusByDate(date: string): Promise<Record<string, string[]>> {
+  if (getDbProvider() !== "postgres") return {};
+  const rows = (await pgQueryRaw("CLASS_PROGRESS", `record_date=eq.${date}`)).filter(pgNotArchived);
+  const map: Record<string, string[]> = {};
+  for (const r of rows) {
+    const classId = (r.class_notion_ids as string[] | undefined)?.[0];
+    if (!classId) continue;
+    const list = (map[classId] ??= []);
+    const period = (r.period as string | null) ?? "";
+    if (!list.includes(period)) list.push(period);
+  }
+  for (const list of Object.values(map)) list.sort();
+  return map;
+}
+
 // 수업기록 PATCH 권한 판단용 — 학생별 기록이 아직 하나도 없는 진도 행(EXAM AI로
 // 반 진도만 먼저 넣어둔 경우)은 덮어쓸 확정 출결이 없으므로 강사/조교도 이어서
 // 완성할 수 있게 한다. 판단이 안 되면(Notion 모드/조회 실패) 기존처럼 막는다.

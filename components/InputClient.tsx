@@ -8,6 +8,13 @@ import DailyBriefingPreviewModal from "./DailyBriefingPreviewModal";
 import type { BriefingPeriodSection } from "@/lib/briefingFormat";
 
 const PERIOD_OPTIONS = ["1교시", "2교시", "3교시"];
+
+// 반 선택 목록 앞머리 — 그 날짜에 기록이 있으면 ✅(교시가 나뉘었으면 "1·2교시"까지), 없으면 비움.
+function recordStatusLabel(periods?: string[]): string {
+  if (!periods || periods.length === 0) return "";
+  const named = periods.filter(Boolean).map((p) => p.replace("교시", ""));
+  return named.length ? `✅${named.join("·")}교시 ` : "✅ ";
+}
 import AssistantClinicForm from "./AssistantClinicForm";
 import AttendanceCheckForm from "./AttendanceCheckForm";
 import ClassAssistantAssignForm from "./ClassAssistantAssignForm";
@@ -76,6 +83,9 @@ function ClassRecordForm({
   const [period, setPeriod] = useState("");
   // 같은 반·같은 날 교시별로 이미 저장된 기록 — 기록여부 표시와 통합 브리핑용.
   const [periodRecords, setPeriodRecords] = useState<BriefingPeriodSection[]>([]);
+  // 선택한 날짜의 반별 기록여부(classId → 저장된 교시, 교시 구분 없음은 "") — 반 목록에 바로 표시.
+  const [recordStatus, setRecordStatus] = useState<Record<string, string[]>>({});
+  const [recordStatusTick, setRecordStatusTick] = useState(0);
   const [subjects, setSubjects] = useState<string[]>([]);
   const [progress, setProgress] = useState("");
   const [homework, setHomework] = useState("");
@@ -118,6 +128,20 @@ function ClassRecordForm({
         if (data.items?.length > 0) setReviewItems(data.items);
       });
   }
+
+  useEffect(() => {
+    if (!date) return;
+    let cancelled = false;
+    fetch(`/api/class-record?date=${encodeURIComponent(date)}`)
+      .then((r) => r.json())
+      .then((data: { recordStatus?: Record<string, string[]> }) => {
+        if (!cancelled) setRecordStatus(data?.recordStatus ?? {});
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [date, recordStatusTick]);
 
   useEffect(() => {
     fetch("/api/classes")
@@ -406,6 +430,7 @@ function ClassRecordForm({
       const data = await res.json();
       if (!res.ok) return { ok: false, error: data.error ?? "저장에 실패했습니다." };
       setDone(true);
+      setRecordStatusTick((t) => t + 1);
       maybeOpenReview();
       if (!isEdit) {
         setProgress("");
@@ -517,10 +542,17 @@ function ClassRecordForm({
                   <option value="">반 선택</option>
                   {visibleClasses.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.type === "시험대비" ? `[시험대비] ${stripClassSuffix(c.name)}` : stripClassSuffix(c.name)}
+                      {`${recordStatusLabel(recordStatus[c.id])}${c.type === "시험대비" ? `[시험대비] ${stripClassSuffix(c.name)}` : stripClassSuffix(c.name)}`}
                     </option>
                   ))}
                 </select>
+                {classId && (
+                  <p className="muted" style={{ marginTop: 4, fontSize: 13 }}>
+                    {recordStatus[classId]?.length
+                      ? `✅ ${date} 기록 있음 (${recordStatus[classId].map((p) => p || "교시 구분 없음").join(", ")})`
+                      : `⬜ ${date} 기록 없음`}
+                  </p>
+                )}
                 <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 400, marginTop: 4 }}>
                   <input
                     type="checkbox"
