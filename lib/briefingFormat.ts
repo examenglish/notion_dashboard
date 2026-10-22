@@ -30,7 +30,11 @@ function formatScoreLines(scores?: BriefingScoreEntry[]): string[] {
 
 // 같은 반을 같은 날 교시로 나눠 기록할 때(1·2교시 또는 1·2·3교시) 앞 교시에
 // 이미 저장된 진도/과제를 함께 넘기면 마지막 교시 브리핑 하나로 통합한다.
-export type BriefingPeriodSection = { period: string; progress: string; homework: string; nextAssignment?: string; notice?: string };
+export type BriefingPeriodSection = { period: string; subjects?: string[]; progress: string; homework: string; nextAssignment?: string; notice?: string };
+
+function subjectLines(sections: BriefingPeriodSection[]): string[] {
+  return sections.filter((s) => s.subjects?.length).map((s) => `${s.period}: ${s.subjects!.join(", ")}`);
+}
 
 function periodLines(sections: BriefingPeriodSection[], key: "progress" | "homework"): string[] {
   const rows = sections.filter((s) => s[key].trim()).map((s) => `${s.period}: ${s[key].trim()}`);
@@ -41,6 +45,7 @@ export function formatBriefingText(input: {
   date: string; // YYYY-MM-DD
   className: string;
   studentName: string;
+  subjects?: string[];
   progress: string;
   homework: string;
   nextAssignment: string;
@@ -57,13 +62,17 @@ export function formatBriefingText(input: {
   const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
   const lines = [
     `안녕하세요. 이그잼영어학원입니다. ${m}/${d}(${weekday}) ${input.className} ${input.studentName} 학생 데일리브리핑입니다.`,
+  ];
+  const subjects = merged ? subjectLines(merged) : input.subjects?.length ? [input.subjects.join(", ")] : [];
+  if (subjects.length) lines.push("", "【수업과목】", ...subjects);
+  lines.push(
     "",
     "【진도】",
     ...(merged ? periodLines(merged, "progress") : [input.progress || "-"]),
     "",
     "【과제】",
-    ...(merged ? periodLines(merged, "homework") : [input.homework || "-"]),
-  ];
+    ...(merged ? periodLines(merged, "homework") : [input.homework || "-"])
+  );
   const nextAssignment = merged
     ? merged.map((s) => s.nextAssignment?.trim()).filter(Boolean).join(" / ")
     : input.nextAssignment;

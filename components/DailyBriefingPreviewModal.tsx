@@ -16,6 +16,7 @@ type ExistingBriefing = { id: string; date: string | null; studentId: string | n
 function initialTexts(draft: {
   date: string;
   className: string;
+  subjects?: string[];
   progress: string;
   homework: string;
   nextAssignment: string;
@@ -31,6 +32,7 @@ function initialTexts(draft: {
       date: draft.date,
       className: draft.className,
       studentName: s.name,
+      subjects: draft.subjects,
       progress: draft.progress,
       homework: draft.homework,
       nextAssignment: draft.nextAssignment,
@@ -56,6 +58,7 @@ export default function DailyBriefingPreviewModal({
     date: string;
     classId: string;
     className: string;
+    subjects?: string[];
     progress: string;
     homework: string;
     nextAssignment: string;

@@ -857,6 +857,7 @@ function ClassRecordForm({
             date,
             classId,
             className: selectedClassName,
+            subjects,
             progress,
             homework,
             nextAssignment,
@@ -866,7 +867,7 @@ function ClassRecordForm({
             periodSections: period
               ? [
                   ...periodRecords.filter((r) => r.period !== period),
-                  { period, progress, homework, nextAssignment, notice },
+                  { period, subjects, progress, homework, nextAssignment, notice },
                 ].sort((a, b) => a.period.localeCompare(b.period))
               : undefined,
           }}

@@ -2535,6 +2535,7 @@ async function createClassProgressPg(input: CreateClassProgressInput) {
         input.briefingTexts?.[studentId] ??
         formatBriefingText({
           date: input.date,
+          subjects: input.subjects,
           className: cls.name,
           studentName,
           progress: input.progress,
@@ -2731,6 +2732,7 @@ export async function createClassProgress(input: CreateClassProgressInput) {
       input.briefingTexts?.[studentId] ??
       formatBriefingText({
         date: input.date,
+        subjects: input.subjects,
         className,
         studentName,
         progress: input.progress,
@@ -3414,7 +3416,7 @@ export async function listClassProgressPeriods(classId: string, date: string): P
 export async function listClassProgressPeriodRecords(
   classId: string,
   date: string
-): Promise<{ period: string; progress: string; homework: string; nextAssignment: string; notice: string }[]> {
+): Promise<{ period: string; subjects: string[]; progress: string; homework: string; nextAssignment: string; notice: string }[]> {
   if (getDbProvider() !== "postgres") return [];
   const classPgId = await pgResolveRelationId("CLASS", classId);
   if (!classPgId) return [];
@@ -3422,6 +3424,7 @@ export async function listClassProgressPeriodRecords(
   return rows
     .map((r) => ({
       period: (r.period as string) ?? "",
+      subjects: (r.subjects as string[] | null) ?? [],
       progress: (r.progress_content as string) ?? "",
       homework: (r.homework_content as string) ?? "",
       nextAssignment: (r.next_test as string) ?? "",
@@ -3690,6 +3693,7 @@ async function updateClassProgressPg(input: UpdateClassProgressInput) {
         const flags: PerStudentFlags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
         const briefingText = formatBriefingText({
           date: input.date,
+          subjects: input.subjects,
           className: cls.name,
           studentName,
           progress: input.progress!,
@@ -3867,6 +3871,7 @@ export async function updateClassProgress(input: UpdateClassProgressInput) {
         const flags = input.perStudent[studentId] ?? { vocabFail: false, homeworkIncomplete: false, absent: false, late: false };
         const briefingText = formatBriefingText({
           date: input.date,
+          subjects: input.subjects,
           className,
           studentName,
           progress: input.progress!,
