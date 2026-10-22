@@ -106,6 +106,10 @@ function ClassRecordForm({
   // 띄우던 것이 스크롤을 가장 많이 잡아먹던 원인이었다.
   const [openNoticeIds, setOpenNoticeIds] = useState<Set<string>>(new Set());
   const [showPreview, setShowPreview] = useState(false);
+  // 방금 저장한 반·날짜·교시 — 저장 후에도 입력 내용을 지우지 않고 남겨 미리보기로
+  // 브리핑을 다시 보고 복사할 수 있게 하되, 같은 기록이 두 번 저장되지 않게 저장 버튼을 잠근다.
+  const [savedKey, setSavedKey] = useState<string | null>(null);
+  const recordKey = `${classId}|${manualClassName.trim()}|${date}|${period}`;
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -430,16 +434,9 @@ function ClassRecordForm({
       const data = await res.json();
       if (!res.ok) return { ok: false, error: data.error ?? "저장에 실패했습니다." };
       setDone(true);
+      setSavedKey(recordKey);
       setRecordStatusTick((t) => t + 1);
       maybeOpenReview();
-      if (!isEdit) {
-        setProgress("");
-        setHomework("");
-        setNextAssignment("");
-        setNotice("");
-        setSubjects([]);
-        setExtraStudents([]);
-      }
       return { ok: true };
     } catch {
       return { ok: false, error: "네트워크 오류가 발생했습니다." };
@@ -491,7 +488,8 @@ function ClassRecordForm({
   const selectedClassName = stripClassSuffix(classes.find((c) => c.id === classId)?.name ?? "");
   const hasClass = !!classId || !!manualClassName.trim();
   const isLocked = !!existingProgressId && !canEditExisting;
-  const canSave = hasClass && (classId ? fullRoster.length > 0 : true) && !saving && !isLocked;
+  const justSaved = savedKey === recordKey;
+  const canSave = hasClass && (classId ? fullRoster.length > 0 : true) && !saving && !isLocked && !justSaved;
 
   return (
     <>
@@ -640,7 +638,13 @@ function ClassRecordForm({
             )}
 
             {error && <p className="error-text">{error}</p>}
-            {done && <p className="success-box" style={{ marginTop: 12 }}>저장됐습니다.</p>}
+            {justSaved ? (
+              <p className="success-box" style={{ marginTop: 12 }}>
+                ✅ 기록됨 — 저장한 내용을 그대로 두었습니다. 미리보기로 브리핑을 다시 보고 복사할 수 있어요.
+              </p>
+            ) : (
+              done && <p className="success-box" style={{ marginTop: 12 }}>저장됐습니다.</p>
+            )}
 
             <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
               <button
@@ -656,7 +660,7 @@ function ClassRecordForm({
                 onClick={handleDirectSave}
                 disabled={!canSave}
               >
-                {saving ? "저장 중..." : existingProgressId ? "수정 저장" : "저장"}
+                {saving ? "저장 중..." : justSaved ? "✅ 기록됨" : existingProgressId ? "수정 저장" : "저장"}
               </button>
             </div>
             </fieldset>
@@ -872,6 +876,7 @@ function ClassRecordForm({
               : undefined,
           }}
           classes={classes}
+          alreadySaved={justSaved}
           onClose={() => setShowPreview(false)}
           onSave={actuallySave}
         />

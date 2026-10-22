@@ -51,6 +51,7 @@ function initialTexts(draft: {
 export default function DailyBriefingPreviewModal({
   draft,
   classes,
+  alreadySaved = false,
   onClose,
   onSave,
 }: {
@@ -68,6 +69,8 @@ export default function DailyBriefingPreviewModal({
     periodSections?: BriefingPeriodSection[];
   };
   classes: ClassOption[];
+  // 수업기록 화면에서 이미 저장한 뒤 다시 연 미리보기 — 복사만 하고 다시 저장하지 않는다(중복 저장 방지).
+  alreadySaved?: boolean;
   onClose: () => void;
   onSave: (texts: Record<string, string>) => Promise<{ ok: boolean; error?: string; cancelled?: boolean }>;
 }) {
@@ -167,7 +170,9 @@ export default function DailyBriefingPreviewModal({
         {isDraftMode && (
           <>
             <p className="muted" style={{ marginTop: 8 }}>
-              아직 저장 전인 오늘 입력 내용의 미리보기입니다. 내용을 직접 수정할 수 있고, 아래 "저장"을 눌러야 실제로 기록됩니다.
+              {alreadySaved
+                ? "✅ 이미 기록된 내용의 미리보기입니다. 브리핑을 확인하고 복사할 수 있습니다(다시 저장되지 않음)."
+                : '아직 저장 전인 오늘 입력 내용의 미리보기입니다. 내용을 직접 수정할 수 있고, 아래 "저장"을 눌러야 실제로 기록됩니다.'}
             </p>
             {draft.periodSections && draft.periodSections.length > 1 && (
               <p className="muted" style={{ marginTop: 4 }}>
@@ -225,7 +230,7 @@ export default function DailyBriefingPreviewModal({
 
         {saveError && <p className="error-text">{saveError}</p>}
 
-        {isDraftMode && (
+        {isDraftMode && !alreadySaved && (
           <div style={{ marginTop: 16 }}>
             <button type="button" onClick={handleSave} disabled={saving}>
               {saving ? "저장 중..." : "저장"}
