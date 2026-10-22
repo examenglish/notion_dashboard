@@ -32,13 +32,13 @@ function formatScoreLines(scores?: BriefingScoreEntry[]): string[] {
 // 이미 저장된 진도/과제를 함께 넘기면 마지막 교시 브리핑 하나로 통합한다.
 export type BriefingPeriodSection = { period: string; subjects?: string[]; progress: string; homework: string; nextAssignment?: string; notice?: string };
 
-function subjectLines(sections: BriefingPeriodSection[]): string[] {
-  return sections.filter((s) => s.subjects?.length).map((s) => `${s.period}: ${s.subjects!.join(", ")}`);
-}
-
-function periodLines(sections: BriefingPeriodSection[], key: "progress" | "homework"): string[] {
-  const rows = sections.filter((s) => s[key].trim()).map((s) => `${s.period}: ${s[key].trim()}`);
-  return rows.length ? rows : ["-"];
+// 【진도】·【과제】 안을 수업과목별 "■ 문법" 제목 블록으로 나눈다(과목을 안 고른
+// 교시는 "■ 1교시"). 내용이 빈 블록은 빼고, 전부 비면 빈 배열 → 그 항목 자체를 생략.
+function subjectBlocks(sections: BriefingPeriodSection[], key: "progress" | "homework"): string[] {
+  const blocks = sections
+    .filter((s) => s[key].trim())
+    .map((s) => [`■ ${s.subjects?.length ? s.subjects.join("·") : s.period}`, s[key].trim()]);
+  return blocks.flatMap((b, i) => (i === 0 ? b : ["", ...b]));
 }
 
 export function formatBriefingText(input: {
@@ -61,18 +61,18 @@ export function formatBriefingText(input: {
   const [y, m, d] = input.date.split("-").map(Number);
   const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
   const lines = [
-    `안녕하세요. 이그잼영어학원입니다. ${m}/${d}(${weekday}) ${input.className} ${input.studentName} 학생 데일리브리핑입니다.`,
+    "안녕하세요. 이그잼영어학원입니다.",
+    `${m}/${d}(${weekday}) ${input.className} ${input.studentName} 학생 데일리 브리핑입니다.`,
   ];
-  const subjects = merged ? subjectLines(merged) : input.subjects?.length ? [input.subjects.join(", ")] : [];
-  if (subjects.length) lines.push("", "【수업과목】", ...subjects);
-  lines.push(
-    "",
-    "【진도】",
-    ...(merged ? periodLines(merged, "progress") : [input.progress || "-"]),
-    "",
-    "【과제】",
-    ...(merged ? periodLines(merged, "homework") : [input.homework || "-"])
-  );
+  // 교시 통합이 아니면 이번 수업 하나를 같은 블록 형식으로 만든다(과목 미선택이면 제목 없이 내용만).
+  const sections: BriefingPeriodSection[] = merged ?? [
+    { period: "", subjects: input.subjects, progress: input.progress, homework: input.homework },
+  ];
+  const plain = !merged && !input.subjects?.length;
+  const progressLines = plain ? [input.progress.trim()].filter(Boolean) : subjectBlocks(sections, "progress");
+  lines.push("", "【진도】", ...(progressLines.length ? progressLines : ["-"]));
+  const homeworkLines = plain ? [input.homework.trim()].filter(Boolean) : subjectBlocks(sections, "homework");
+  if (homeworkLines.length) lines.push("", "【과제】", ...homeworkLines);
   const nextAssignment = merged
     ? merged.map((s) => s.nextAssignment?.trim()).filter(Boolean).join(" / ")
     : input.nextAssignment;
