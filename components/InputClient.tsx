@@ -549,71 +549,63 @@ function ClassRecordForm({
 
         <div className="class-record-layout">
           <div>
-            <div className="field-row">
-              <div>
-                <label htmlFor="date">날짜</label>
-                <input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
-              </div>
-              <div>
-                <label htmlFor="class">반</label>
-                <select
-                  id="class"
-                  value={classId}
-                  onChange={(e) => {
-                    setClassId(e.target.value);
-                    if (e.target.value) setManualClassName("");
+            <label htmlFor="date">날짜</label>
+            <input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+
+            {/* 마우스 동선 최소화: 학교급 필터 → 반 버튼 → 교시 버튼을 붙여 두고, 드롭다운 대신 한 번 클릭으로 고른다. */}
+            <label>반</label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+              {SCHOOL_LEVELS.map((lv) => (
+                <label key={lv} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 400, margin: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={levelFilter.includes(lv)}
+                    onChange={(e) =>
+                      setLevelFilter((cur) => (e.target.checked ? [...cur, lv] : cur.filter((x) => x !== lv)))
+                    }
+                  />
+                  {lv} ({classes.filter((c) => (includeExamClasses || c.type !== "시험대비") && schoolLevelOf(c.name) === lv).length})
+                </label>
+              ))}
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 400, margin: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={includeExamClasses}
+                  onChange={(e) => setIncludeExamClasses(e.target.checked)}
+                />
+                시험대비반 포함
+              </label>
+            </div>
+            <div
+              id="class"
+              role="radiogroup"
+              style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, maxHeight: 200, overflowY: "auto" }}
+            >
+              {visibleClasses.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={c.id === classId}
+                  className={c.id === classId ? undefined : "secondary"}
+                  style={{ padding: "4px 10px", fontSize: 13 }}
+                  onClick={() => {
+                    setClassId(c.id);
+                    setManualClassName("");
                   }}
                 >
-                  <option value="">반 선택</option>
-                  {visibleClasses.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {`${recordStatusLabel(recordStatus[c.id])}${c.type === "시험대비" ? `[시험대비] ${stripClassSuffix(c.name)}` : stripClassSuffix(c.name)}`}
-                    </option>
-                  ))}
-                </select>
-                {classId && (
-                  <p className="muted" style={{ marginTop: 4, fontSize: 13 }}>
-                    {recordStatus[classId]?.length
-                      ? `✅ ${date} 기록 있음 (${recordStatus[classId].map((p) => p || "교시 구분 없음").join(", ")})`
-                      : `⬜ ${date} 기록 없음`}
-                  </p>
-                )}
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 4 }}>
-                  {SCHOOL_LEVELS.map((lv) => (
-                    <label key={lv} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 400, margin: 0 }}>
-                      <input
-                        type="checkbox"
-                        checked={levelFilter.includes(lv)}
-                        onChange={(e) =>
-                          setLevelFilter((cur) => (e.target.checked ? [...cur, lv] : cur.filter((x) => x !== lv)))
-                        }
-                      />
-                      {lv} ({classes.filter((c) => (includeExamClasses || c.type !== "시험대비") && schoolLevelOf(c.name) === lv).length})
-                    </label>
-                  ))}
-                  <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 400, margin: 0 }}>
-                    <input
-                      type="checkbox"
-                      checked={includeExamClasses}
-                      onChange={(e) => setIncludeExamClasses(e.target.checked)}
-                    />
-                    시험대비반 포함
-                  </label>
-                </div>
-              </div>
+                  {`${recordStatusLabel(recordStatus[c.id])}${c.type === "시험대비" ? `[시험대비] ${stripClassSuffix(c.name)}` : stripClassSuffix(c.name)}`}
+                </button>
+              ))}
+              {visibleClasses.length === 0 && <span className="muted" style={{ fontSize: 13 }}>해당하는 반이 없습니다.</span>}
             </div>
-
-            <label htmlFor="manualClass">반이름 직접입력 (목록에 없는 반일 때)</label>
-            <input
-              id="manualClass"
-              type="text"
-              value={manualClassName}
-              onChange={(e) => {
-                setManualClassName(e.target.value);
-                if (e.target.value) setClassId("");
-              }}
-              placeholder="예: 고3 E반"
-            />
+            {classId && (
+              <p className="muted" style={{ marginTop: 4, fontSize: 13 }}>
+                {recordStatus[classId]?.length
+                  ? `✅ ${date} 기록 있음 (${recordStatus[classId].map((p) => p || "교시 구분 없음").join(", ")})`
+                  : `⬜ ${date} 기록 없음`}
+              </p>
+            )}
 
             <label htmlFor="period">교시 (같은 반을 같은 날 여러 선생님이 교시로 나눠 들어갈 때만 선택)</label>
             <div id="period" role="radiogroup" style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 4 }}>
@@ -638,6 +630,18 @@ function ClassRecordForm({
                 </p>
               );
             })()}
+
+            <label htmlFor="manualClass">반이름 직접입력 (목록에 없는 반일 때)</label>
+            <input
+              id="manualClass"
+              type="text"
+              value={manualClassName}
+              onChange={(e) => {
+                setManualClassName(e.target.value);
+                if (e.target.value) setClassId("");
+              }}
+              placeholder="예: 고3 E반"
+            />
 
             <fieldset disabled={isLocked} style={{ border: 0, padding: 0, margin: 0 }}>
             <label>수업과목</label>
