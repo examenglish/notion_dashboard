@@ -151,7 +151,10 @@ function ClassRecordForm({
     fetch("/api/classes")
       .then((r) => r.json())
       .then((list: ClassOption[]) => {
-        setClasses(list);
+        // 반 선택 목록(과 브리핑 미리보기의 반 목록)을 반 이름 가나다·숫자순으로.
+        setClasses(
+          [...list].sort((a, b) => stripClassSuffix(a.name).localeCompare(stripClassSuffix(b.name), "ko", { numeric: true }))
+        );
       });
   }, []);
 
