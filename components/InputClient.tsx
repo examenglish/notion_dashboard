@@ -9,6 +9,17 @@ import type { BriefingPeriodSection } from "@/lib/briefingFormat";
 
 const PERIOD_OPTIONS = ["1교시", "2교시", "3교시"];
 
+// 반 이름으로 학교급을 가린다(반에 학년 필드가 없음) — "고2"·"고등" → 고등, "중1"·"예비중1"·"중등" → 중등,
+// "초6"·"초등" → 초등. 어디에도 안 맞으면 null(학교급 필터를 걸면 숨겨지고, 전체일 때만 보임).
+const SCHOOL_LEVELS = ["초등", "중등", "고등"] as const;
+type SchoolLevel = (typeof SCHOOL_LEVELS)[number];
+function schoolLevelOf(name: string): SchoolLevel | null {
+  if (/고\s*\d|고등/.test(name)) return "고등";
+  if (/중\s*\d|중등/.test(name)) return "중등";
+  if (/초\s*\d|초등/.test(name)) return "초등";
+  return null;
+}
+
 // 반 선택 목록 앞머리 — 그 날짜에 기록이 있으면 ✅(교시가 나뉘었으면 "1·2교시"까지), 없으면 비움.
 function recordStatusLabel(periods?: string[]): string {
   if (!periods || periods.length === 0) return "";
@@ -118,6 +129,8 @@ function ClassRecordForm({
   const [scoresSaved, setScoresSaved] = useState(false);
   const [reviewItems, setReviewItems] = useState<AbsenceReviewItem[] | null>(null);
   const [includeExamClasses, setIncludeExamClasses] = useState(false);
+  // 반 목록 학교급 필터 — 아무것도 안 고르면 전체.
+  const [levelFilter, setLevelFilter] = useState<SchoolLevel[]>([]);
 
   // 결석 체크 후 그 날짜(당일 포함)의 결석 검토 팝업을 바로 띄운다 — 담당교사가
   // 이미 지정된 건은 서버가 걸러서 내려주므로, 항목이 남아있으면 실제로
@@ -166,7 +179,12 @@ function ClassRecordForm({
 
   // 시험대비반은 기본적으로 목록에서 숨기되(체크박스로 펼쳐볼 수 있음), 이미
   // 골라둔 반이 시험대비반이면 체크를 나중에 꺼도 선택값이 안 사라지게 한다.
-  const visibleClasses = classes.filter((c) => includeExamClasses || c.type !== "시험대비" || c.id === classId);
+  const visibleClasses = classes.filter(
+    (c) =>
+      c.id === classId ||
+      ((includeExamClasses || c.type !== "시험대비") &&
+        (levelFilter.length === 0 || levelFilter.includes(schoolLevelOf(c.name) as SchoolLevel)))
+  );
 
   useEffect(() => {
     if (!classId) return;
@@ -560,14 +578,28 @@ function ClassRecordForm({
                       : `⬜ ${date} 기록 없음`}
                   </p>
                 )}
-                <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 400, marginTop: 4 }}>
-                  <input
-                    type="checkbox"
-                    checked={includeExamClasses}
-                    onChange={(e) => setIncludeExamClasses(e.target.checked)}
-                  />
-                  시험대비반 포함
-                </label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 4 }}>
+                  {SCHOOL_LEVELS.map((lv) => (
+                    <label key={lv} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 400, margin: 0 }}>
+                      <input
+                        type="checkbox"
+                        checked={levelFilter.includes(lv)}
+                        onChange={(e) =>
+                          setLevelFilter((cur) => (e.target.checked ? [...cur, lv] : cur.filter((x) => x !== lv)))
+                        }
+                      />
+                      {lv} ({classes.filter((c) => (includeExamClasses || c.type !== "시험대비") && schoolLevelOf(c.name) === lv).length})
+                    </label>
+                  ))}
+                  <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 400, margin: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={includeExamClasses}
+                      onChange={(e) => setIncludeExamClasses(e.target.checked)}
+                    />
+                    시험대비반 포함
+                  </label>
+                </div>
               </div>
             </div>
 
