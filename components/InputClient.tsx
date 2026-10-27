@@ -151,9 +151,15 @@ function ClassRecordForm({
     fetch("/api/classes")
       .then((r) => r.json())
       .then((list: ClassOption[]) => {
-        // 반 선택 목록(과 브리핑 미리보기의 반 목록)을 반 이름 가나다·숫자순으로.
+        // 반 선택 목록(과 브리핑 미리보기의 반 목록)을 일반 반 먼저, [시험대비] 반은 그 아래로
+        // 모아 각각 반 이름 가나다·숫자순으로.
+        const isExam = (c: ClassOption) => (c.type === "시험대비" ? 1 : 0);
         setClasses(
-          [...list].sort((a, b) => stripClassSuffix(a.name).localeCompare(stripClassSuffix(b.name), "ko", { numeric: true }))
+          [...list].sort(
+            (a, b) =>
+              isExam(a) - isExam(b) ||
+              stripClassSuffix(a.name).localeCompare(stripClassSuffix(b.name), "ko", { numeric: true })
+          )
         );
       });
   }, []);
