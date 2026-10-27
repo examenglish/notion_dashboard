@@ -131,6 +131,25 @@ function ClassRecordForm({
   const [includeExamClasses, setIncludeExamClasses] = useState(false);
   // 반 목록 학교급 필터 — 아무것도 안 고르면 전체.
   const [levelFilter, setLevelFilter] = useState<SchoolLevel[]>([]);
+  // 반을 모를 때 학생 이름으로 찾아 그 학생의 반을 바로 고른다.
+  const [studentQuery, setStudentQuery] = useState("");
+  const [studentHits, setStudentHits] = useState<{ id: string; name: string; classIds: string[] }[]>([]);
+  useEffect(() => {
+    const q = studentQuery.trim();
+    if (!q) {
+      setStudentHits([]);
+      return;
+    }
+    const handle = setTimeout(() => {
+      fetch(`/api/students?q=${encodeURIComponent(q)}`)
+        .then((r) => r.json())
+        .then((list: { id: string; name: string; classIds?: string[] }[]) =>
+          setStudentHits((Array.isArray(list) ? list : []).slice(0, 8).map((st) => ({ ...st, classIds: st.classIds ?? [] })))
+        )
+        .catch(() => setStudentHits([]));
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [studentQuery]);
 
   // 결석 체크 후 그 날짜(당일 포함)의 결석 검토 팝업을 바로 띄운다 — 담당교사가
   // 이미 지정된 건은 서버가 걸러서 내려주므로, 항목이 남아있으면 실제로
@@ -554,6 +573,41 @@ function ClassRecordForm({
 
             {/* 마우스 동선 최소화: 학교급 필터 → 반 버튼 → 교시 버튼을 붙여 두고, 드롭다운 대신 한 번 클릭으로 고른다. */}
             <label>반</label>
+            <input
+              type="search"
+              value={studentQuery}
+              onChange={(e) => setStudentQuery(e.target.value)}
+              placeholder="반을 모르면 학생 이름으로 검색 (예: 김정아)"
+              style={{ marginBottom: 6 }}
+            />
+            {studentQuery.trim() && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                {studentHits.flatMap((st) =>
+                  st.classIds
+                    .map((cid) => classes.find((c) => c.id === cid))
+                    .filter((c): c is ClassOption => !!c)
+                    .map((c) => (
+                      <button
+                        key={`${st.id}-${c.id}`}
+                        type="button"
+                        className="secondary"
+                        style={{ padding: "4px 10px", fontSize: 13 }}
+                        onClick={() => {
+                          setClassId(c.id);
+                          setManualClassName("");
+                          setStudentQuery("");
+                        }}
+                      >
+                        {st.name} → {recordStatusLabel(recordStatus[c.id])}
+                        {stripClassSuffix(c.name)}
+                      </button>
+                    ))
+                )}
+                {studentHits.every((st) => !st.classIds.some((cid) => classes.some((c) => c.id === cid))) && (
+                  <span className="muted" style={{ fontSize: 13 }}>반이 배정된 학생을 찾지 못했습니다.</span>
+                )}
+              </div>
+            )}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
               {SCHOOL_LEVELS.map((lv) => (
                 <label key={lv} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 400, margin: 0 }}>
