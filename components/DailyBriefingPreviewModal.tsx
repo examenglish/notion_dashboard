@@ -131,7 +131,7 @@ export default function DailyBriefingPreviewModal({
     const combined = draft.roster
       .map((s) => editedTexts[s.id])
       .filter(Boolean)
-      .join("\n\n-----\n\n");
+      .join(`\n\n${"-".repeat(56)}\n\n`);
     copyText("__all__", combined);
   }
 
