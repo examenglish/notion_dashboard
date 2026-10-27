@@ -616,12 +616,15 @@ function ClassRecordForm({
             />
 
             <label htmlFor="period">교시 (같은 반을 같은 날 여러 선생님이 교시로 나눠 들어갈 때만 선택)</label>
-            <select id="period" value={period} onChange={(e) => setPeriod(e.target.value)}>
-              <option value="">교시 구분 없음</option>
-              <option value="1교시">1교시</option>
-              <option value="2교시">2교시</option>
-              <option value="3교시">3교시</option>
-            </select>
+            <div id="period" role="radiogroup" style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 4 }}>
+              {["", ...PERIOD_OPTIONS].map((p) => (
+                <label key={p || "none"} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, fontWeight: 400, margin: 0 }}>
+                  <input type="radio" name="period" value={p} checked={period === p} onChange={() => setPeriod(p)} />
+                  {p || "교시 구분 없음"}
+                  {(p ? periodRecords.some((r) => r.period === p) : recordStatus[classId]?.includes("")) && " ✅"}
+                </label>
+              ))}
+            </div>
             {(period || periodRecords.length > 0) && (() => {
               const recorded = new Set(periodRecords.map((r) => r.period));
               const others = periodRecords.filter((r) => r.period !== period).map((r) => r.period);
