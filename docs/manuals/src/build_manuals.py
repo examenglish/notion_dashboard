@@ -2,7 +2,7 @@
 """강사용·행정용 매뉴얼 HTML/PDF 생성기.
 
 공통 장(시작하기·EXAM AI·Slack·Drive·FAQ)은 한 번만 쓰고, 역할별 장만 나눠 둔다.
-실행: python3 docs/manuals/src/build_manuals.py  → docs/manuals/src/*.html, public/manuals/*.pdf
+실행: python3 docs/manuals/src/build_manuals.py  → docs/manuals/src/*.html, docs/manuals/*.pdf
 """
 import glob
 import os
@@ -10,7 +10,7 @@ import subprocess
 from html import escape
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(HERE))), "public", "manuals")
+OUT = os.path.dirname(HERE)
 VERSION = "2026.10.22"
 
 # 이모지 글꼴 없이도 PDF에 보이도록 Slack 🤖 반응을 SVG로 그린다.
